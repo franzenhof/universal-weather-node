@@ -73,6 +73,7 @@
 #include "units.h"
 #include "wifi_mqtt.h"
 #include "web_api.h"
+#include "history.h"
 #include "sensors.h"
 #include "lora_payload.h"
 #include "portal.h"
@@ -678,7 +679,10 @@ void loop()
     handleButton();
     updateDisplayState();
     wifiMqttPoll();   // non-blocking; no-op unless wifiEn is set
-    webApiPoll();     // non-blocking; no-op unless wifiEn+webApiEn are set
+    // Web server (handleClient()) now runs on its own FreeRTOS task on core
+    // 0 (spawned by webApiSetup() in setup()) instead of being polled here —
+    // see web_api.cpp's webApiTask for why (mainly: so an HTTP request isn't
+    // stuck waiting behind sendLoRa()'s blocking airtime).
 
     const unsigned long now           = millis();
     const unsigned long sendTargetMs  = (unsigned long)gCfg.uplinkIntervalSec * 1000UL;
@@ -724,6 +728,7 @@ void loop()
         if (displayUntilMs > 0) display.display();
 
         mqttPublishTelemetry();   // no-op unless wifiEn+mqttEn and currently connected
+        pushHistorySample();      // record this cycle's finished values for /chart
 
         resetAccumulators();
 

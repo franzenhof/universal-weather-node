@@ -287,7 +287,8 @@ Config runConfigPortal(const Config& cur)
         if (atoi(p_alt.getValue()) >= 0) c.altitudeM = atoi(p_alt.getValue());
         if (atoi(p_uplink.getValue()) > 0) c.uplinkIntervalSec = atoi(p_uplink.getValue());
         int ss = atoi(p_sample.getValue());
-        c.sampleSec        = (ss > 0) ? min(ss, c.uplinkIntervalSec) : c.sampleSec;
+        int uplinkIntervalSecVal = c.uplinkIntervalSec; // std::min can't deduce a common type across int/volatile int
+        c.sampleSec        = (ss > 0) ? min(ss, uplinkIntervalSecVal) : c.sampleSec;
         c.windDirOffsetDeg = atoi(p_windoff.getValue());
         c.windUnitMs       = (atoi(p_windunit.getValue()) == 0) ? 0 : 1;
         c.unitSystem       = (atoi(p_unitsys.getValue()) == 1) ? 1 : 0;

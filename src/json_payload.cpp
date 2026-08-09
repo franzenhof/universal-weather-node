@@ -34,10 +34,18 @@ void buildJsonPayload(JsonDocument& doc)
         doc["pressureUnit"] = pressureUnitLabel(gCfg);
     }
     if (bus1Count > 0) {
+        // One entry per scanned slot, null for a slot that's since gone
+        // disconnected — not skipped — so index i always means "probe i"
+        // to every consumer (wifi_mqtt.cpp's Home Assistant discovery
+        // templates hardcode ds18b20[i] per slot; a skipping array would
+        // silently shift a later probe's reading into an earlier probe's
+        // entity instead of going "unavailable" as intended).
         JsonArray ds18b20 = doc["ds18b20"].to<JsonArray>();
         for (int i = 0; i < bus1Count; i++)
             if (bus1Temps[i] != DEVICE_DISCONNECTED_C)
                 ds18b20.add(temperatureForOutput(bus1Temps[i], gCfg));
+            else
+                ds18b20.add(nullptr);
         doc["ds18b20Unit"] = temperatureUnitLabel(gCfg);
     }
     if (gCfg.lipoEn) {
