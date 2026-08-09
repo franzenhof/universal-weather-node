@@ -38,7 +38,7 @@ Adafruit_BME280    bme;
 OneWire*           oneWireBus1 = nullptr;
 DallasTemperature* sensorsBus1 = nullptr;
 
-PinSet gPins = { 3, 4, 5 };   // set by sensorsInit()
+PinSet gPins = { .windSpeed = 3, .rain = 4, .oneWire = 5 };   // set by sensorsInit()
 
 bool windPcntConfigured = false;
 bool rainPcntConfigured = false;
@@ -50,18 +50,25 @@ unsigned long previousMillis     = 0;
 
 PinSet getPins(int pcbVersion)
 {
-    if (pcbVersion == 13) return { 4, 5, 6 };
-    return { 3, 4, 5 };
+    if (pcbVersion == PCB_REV_1_3) return { .windSpeed = 6, .rain = 7, .oneWire = 5 };
+    return { .windSpeed = 3, .rain = 4, .oneWire = 5 };
 }
 
 void configureWindPcnt()
 {
     if (!windPcntConfigured) {
+        // Rev 1.3+ only: an inverting Schmitt trigger (74LVC2G14) sits
+        // between the RC filter and this GPIO, so what was the rising edge
+        // at the sensor is now the falling edge here — count negative
+        // instead of positive edges to keep one count per physical pulse.
+        // Rev 1.2 has no such stage (direct, non-inverted wiring) and must
+        // keep counting the rising edge.
+        bool inverted = (gCfg.pcbVersion >= PCB_REV_1_3);
         pcnt_config_t pcnt_wind = {
             .pulse_gpio_num = gPins.windSpeed,
             .ctrl_gpio_num  = PCNT_PIN_NOT_USED,
-            .pos_mode       = PCNT_COUNT_INC,
-            .neg_mode       = PCNT_COUNT_DIS,
+            .pos_mode       = inverted ? PCNT_COUNT_DIS : PCNT_COUNT_INC,
+            .neg_mode       = inverted ? PCNT_COUNT_INC : PCNT_COUNT_DIS,
             .counter_h_lim  = 32767,
             .counter_l_lim  = -32768,
             .unit           = PCNT_UNIT_WINDSPEED,
@@ -82,11 +89,15 @@ void configureWindPcnt()
 void configureRainPcnt()
 {
     if (!rainPcntConfigured) {
+        // Rev 1.3+ only: same inverting Schmitt trigger stage as wind speed
+        // (74LVC2G14) — count the falling edge there; Rev 1.2 keeps the
+        // rising edge. See configureWindPcnt() for the full explanation.
+        bool inverted = (gCfg.pcbVersion >= PCB_REV_1_3);
         pcnt_config_t pcnt_rain = {
             .pulse_gpio_num = gPins.rain,
             .ctrl_gpio_num  = PCNT_PIN_NOT_USED,
-            .pos_mode       = PCNT_COUNT_INC,
-            .neg_mode       = PCNT_COUNT_DIS,
+            .pos_mode       = inverted ? PCNT_COUNT_DIS : PCNT_COUNT_INC,
+            .neg_mode       = inverted ? PCNT_COUNT_INC : PCNT_COUNT_DIS,
             .counter_h_lim  = 32767,
             .counter_l_lim  = -32768,
             .unit           = PCNT_UNIT_RAIN,
@@ -138,7 +149,7 @@ void sensorsInit(const PinSet& pins)
         bus1Temps[i] = DEVICE_DISCONNECTED_C;
 
     // High-side switch for VCC_1WIRE (Rev 1.3+ only)
-    if (gCfg.pcbVersion >= 13) {
+    if (gCfg.pcbVersion >= PCB_REV_1_3) {
         pinMode(PIN_1WIRE_HSS, OUTPUT);
         digitalWrite(PIN_1WIRE_HSS, LOW);   // sensors off at startup
         dbgSerial.println("1-Wire HSS (GPIO47) initialized – sensors off.");
@@ -242,9 +253,23 @@ void readPulseCounters()
         float pps    = (float)pulsesWind / ((float)elapsed / 1000.0f);
         // gCfg.windMsPerPps: sensor-specific calibration (Davis default: 1.00584,
         // derived from "2.25 mph per Hz"); configurable for other anemometers.
-        windSpeedMs  = pps * gCfg.windMsPerPps;
-        if (windSpeedMs > windGustMs) windGustMs = windSpeedMs;
-        dbgSerial.printf("Wind: %d pulses → %.1f m/s (gust %.1f)\n", pulsesWind, windSpeedMs, windGustMs);
+        float newSpeedMs = pps * gCfg.windMsPerPps;
+        if (newSpeedMs > MAX_PLAUSIBLE_WIND_SPEED_MS) {
+            // Reed-switch contact bounce / EMI burst on the pulse line can
+            // produce a short, physically impossible pulse rate on a single
+            // sub-sample. Left unfiltered, this both dilutes into the cycle
+            // average (showing up as an implausible but still "in range"
+            // speed value) and, worse, blows past the CayenneLPP/binary
+            // 16-bit encoding range for the gust channel — which silently
+            // wraps around instead of overflowing visibly. Drop the sample
+            // entirely so neither windSpeedMs nor windGustMs ever sees it.
+            dbgSerial.printf("Wind: %d pulses → %.1f m/s REJECTED (implausible, gust stays %.1f)\n",
+                          pulsesWind, newSpeedMs, windGustMs);
+        } else {
+            windSpeedMs = newSpeedMs;
+            if (windSpeedMs > windGustMs) windGustMs = windSpeedMs;
+            dbgSerial.printf("Wind: %d pulses → %.1f m/s (gust %.1f)\n", pulsesWind, windSpeedMs, windGustMs);
+        }
     }
 
     if (gCfg.rainEn) {
@@ -283,7 +308,7 @@ void startOneWireConversion()
 {
     // Rev 1.3+: power up VCC_1WIRE now; switched back off once the
     // conversion completes, in pollOneWireConversion().
-    oneWireHssPowered = (gCfg.pcbVersion >= 13);
+    oneWireHssPowered = (gCfg.pcbVersion >= PCB_REV_1_3);
     if (oneWireHssPowered) {
         digitalWrite(PIN_1WIRE_HSS, HIGH);
         delay(5);   // DS18B20 needs ≥1 ms after VDD power-on before first reset

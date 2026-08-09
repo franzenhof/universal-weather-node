@@ -13,15 +13,31 @@
 #define PIN_I2C_SCL_BME280     42
 
 // ============================================================================
-// PCNT CONFIGURATION (4k7 pull-up, reed switch to GND, 100 nF low-pass filter)
+// PCNT CONFIGURATION (reed switch to GND, debounced by a 330 Ω / 100 nF RC
+// — tau = 33 µs, plus a 1 kOhm series resistor into the ESP32 pin for input
+// protection only, not part of the debounce). 33 µs filters HF noise but is
+// far shorter than typical mechanical reed-switch bounce (1-10 ms), so the
+// hardware alone does not debounce contact bounce — see
+// MAX_PLAUSIBLE_WIND_SPEED_MS below for the software-side guard.
 // ============================================================================
 #define PCNT_UNIT_WINDSPEED     PCNT_UNIT_0
 #define PCNT_CHANNEL_WINDSPEED  PCNT_CHANNEL_0
-#define FILTER_VALUE_WINDSPEED  100   // approx. 1.25 µs at APB=80 MHz → debounce
+#define FILTER_VALUE_WINDSPEED  100   // approx. 1.25 µs at APB=80 MHz → PCNT glitch filter
 
 #define PCNT_UNIT_RAIN          PCNT_UNIT_1
 #define PCNT_CHANNEL_RAIN       PCNT_CHANNEL_0
 #define FILTER_VALUE_RAIN       100
+
+// Sub-samples above this are rejected as sensor glitches (reed-switch contact
+// bounce / EMI burst on the wind pulse line), not real wind: the Davis
+// anemometer's own rated measuring range ends at 175 mph / 78 m/s / 281 km/h
+// (see datasheet) — nothing above that is physically producible by this
+// sensor regardless of actual weather. Still well below the CayenneLPP
+// analog-input encoding ceiling (~327 km/h). A rejected sample is dropped
+// entirely (not averaged in, not fed into the gust ratchet) rather than
+// clamped, since a clamped-but-still-wrong value would silently distort both
+// windSpeedMs and windGustMs the same way the raw glitch did.
+#define MAX_PLAUSIBLE_WIND_SPEED_MS  78.0f   // 281 km/h — Davis anemometer rated max
 
 // ============================================================================
 // I2C / BME280
@@ -35,7 +51,7 @@
 // ============================================================================
 // PIN ASSIGNMENT BY PCB REVISION (runtime)
 // Rev 1.2: Wind=GPIO3, Rain=GPIO4, 1-Wire=GPIO5
-// Rev 1.3: Wind=GPIO4, Rain=GPIO5, 1-Wire=GPIO6
+// Rev 1.3: Wind=GPIO6, Rain=GPIO7, 1-Wire=GPIO5
 // ============================================================================
 struct PinSet { int windSpeed, rain, oneWire; };
 PinSet getPins(int pcbVersion);

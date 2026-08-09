@@ -95,7 +95,7 @@ def copy_firmware(*args, **kwargs):
 
     firmware_dir = Path(env.get("PROJECT_DIR")) / "firmware"
     firmware_dir.mkdir(parents=True, exist_ok=True)
-    dst = firmware_dir / f"lorawan-water-node-{version_string}.bin"
+    dst = firmware_dir / f"lorawan-weather-node-{version_string}.bin"
     shutil.copyfile(src, dst)
     print(f"Firmware copied to {dst}")
 

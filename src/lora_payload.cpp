@@ -10,6 +10,23 @@ CayenneLPP lpp(200);
 uint8_t    binBuf[64];
 size_t     binLen = 0;
 
+// CayenneLPP analog-input fields — and this project's own binary format,
+// which mirrors the same scaling — pack values as (value * 100) into a
+// signed 16-bit field. Anything outside +-327.67 silently wraps instead of
+// failing visibly: CayenneLPP::addField() only range-checks the sign bit
+// for negative values, and a raw C++ (int16_t) cast of an out-of-range float
+// is equally unchecked. Wind speed/gust can no longer reach this range
+// (MAX_PLAUSIBLE_WIND_SPEED_MS in sensors.cpp already caps them well below
+// it), but rain rate is derived from the same kind of pulse counting without
+// an equivalent guard, and the debug free-heap/uptime channels legitimately
+// exceed it during normal long-term operation (e.g. >13.6 days uptime) —
+// clamp defensively right before encoding rather than rely on each caller.
+constexpr float LPP_ANALOG_LIMIT = 327.67f;
+static inline float clampLppAnalog(float v)
+{
+    return constrain(v, -LPP_ANALOG_LIMIT, LPP_ANALOG_LIMIT);
+}
+
 // Status byte: BME280 Bit0, Bus1 Bit1, errors Bit2-5, imperial units Bit6,
 // wind unit Bit7 (0=km/h, 1=m/s; ignored when Bit6 set). Shared by both wire
 // formats — see the CayenneLPP Ch2 Digital Input and the binary format's
@@ -33,11 +50,11 @@ void buildLppPacket()
     lpp.reset();
     if (gCfg.windEn) {
         lpp.addDirection  (1, windDirection);
-        lpp.addAnalogInput(1, windSpeedForOutput(windSpeedMs, gCfg));
-        lpp.addAnalogInput(2, windSpeedForOutput(windGustMs,  gCfg));
+        lpp.addAnalogInput(1, clampLppAnalog(windSpeedForOutput(windSpeedMs, gCfg)));
+        lpp.addAnalogInput(2, clampLppAnalog(windSpeedForOutput(windGustMs,  gCfg)));
     }
     if (gCfg.rainEn) {
-        lpp.addAnalogInput(3, rainRateForOutput(rainRateMmH, gCfg));
+        lpp.addAnalogInput(3, clampLppAnalog(rainRateForOutput(rainRateMmH, gCfg)));
         // Distance field is intentionally used as a mm/in carrier for rain
         // values (unit indicated by the status byte's imperial bit below).
         lpp.addDistance   (1, rainForOutput(rainMM, gCfg));
@@ -61,8 +78,8 @@ void buildLppPacket()
         lpp.addDigitalInput(200, loopCount);
         lpp.addTemperature (201, temperatureForOutput(cpuTemperature, gCfg));
         lpp.addDigitalInput(202, (uint8_t)min(sendFailCount, 255));
-        lpp.addAnalogInput (203, (float)ESP.getFreeHeap() / 1024.0f);
-        lpp.addAnalogInput (204, (float)millis() / 3600000.0f);
+        lpp.addAnalogInput (203, clampLppAnalog((float)ESP.getFreeHeap() / 1024.0f));
+        lpp.addAnalogInput (204, clampLppAnalog((float)millis() / 3600000.0f));
     }
 
     // EU868: DR0/SF12 = max 51 bytes, DR5/SF7 = max 222 bytes payload
@@ -101,11 +118,11 @@ void buildBinaryPacket()
 
     if (gCfg.windEn) {
         mask |= (1UL << BIN_WIND_DIR);   binPutU16(data, dpos, windDirection);
-        mask |= (1UL << BIN_WIND_SPEED); binPutI16(data, dpos, (int16_t)roundf(windSpeedForOutput(windSpeedMs, gCfg) * 100));
-        mask |= (1UL << BIN_WIND_GUST);  binPutI16(data, dpos, (int16_t)roundf(windSpeedForOutput(windGustMs,  gCfg) * 100));
+        mask |= (1UL << BIN_WIND_SPEED); binPutI16(data, dpos, (int16_t)roundf(clampLppAnalog(windSpeedForOutput(windSpeedMs, gCfg)) * 100));
+        mask |= (1UL << BIN_WIND_GUST);  binPutI16(data, dpos, (int16_t)roundf(clampLppAnalog(windSpeedForOutput(windGustMs,  gCfg)) * 100));
     }
     if (gCfg.rainEn) {
-        mask |= (1UL << BIN_RAIN_RATE); binPutI16(data, dpos, (int16_t)roundf(rainRateForOutput(rainRateMmH, gCfg) * 100));
+        mask |= (1UL << BIN_RAIN_RATE); binPutI16(data, dpos, (int16_t)roundf(clampLppAnalog(rainRateForOutput(rainRateMmH, gCfg)) * 100));
         mask |= (1UL << BIN_RAIN_MM);   binPutU16(data, dpos, (uint16_t)roundf(rainForOutput(rainMM, gCfg) * 10));
         mask |= (1UL << BIN_RAIN_SINCE);binPutU16(data, dpos, (uint16_t)roundf(rainForOutput(rainMMSinceStart, gCfg) * 10));
     }

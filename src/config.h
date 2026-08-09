@@ -15,6 +15,13 @@ enum MqttTlsMode {
     MQTT_TLS_VERIFY   = 2,  // TLS, server certificate verified against mqttCaCert
 };
 
+// Custom PCB hardware revision, stored in Config::pcbVersion below — see
+// README.md "PCB Revisions" for the full pin-mapping differences between
+// them (getPins() in sensors.cpp, plus the Schmitt-trigger-related PCNT edge
+// polarity in configureWindPcnt()/configureRainPcnt()).
+constexpr int PCB_REV_1_2 = 12;
+constexpr int PCB_REV_1_3 = 13;
+
 // ============================================================================
 // CONFIGURATION (persistent via NVS / Preferences)
 // ============================================================================
@@ -28,7 +35,7 @@ struct Config {
     uint64_t devEui            = 0;
     uint8_t  appKey[16]        = {};
     char     region[8]         = "EU868"; // LoRaWAN region (default)
-    int      pcbVersion        = 13;  // 12 = Rev 1.2, 13 = Rev 1.3
+    int      pcbVersion        = PCB_REV_1_3;
     int      altitudeM         = 560; // default altitude above sea level (m)
     int      uplinkIntervalSec = 300;  // target uplink interval (s)
     int      sampleSec         = 3;    // sub-sample interval (s); <= uplinkIntervalSec

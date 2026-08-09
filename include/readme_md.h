@@ -14,15 +14,29 @@ All three run **independently and in parallel** — enable any subset via the on
 
 The images below give a quick impression of the hardware journey from empty PCB to finished node and show how the measured data can be visualized in Grafana.
 
+## Table of Contents
 
-## 📄 License & Open Source
-
-This project is fully open-source. To support both software developers and hardware makers, it is dual-licensed:
-
-* **Software / Firmware:** Licensed under the **[MIT License](LICENSE-SOFTWARE)**. You can freely use, modify, and distribute the code.
-* **Hardware (Schematics, PCB & 3D Files):** Licensed under the **[CERN-OHL-P v2](LICENSE-HARDWARE)** (CERN Open Hardware Licence – Permissive). You are free to manufacture, modify, and distribute the hardware designs.
-
-*Developed with 🚜 and 💻 by Gerhard Massenbichler at Franzenhof.*
+- [Project in Pictures](#project-in-pictures)
+- [Use Case](#use-case)
+- [Hardware](#hardware)
+- [GPIO Pinout](#gpio-pinout)
+- [Measurement Principles](#measurement-principles)
+- [Generic Sensor Calibration](#generic-sensor-calibration)
+- [Units (Metric/Imperial)](#units-metricimperial)
+- [CayenneLPP Payload Channels](#cayennelpp-payload-channels)
+- [Compact Binary Payload Format (Alternative, ~50% Smaller)](#compact-binary-payload-format-alternative-50-smaller)
+- [Initial Configuration (Wi-Fi Portal)](#initial-configuration-wi-fi-portal)
+- [Parallel Wi-Fi + MQTT Transport (Optional)](#parallel-wi-fi--mqtt-transport-optional)
+- [User Button (GPIO 0)](#user-button-gpio-0)
+- [ChirpStack Payload Decoder](#chirpstack-payload-decoder)
+- [TTN (The Things Stack) Instead of Private ChirpStack](#ttn-the-things-stack-instead-of-private-chirpstack)
+- [LoRaWAN Downlink Commands](#lorawan-downlink-commands)
+- [Error Handling / Robustness](#error-handling--robustness)
+- [Uplink Interval and Timing](#uplink-interval-and-timing)
+- [Project Structure](#project-structure)
+- [Libraries](#libraries)
+- [Technical Notes](#technical-notes)
+- [License & Open Source](#-license--open-source)
 
 
 ## Use Case
@@ -74,7 +88,10 @@ In addition to mechanically connecting the connectors, the PCB provides the foll
 - **TVS diodes** (SMLVT3V3) directly at each external connector as primary ESD coarse protection  
 - **BAT43 Schottky clamp diodes** as secondary protection clamps before the GPIO pins  
 - **Series resistors** (330 Ω / 1 kΩ) for current limiting  
-- **RC low-pass filter** (4.7 kΩ + 100 nF, τ ≈ 0.47 ms) for hardware debouncing of the reed switches  
+- **RC low-pass filter** for hardware debouncing of the reed switches:
+  - Wind speed: 330 Ω + 4.7 kΩ + 100 nF (τ ≈ 0.5–0.9 ms) — sized against a measured ~1.5 ms minimum reed-contact closure time at full anemometer speed
+  - Rain: 330 Ω + 10 kΩ + 1 µF (τ ≈ 10–15 ms) — the tipping bucket's much lower pulse rate allows a far stronger filter
+- **74LVC2G14 dual Schmitt-trigger inverter** (Rev 1.3+, SOT-23-6) on wind speed and rain, after the RC filter, for a clean single-threshold digital transition (belt-and-suspenders against reed-switch bounce and cable EMI beyond what the RC filter alone catches) — see the [Revision-Dependent Pins](#revision-dependent-pins) note on the resulting PCNT edge-polarity inversion
 - **Polyfuse F1** (250 mA) for short-circuit protection of the 3.3 V sensor supply  
 - **Additional I²C pull-ups** (4.7 kΩ, jumper J1/J2) for longer BME280 cable runs up to 2 m
 
@@ -88,22 +105,24 @@ In addition to mechanically connecting the connectors, the PCB provides the foll
 |------|----------|-----------|------|
 | **0** | User button | IN (pull-up) | Short press: display 20 s; long press (≥ 3 s): Wi-Fi portal |
 | **1** | LiPo ADC | IN (ADC1_CH0) | Voltage divider R13/R14 (390 Ω / 100 Ω) |
+| **2** | Wind direction ADC (ADC1_CH1) | IN | Davis potentiometer 0–3.3 V → 0–359°; fixed on both revisions |
 | **37** | BAT_CTRL | OUT | HIGH enables ADC measurement path (Heltec V3 internal from board rev. 3.2) |
 | **41** | I²C SDA (BME280) | IN/OUT | Wire2, 50 kHz, address 0x76 |
 | **42** | I²C SCL (BME280) | OUT | Wire2 |
+| **47** | 1-Wire high-side switch | OUT | HIGH = bus powered; Rev 1.3+ only |
 
 ### Revision-Dependent Pins
 
 | GPIO Rev 1.2 | GPIO Rev 1.3 | Function |
 |:------------:|:------------:|----------|
-| **2** | **4** | Wind direction ADC (ADC1_CH1) – Davis potentiometer 0–3.3 V → 0–359°, C6 = 10 µF low-pass |
-| **3** | **2** | Wind speed (PCNT Unit 0, reed switch) |
-| **4** | **5** | Rain (PCNT Unit 1, reed switch) |
-| **5** | **6** | 1-Wire bus (DS18B20, up to 3 sensors) |
-| **6** | **3** | unused / free |
-| – | **47** | 1-Wire high-side switch (OUT, HIGH = bus powered) |
+| **3** | **6** | Wind speed (PCNT Unit 0, reed switch, via 74LVC2G14 Schmitt trigger on Rev 1.3+) |
+| **4** | **7** | Rain (PCNT Unit 1, reed switch, via 74LVC2G14 Schmitt trigger on Rev 1.3+) |
+| **5** | **5** | 1-Wire bus (DS18B20, up to 3 sensors) |
+| – | **3, 4** | unused / free |
 
 > The active PCB revision is configured in the Wi-Fi portal (default: **13** for Rev 1.3).
+>
+> **Rev 1.3+ note:** wind speed and rain now pass through an inverting Schmitt-trigger buffer (74LVC2G14, SOT-23-6) after the RC low-pass filter, for reliable debouncing against reed-switch contact bounce and cable-borne EMI. Because it inverts, the PCNT units are configured to count the *falling* edge on these two channels (`PCNT_COUNT_INC` on `neg_mode`, see `configureWindPcnt()`/`configureRainPcnt()` in `sensors.cpp`) — the opposite of Rev 1.2's direct (non-inverted) wiring.
 
 ### Wind Sensor (Davis 6410) – RJ11 6-pin
 
@@ -136,6 +155,20 @@ In addition to mechanically connecting the connectors, the PCB provides the foll
 | 5 | SDA |
 
 > Jumpers J1 and J2 on the PCB activate the additional 4.7 kΩ I²C pull-ups for cable lengths over 0.5 m.
+
+### Revision History
+
+**Rev 1.2** is the original board revision (legacy, still supported). **Rev 1.3** is the current default (`pcbRevision = 13` in the Wi-Fi portal) and the revision shown in the pictures above.
+
+> Rev 1.3: The 5V input on the PCB (overvoltage protected) connects directly to the **5V pin of the Heltec WiFi LoRa V3** (Pin 2 on the J2 header of the controller board). GPIO 3 and GPIO 4 are free and unused (see [Revision-Dependent Pins](#revision-dependent-pins) above).
+
+> **Note on current firmware:** Both revisions support only **one** 1-Wire bus (Rev 1.2: GPIO 5, Rev 1.3: GPIO 5 as well — unchanged). The former second bus is no longer addressed by the software.
+
+**Changes in Rev 1.3 vs. 1.2:**
+- TVS diode (SMLVT3V3 / U4) added at rain sensor connector
+- 2nd 1-Wire bus removed
+- Wind speed and rain moved off GPIO 3/4 to GPIO 6/7 (GPIO 3 is an ESP32-S3 JTAG-source strapping pin — floats with no internal pull, best kept free of external sensor wiring; GPIO 4 was freed up alongside it for future expansion)
+- 74LVC2G14 Schmitt-trigger inverter added on wind speed and rain (see RC filter / GPIO pinout notes above) — requires the inverted PCNT edge polarity now set in `configureWindPcnt()`/`configureRainPcnt()`
 
 ---
 
@@ -660,28 +693,38 @@ Downlinks are sent on **FPort 1** with a single byte:
 | `0x05` | Disable debug mode (persistent) |
 | `0xFF` | Factory reset: wipe all stored configuration and restart into the first-boot config portal |
 
-Parameter updates are sent on **FPort 1** with command `0x10`:
+### Parameter Update via Downlink `0x10`
 
-`[0x10, paramId, valueMSB, valueLSB, ...]`
+Parameter updates are sent on **FPort 1**, payload starting with `0x10` followed by one or more triplets:
 
-Multiple parameter triplets may be included in one downlink. Values are interpreted as signed 16-bit and validated.
+`[paramId][valueHi][valueLo]`
 
-| Param ID | Parameter | Valid range / values |
-|----------|-----------|----------------------|
-| `1` | `uplinkIntervalSec` | `5..3600` |
-| `2` | `sampleSec` | `1..uplinkIntervalSec` |
-| `3` | `windEn` | `0` or `1` |
-| `4` | `rainEn` | `0` or `1` |
-| `5` | `lipoEn` | `0` or `1` |
-| `6` | `debugMode` | `0` or `1` |
-| `7` | `windDirOffsetDeg` | `-180..180` |
-| `8` | `windUnitMs` | `0` or `1` |
-| `9` | `cpuFreqMhz` | `80` or `240` |
-| `10` | `payloadFormat` | `0` (CayenneLPP, FPort 1) or `1` (compact binary, FPort 3) |
-| `11` | `unitSystem` | `0` (Metric) or `1` (Imperial) — see [Units (Metric/Imperial)](#units-metricimperial) |
-| `12` | `rainMmPerTip` | mm/tip ×1000, `1..5000` (e.g. `200` = 0.2mm) — see [Generic Sensor Calibration](#generic-sensor-calibration) |
-| `13` | `windMsPerPps` | (m/s per pulse/s) ×1000, `1..10000` — see [Generic Sensor Calibration](#generic-sensor-calibration) |
-| `14` | `windDirSensorType` | `0` (potentiometer) or `1` (calibrated table) — see [Generic Sensor Calibration](#generic-sensor-calibration) |
+- `paramId` is a single **hex byte** (see table below).
+- `value` is a **signed int16, big-endian**, i.e. two bytes `valueHi valueLo` (e.g. decimal `300` → hex `0x012C` → `valueHi=0x01`, `valueLo=0x2C`).
+- Every triplet is 3 bytes; you can send several triplets in one downlink by simply repeating the pattern after the leading `0x10` — no separator needed between triplets.
+
+To avoid mixing up decimal ParamIDs from firmware/code with the hex bytes an actual downlink needs, here is every parameter with a ready-to-send example payload:
+
+| ParamID (dec) | ParamID (hex) | Parameter | Meaning / Range | Example value | value hex (Hi Lo) | Full downlink payload (hex) |
+|---|---|---|---|---|---|---|
+| 1 | `0x01` | `uplinkIntervalSec` | `5..3600` | `300` (5 min) | `01 2C` | `10 01 01 2C` |
+| 2 | `0x02` | `sampleSec` | `1..uplinkIntervalSec` | `3` | `00 03` | `10 02 00 03` |
+| 3 | `0x03` | `windEn` | `0` or `1` | `1` | `00 01` | `10 03 00 01` |
+| 4 | `0x04` | `rainEn` | `0` or `1` | `1` | `00 01` | `10 04 00 01` |
+| 5 | `0x05` | `lipoEn` | `0` or `1` | `1` | `00 01` | `10 05 00 01` |
+| 6 | `0x06` | `debugMode` | `0` or `1` | `1` | `00 01` | `10 06 00 01` |
+| 7 | `0x07` | `windDirOffsetDeg` | `-180..180` | `-45` (negative example — two's complement) | `FF D3` | `10 07 FF D3` |
+| 8 | `0x08` | `windUnitMs` | `0`=km/h, `1`=m/s | `1` | `00 01` | `10 08 00 01` |
+| 9 | `0x09` | `cpuFreqMhz` | `80` or `240` | `240` | `00 F0` | `10 09 00 F0` |
+| 10 | `0x0A` | `payloadFormat` | `0`=CayenneLPP/FPort 1, `1`=binary/FPort 3 | `1` | `00 01` | `10 0A 00 01` |
+| 11 | `0x0B` | `unitSystem` | `0`=Metric, `1`=Imperial — see [Units (Metric/Imperial)](#units-metricimperial) | `1` | `00 01` | `10 0B 00 01` |
+| 12 | `0x0C` | `rainMmPerTip` | mm/tip ×1000, `1..5000` — see [Generic Sensor Calibration](#generic-sensor-calibration) | `200` (0.2mm, Davis default) | `00 C8` | `10 0C 00 C8` |
+| 13 | `0x0D` | `windMsPerPps` | (m/s per pulse/s) ×1000, `1..10000` — see [Generic Sensor Calibration](#generic-sensor-calibration) | `1006` (Davis default ≈1.006) | `03 EE` | `10 0D 03 EE` |
+| 14 | `0x0E` | `windDirSensorType` | `0`=potentiometer, `1`=calibrated table — see [Generic Sensor Calibration](#generic-sensor-calibration) | `1` | `00 01` | `10 0E 00 01` |
+
+**Combining multiple parameters in one downlink:** just concatenate the triplets after the single leading `0x10`. Example — set `uplinkIntervalSec=300` (`paramId=1`) and enable `debugMode` (`paramId=6`) in one downlink:
+
+`10 01 01 2C 06 00 01`
 
 Valid parameters are stored persistently in NVS immediately.
 
@@ -730,24 +773,6 @@ For TTN/community networks, use significantly longer intervals (typically at lea
 
 ---
 
-## PCB Revisions
-
-| Revision | Status | GPIO Wind Speed | GPIO Wind Dir | GPIO Rain | GPIO 1-Wire |
-|----------|--------|:---------------:|:-------------:|:---------:|:-----------:|
-| **Rev 1.2** | In use | GPIO 3 | GPIO 2 | GPIO 4 | GPIO 5 |
-| **Rev 1.3** | In preparation | GPIO 2 | GPIO 4 | GPIO 5 | GPIO 6 |
-
-> Rev 1.3: The 5V input on the PCB (overvoltage protected) connects directly to the **5V pin of the Heltec WiFi LoRa V3** (Pin 2 on the J2 header of the controller board). GPIO 7 is completely free and unused.
-
-> **Note on current firmware:** Both revisions now support only **one** 1-Wire bus (Rev 1.2: GPIO 5, Rev 1.3: GPIO 6). The former second bus is no longer addressed by the software.
-
-**Changes in Rev 1.3 vs. 1.2:**
-- TVS diode (SMLVT3V3 / U4) added at rain sensor connector
-- GPIO numbers shifted by one (GPIO 3 was close to JTAG)
-- 2nd 1-Wire bus removed; GPIO 6 freed → slot used for the 5V input
-
----
-
 ## Project Structure
 
 ```
@@ -767,12 +792,12 @@ For TTN/community networks, use significantly longer intervals (typically at lea
 ├── chirpstack/
 │   └── decoder.js           # ChirpStack v3/v4 JavaScript payload decoder
 ├── pcblayout/
-│   ├── pcb-layout with esd protection.fzz        # Fritzing Rev 1.3
-│   ├── pcb-layout with esd protection_Schaltplan.png
-│   ├── pcb-layout with esd protection_Leiterplatte.png
-│   ├── pcb-layout with esd protection_bom.html
-│   ├── pcb-layout with esd protection rev12.zip  # Gerber files Rev 1.2
-│   ├── pcb-layout with esd protection rev13.zip  # Gerber files Rev 1.3
+│   ├── lorawan-weather-node-pcb.fzz                    # Fritzing Rev 1.3
+│   ├── lorawan-weather-node-pcb_Schaltplan.png
+│   ├── lorawan-weather-node-pcb_Leiterplatte.png
+│   ├── lorawan-weather-node-pcb_bom.html
+│   ├── lorawan-weather-node-pcb-gerberfile rev12.zip   # Gerber files Rev 1.2
+│   ├── lorawan-weather-node-pcb-gerberfile rev13.zip   # Gerber files Rev 1.3
 │   └── design_readme.txt    # Connector pin assignments
 ├── platformio.ini
 └── README.md
@@ -816,4 +841,15 @@ The `LoRaWAN_ESP32` library stores the LoRaWAN session (frame counters, DevAddr,
 
 ### ADC Linearity
 The ESP32-S3 ADC is non-linear (especially below 150 mV and above 3.1 V). For the wind direction potentiometer this is uncritical since values are mapped to 0–359° and the absolute measurement error remains < 5° in practice. For the battery voltage measurement a calibration factor is included in the code.
+
+---
+
+## 📄 License & Open Source
+
+This project is fully open-source. To support both software developers and hardware makers, it is dual-licensed:
+
+* **Software / Firmware:** Licensed under the **[MIT License](LICENSE-SOFTWARE)**. You can freely use, modify, and distribute the code.
+* **Hardware (Schematics, PCB & 3D Files):** Licensed under the **[CERN-OHL-P v2](LICENSE-HARDWARE)** (CERN Open Hardware Licence – Permissive). You are free to manufacture, modify, and distribute the hardware designs.
+
+*Developed with 🚜 and 💻 by Gerhard Massenbichler at Franzenhof.*
 )READMEMD";

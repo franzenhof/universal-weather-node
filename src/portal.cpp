@@ -281,7 +281,7 @@ Config runConfigPortal(const Config& cur)
         if (strlen(p_key.getValue())  == 32) hexToBytes(p_key.getValue(), c.appKey, 16);
         normalizeRegionInput(p_region.getValue(), c.region, sizeof(c.region));
         int pcb = atoi(p_pcb.getValue());
-        c.pcbVersion       = (pcb == 12) ? 12 : 13;
+        c.pcbVersion       = (pcb == PCB_REV_1_2) ? PCB_REV_1_2 : PCB_REV_1_3;
         // >= 0, not > 0: 0 m (sea level) is a valid altitude and must not be
         // silently rejected in favor of the previously stored value.
         if (atoi(p_alt.getValue()) >= 0) c.altitudeM = atoi(p_alt.getValue());
