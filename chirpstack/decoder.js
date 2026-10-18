@@ -14,17 +14,17 @@
  *   Ch 1  Analog Input     → avg wind speed (m/s or km/h, resolution 0.01)
  *   Ch 2  Analog Input     → wind gust max (m/s or km/h, resolution 0.01)
  *   Ch 3  Analog Input     → rain rate (mm/h, resolution 0.01)
- *   Ch 203 Analog Input    → free heap (KiB, debug mode)
- *   Ch 204 Analog Input    → uptime (h, debug mode)
- *   Ch 1  Distance         → rain current cycle (mm)
- *   Ch 2  Distance         → rain since start (mm)
+ *   Ch 203 Generic Sensor  → free heap (KiB, debug mode; Analog Input in older firmware)
+ *   Ch 204 Generic Sensor  → uptime (0.1 h, debug mode; Analog Input in h in older firmware)
+ *   Ch 1  Distance         → rain current cycle (mm or in, resolution 0.001)
+ *   Ch 2  Distance         → rain since start (mm or in, resolution 0.001)
  *   Ch 2  Digital Input    → status byte (bitmask, see below)
  *   Ch 200 Digital Input   → cycle counter (0–255, debug mode)
  *   Ch 202 Digital Input   → send fail counter (0–255, debug mode)
  *   Ch 1  Voltage          → LiPo voltage (V, optional)
  *   Ch 1  Rel. Humidity    → bme280 humidity (%, BME280)
- *   Ch 1  Baro. Pressure   → bme280 barometric pressure QNH (hPa, BME280)
- *   Ch 2  Baro. Pressure   → bme280 barometric pressure absolute (hPa, BME280)
+ *   Ch 1  Baro. Pressure   → bme280 barometric pressure QNH (hPa; inHg x10, see below)
+ *   Ch 2  Baro. Pressure   → bme280 barometric pressure absolute (hPa; inHg x10, see below)
  *   Ch 1  Temperature      → bme280 temperature (°C, BME280)
  *   Ch 2–4 Temperature     → DS18B20 sensor 0–2 (°C)
  *   Ch 201 Temperature     → CPU temperature (°C, debug mode)
@@ -37,6 +37,12 @@
  *           temperature/rain/pressure/wind in this uplink — values are
  *           already converted, this bit only tells you which unit they're in
  *   Bit 7 : wind speed unit if Metric (0=km/h, 1=m/s; ignored if Bit 6 set)
+ *
+ * Imperial resolution: in imperial mode the barometric fields carry inHg
+ * x100 (the firmware sends inHg x10 into the x10 field) - the decoder
+ * divides by 10 once more when Bit 6 is set. The binary format scales
+ * rain/pressure by itself (see "Custom Binary Decoder"). Field names keep
+ * their historical "_mm"/"_hpa" suffixes; the unit is in status.*_unit.
  *
  * Rain accumulator note:
  *   "rain_since_start_mm" is a continuous counter since the last power-on.
@@ -54,7 +60,8 @@ var LPP_HUMIDITY         = 104; // 1 Byte unsigned, ÷2
 var LPP_BAROMETRIC       = 115; // 2 Byte unsigned, ÷10
 var LPP_VOLTAGE          = 116; // 2 Byte unsigned, ÷100
 var LPP_DIRECTION        = 132; // 2 Byte unsigned (Grad)
-var LPP_DISTANCE         = 130; // 4 Byte unsigned, ÷1000 (firmware maps result to mm)
+var LPP_DISTANCE         = 130; // 4 Byte unsigned, ÷1000 (firmware maps result to mm/in)
+var LPP_GENERIC_SENSOR   = 100; // 4 Byte unsigned, ×1
 
 // ── Helper Functions ────────────────────────────────────────────────────────
 
@@ -65,6 +72,11 @@ function uint16BE(bytes, i) {
 function int16BE(bytes, i) {
     var v = uint16BE(bytes, i);
     return v >= 0x8000 ? v - 0x10000 : v;
+}
+
+function roundTo(v, decimals) {
+    var f = Math.pow(10, decimals);
+    return Math.round(v * f) / f;
 }
 
 function uint32BE(bytes, i) {
@@ -124,12 +136,20 @@ function parseLPP(bytes) {
                 break;
 
             case LPP_DISTANCE:
-                // Firmware writes rain values directly in mm via addDistance().
-                // LPP distance raw ÷1000 reconstructs the original mm value.
-                var dval = uint32BE(bytes, i) / 1000.0;
+                // Firmware writes rain values directly in mm (or in) via
+                // addDistance(); raw ÷1000 reconstructs the value. Rounded to
+                // 3 decimals, not 1: a single tip in imperial is 0.008 in.
+                var dval = roundTo(uint32BE(bytes, i) / 1000.0, 3);
                 i += 4;
-                if (channel === 1) result.rain_cycle_mm       = parseFloat(dval.toFixed(1));
-                else if (channel === 2) result.rain_since_start_mm = parseFloat(dval.toFixed(1));
+                if (channel === 1) result.rain_cycle_mm       = dval;
+                else if (channel === 2) result.rain_since_start_mm = dval;
+                break;
+
+            case LPP_GENERIC_SENSOR:
+                var gval = uint32BE(bytes, i);
+                i += 4;
+                if (channel === 203) result.debug_free_heap_kib = gval;
+                else if (channel === 204) result.debug_uptime_h = roundTo(gval / 10.0, 1);
                 break;
 
             case LPP_TEMPERATURE:
@@ -172,6 +192,14 @@ function parseLPP(bytes) {
                 break;
         }
     }
+
+    // Imperial: the barometric fields hold inHg x100 (see header comment).
+    if (result.status && result.status.pressure_unit === "inHg") {
+        if (result.bme280_pressure_qnh_hpa !== undefined)
+            result.bme280_pressure_qnh_hpa = roundTo(result.bme280_pressure_qnh_hpa / 10.0, 2);
+        if (result.bme280_pressure_abs_hpa !== undefined)
+            result.bme280_pressure_abs_hpa = roundTo(result.bme280_pressure_abs_hpa / 10.0, 2);
+    }
     return result;
 }
 
@@ -181,7 +209,12 @@ function parseLPP(bytes) {
 // Only fields whose bit is set in the mask are present, in ascending
 // bit-index order. Field values use the same scaling as CayenneLPP above,
 // but big-endian and fixed-width (no per-field channel/type byte).
-// Bit order is authoritative in firmware: enum BinField in main.cpp.
+// Bit order is authoritative in firmware: enum BinField in src/payload.h.
+//
+// Version 2 (current firmware): in imperial mode (status Bit 6) rain amounts
+// are x1000 and pressures x100; rain since start is uint32. Version 1 (older
+// firmware): everything x10, rain since start uint16. Metric scaling is the
+// same in both.
 
 var BIN_FIELD = {
     WIND_DIR: 0, WIND_SPEED: 1, WIND_GUST: 2,
@@ -198,24 +231,34 @@ function uint32LE(bytes, i) {
 
 function parseBin(bytes) {
     var result = {};
-    // bytes[0] = protocol version, currently unused for decoding (reserved
-    // for future format changes).
+    var version = bytes[0];
+    if (version !== 1 && version !== 2) {
+        return { error: "unsupported binary protocol version " + version + " (expected 1 or 2)" };
+    }
+    result.proto_version = version;
     var mask = uint32LE(bytes, 1);
     var i    = 5;
 
     function has(bit) { return (mask & (1 << bit)) !== 0; }
 
+    // Rain/pressure are read raw first: their scale depends on the status
+    // byte (imperial bit), which comes later in the bit order.
+    var rainCycleRaw, rainSinceRaw, pressQnhRaw, pressAbsRaw;
+
     if (has(BIN_FIELD.WIND_DIR))       { result.wind_direction_deg = uint16BE(bytes, i); i += 2; }
     if (has(BIN_FIELD.WIND_SPEED))     { result.wind_speed_avg     = int16BE(bytes, i) / 100.0; i += 2; }
     if (has(BIN_FIELD.WIND_GUST))      { result.wind_gust          = int16BE(bytes, i) / 100.0; i += 2; }
     if (has(BIN_FIELD.RAIN_RATE))      { result.rain_rate_mmh      = int16BE(bytes, i) / 100.0; i += 2; }
-    if (has(BIN_FIELD.RAIN_MM))        { result.rain_cycle_mm       = parseFloat((uint16BE(bytes, i) / 10.0).toFixed(1)); i += 2; }
-    if (has(BIN_FIELD.RAIN_SINCE))     { result.rain_since_start_mm = parseFloat((uint16BE(bytes, i) / 10.0).toFixed(1)); i += 2; }
+    if (has(BIN_FIELD.RAIN_MM))        { rainCycleRaw = uint16BE(bytes, i); i += 2; }
+    if (has(BIN_FIELD.RAIN_SINCE)) {
+        if (version >= 2) { rainSinceRaw = uint32BE(bytes, i); i += 4; }
+        else              { rainSinceRaw = uint16BE(bytes, i); i += 2; }
+    }
     if (has(BIN_FIELD.STATUS))         { result.status = decodeStatus(bytes[i]); i += 1; }
     if (has(BIN_FIELD.BATTERY))        { result.battery_v = uint16BE(bytes, i) / 100.0; i += 2; }
-    if (has(BIN_FIELD.BME_HUMIDITY))   { result.bme280_humidity_pct     = bytes[i] / 2.0; i += 1; }
-    if (has(BIN_FIELD.BME_PRESS_QNH))  { result.bme280_pressure_qnh_hpa = uint16BE(bytes, i) / 10.0; i += 2; }
-    if (has(BIN_FIELD.BME_PRESS_ABS))  { result.bme280_pressure_abs_hpa = uint16BE(bytes, i) / 10.0; i += 2; }
+    if (has(BIN_FIELD.BME_HUMIDITY))   { result.bme280_humidity_pct = bytes[i] / 2.0; i += 1; }
+    if (has(BIN_FIELD.BME_PRESS_QNH))  { pressQnhRaw = uint16BE(bytes, i); i += 2; }
+    if (has(BIN_FIELD.BME_PRESS_ABS))  { pressAbsRaw = uint16BE(bytes, i); i += 2; }
     if (has(BIN_FIELD.BME_TEMP))       { result.bme280_temperature_c    = int16BE(bytes, i) / 10.0; i += 2; }
     if (has(BIN_FIELD.DS18B20_0))      { result.ds18b20_0_c = int16BE(bytes, i) / 10.0; i += 2; }
     if (has(BIN_FIELD.DS18B20_1))      { result.ds18b20_1_c = int16BE(bytes, i) / 10.0; i += 2; }
@@ -225,6 +268,14 @@ function parseBin(bytes) {
     if (has(BIN_FIELD.DBG_FAIL_COUNT)) { result.debug_send_fail_count   = bytes[i]; i += 1; }
     if (has(BIN_FIELD.DBG_FREE_HEAP))  { result.debug_free_heap_kib     = uint16BE(bytes, i); i += 2; }
     if (has(BIN_FIELD.DBG_UPTIME))     { result.debug_uptime_h          = uint16BE(bytes, i) / 10.0; i += 2; }
+
+    var imperialV2 = version >= 2 && result.status && result.status.rain_unit === "in";
+    var rainDiv  = imperialV2 ? 1000.0 : 10.0;
+    var pressDiv = imperialV2 ? 100.0 : 10.0;
+    if (rainCycleRaw !== undefined) result.rain_cycle_mm       = roundTo(rainCycleRaw / rainDiv, 3);
+    if (rainSinceRaw !== undefined) result.rain_since_start_mm = roundTo(rainSinceRaw / rainDiv, 3);
+    if (pressQnhRaw !== undefined)  result.bme280_pressure_qnh_hpa = roundTo(pressQnhRaw / pressDiv, 2);
+    if (pressAbsRaw !== undefined)  result.bme280_pressure_abs_hpa = roundTo(pressAbsRaw / pressDiv, 2);
 
     return result;
 }

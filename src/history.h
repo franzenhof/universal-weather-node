@@ -4,11 +4,10 @@
 
 // Two-tier in-RAM ring buffer of bucketed measurement values, feeding the
 // /chart web page and /api/history endpoint. RAM-only, not persisted across
-// a restart: unlike rainMMSinceStart (RTC_DATA_ATTR, a single monotonic
-// accumulator that stays correct across a restart), a *timestamped* buffer
-// keyed on millis() would become discontinuous once millis() resets to 0 on
-// reboot. Long-term history remains Grafana's job via MQTT/ChirpStack; this
-// is a short local window for the device's own web UI.
+// a restart: a *timestamped* buffer keyed on uptime would become
+// discontinuous once the uptime resets to 0 on reboot. Long-term history
+// remains Grafana's job via MQTT/ChirpStack; this is a short local window
+// for the device's own web UI.
 //
 // Classic RRDtool-style tiering rather than one long flat buffer: a "fine"
 // tier keeps short buckets for a detailed recent view, a "coarse" tier keeps

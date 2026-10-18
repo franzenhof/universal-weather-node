@@ -1,9 +1,17 @@
 Import("env")
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
+
+
+def write_if_changed(path, text):
+    # The generated headers are gitignored; rewriting them with identical
+    # content would only force needless recompiles.
+    if not path.exists() or path.read_text(encoding="utf-8") != text:
+        path.write_text(text, encoding="utf-8")
 
 
 def get_version_string():
@@ -25,10 +33,10 @@ def get_version_string():
 
 version_string = get_version_string().replace('"', '\\"')
 header_path = Path(env.get("PROJECT_DIR")) / "include" / "generated_version.h"
-header_path.write_text(
+write_if_changed(
+    header_path,
     "#pragma once\n"
     f"#define FIRMWARE_VERSION \"{version_string}\"\n",
-    encoding="utf-8",
 )
 
 
@@ -42,12 +50,12 @@ if decoder_src.exists():
     delim = "DECODERJS"
     if f"){delim}\"" in js:
         raise RuntimeError("decoder.js contains the raw-string delimiter )" + delim)
-    decoder_hdr.write_text(
+    write_if_changed(
+        decoder_hdr,
         "#pragma once\n"
         f'static const char DECODER_JS[] PROGMEM = R"{delim}(\n'
         + js
         + f'\n){delim}";\n',
-        encoding="utf-8",
     )
 
 
@@ -77,16 +85,29 @@ if readme_src.exists():
     delim = "READMEMD"
     if f"){delim}\"" in md:
         raise RuntimeError("README.md contains the raw-string delimiter )" + delim)
-    readme_hdr.write_text(
+    write_if_changed(
+        readme_hdr,
         "#pragma once\n"
         f'static const char README_MD[] PROGMEM = R"{delim}(\n'
         + md
         + f'\n){delim}";\n',
-        encoding="utf-8",
     )
 
 
+# Only release builds go to firmware/: an exact tag (e.g. "1.0.5", no
+# "-<n>-g<hash>" suffix, not dirty) or an explicit FW_VERSION override.
+IS_RELEASE = bool(os.getenv("FW_VERSION")) or (
+    version_string != "dev"
+    and "dirty" not in version_string
+    and not re.search(r"-\d+-g[0-9a-f]+$", version_string)
+    and not re.fullmatch(r"[0-9a-f]{7,40}", version_string)
+)
+
+
 def copy_firmware(*args, **kwargs):
+    if not IS_RELEASE:
+        print(f"Firmware {version_string} is not a tagged release - not copied to firmware/")
+        return
     build_dir = Path(env.subst("$BUILD_DIR"))
     prog_name = env.subst("$PROGNAME")
     src = build_dir / f"{prog_name}.bin"

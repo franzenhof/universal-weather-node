@@ -217,8 +217,10 @@ void handleCommandMessage(char* /*topic*/, byte* payload, unsigned int length)
     bool anyApplied = false;
     for (JsonObject p : doc["params"].as<JsonArray>()) {
         uint8_t paramId = p["id"].as<uint8_t>();
-        int16_t value   = p["value"].as<int16_t>();
-        bool ok = applyDownlinkParam(paramId, value);
+        // as<long>() + clamp: as<int16_t>() returns 0 for out-of-range input,
+        // which would be applied as a valid value for some parameters.
+        int16_t value   = clampToParamValue(p["value"].as<long>());
+        bool ok = applyParam(paramId, value);
         dbgSerial.printf("MQTT cmd: set param %u = %d -> %s\n", paramId, value, ok ? "OK" : "INVALID");
         anyApplied = anyApplied || ok;
     }

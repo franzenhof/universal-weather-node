@@ -10,14 +10,17 @@
  *   - DS18B20 Bus 1         (up to 3 sensors, 1-Wire)
  *   - LiPo battery          (voltage measurement via voltage divider + ADC, optional)
  *
- * Transmission: CayenneLPP via LoRaWAN EU868 → own ChirpStack server
+ * Transmission: LoRaWAN (CayenneLPP or compact binary, region configurable)
+ * and/or WiFi + MQTT, see README.md.
  *
- * Configuration: Hold user button (GPIO 0) during boot to open the Wi-Fi
- * portal (SSID: WeatherNode). On first boot (no DevEUI stored) the portal
- * opens automatically. All parameters are stored in NVS.
+ * Configuration: hold the user button (GPIO 0) for 3 s during operation to
+ * open the Wi-Fi portal (SSID: WeatherNode). On first boot (not yet
+ * provisioned) the portal opens automatically. All parameters are stored in
+ * NVS (cfgdata partition).
  *
  * Button operation:
- *   Press → turn on display for 20 s
+ *   Short press → turn on display for 20 s
+ *   Hold 3 s    → config portal
  *
  * LoRaWAN downlink commands (FPort 1, 1 byte):
  *   0x01 → reset rain accumulator (since start)
@@ -26,34 +29,17 @@
  *   0x04 → enable debug mode (persistent)
  *   0x05 → disable debug mode (persistent)
  *   0x10 → set parameter(s): [0x10, paramId, valueMSB, valueLSB, ...]
- *           paramId 1..14 (signed 16-bit values, validated — see params.cpp
- *           for the full list, also reachable via MQTT and the web settings page)
+ *           paramId 1..14 (signed 16-bit values, validated — see ParamId in
+ *           params.h, also reachable via MQTT and the web settings page)
  *   0xFF → factory reset: wipe all config (NVS) and restart into the
  *           first-boot config portal
  *
- * LPP channel mapping:
- *   Ch  1 Direction        → wind direction (°, if wind sensor enabled)
- *   Ch  1 Analog Input     → avg wind speed (m/s or km/h, if wind sensor enabled)
- *   Ch  2 Analog Input     → wind gust max (m/s or km/h, if wind sensor enabled)
- *   Ch  3 Analog Input     → rain rate (mm/h, if rain sensor enabled)
- *   Ch200 Analog Input     → free heap (KiB, debug mode only)
- *   Ch204 Analog Input     → uptime (h, debug mode only)
- *   Ch  1 Distance         → rain current cycle (mm, if rain sensor enabled)
- *   Ch  2 Distance         → rain since start (mm, if rain sensor enabled)
- *   Ch  2 Digital Input    → status byte: Bit0=BME280, Bit1=Bus1, Bit2-5=errors, Bit6=imperial units, Bit7=wind unit
- *   Ch200 Digital Input    → cycle counter (0–255, debug mode only)
- *   Ch202 Digital Input    → send fail counter (0-255, debug mode only)
- *   Ch  1 Voltage          → LiPo voltage (V, optional)
- *   Ch  1 Rel. Humidity    → humidity (%, BME280)
- *   Ch  1 Baro. Pressure   → barometric pressure QNH (hPa, BME280)
- *   Ch  2 Baro. Pressure   → barometric pressure absolute (hPa, BME280)
- *   Ch  1 Temperature      → temperature (°C, BME280)
- *   Ch  2–4 Temperature    → DS18B20 Bus 1 sensor 0–2 (°C)
- *   Ch201 Temperature      → CPU temperature (°C, debug mode only)
+ * Payload channel/field mapping: see README.md ("Payload") and
+ * chirpstack/decoder.js - lora_payload.cpp is the encoder.
  *
  * File layout: this file is orchestration only (setup/loop, sampling,
  * button, LoRaWAN send). See sensors.cpp (sensor reads), lora_payload.cpp
- * (CayenneLPP/binary encoding), portal.cpp (Wi-Fi config portal + web
+ * + payload_binary.cpp (CayenneLPP/binary encoding), portal.cpp (Wi-Fi config portal + web
  * routes), config.cpp (NVS), params.cpp (shared downlink/MQTT parameters),
  * wifi_mqtt.cpp / web_api.cpp (parallel WiFi+MQTT transport).
  */
@@ -78,23 +64,36 @@
 #include "lora_payload.h"
 #include "portal.h"
 #include "serial_log.h"
-#include "partition_repair.h"
+#include "partition_check.h"
 
 // ============================================================================
 // DISPLAY MANAGEMENT
 // ============================================================================
-static unsigned long displayUntilMs = 0;
+// Start + duration rather than an absolute end time, so the timeout stays
+// correct across the millis() wrap (every 49.7 days).
+static bool          displayActive    = false;
+static unsigned long displayOnSinceMs = 0;
+static unsigned long displayOnForMs   = 0;
 
+static void drawDisplay();
+
+// Switches the display on and redraws the latest values - turning it on
+// alone would show whatever was drawn last (possibly hours-old data or the
+// "LoRaWAN Join..." screen).
 static void activateDisplay(unsigned long durationMs = 20000)
 {
-    displayUntilMs = millis() + durationMs;
+    displayActive    = true;
+    displayOnSinceMs = millis();
+    displayOnForMs   = durationMs;
     display.displayOn();
+    drawDisplay();
+    display.display();
 }
 
 static void updateDisplayState()
 {
-    if (displayUntilMs > 0 && millis() >= displayUntilMs) {
-        displayUntilMs = 0;
+    if (displayActive && millis() - displayOnSinceMs >= displayOnForMs) {
+        displayActive = false;
         display.displayOff();
     }
 }
@@ -298,7 +297,7 @@ static void takeSample()
     // windSpeedMs still reflects the previous cycle.
     if (subSampleCount == 0) windGustMs = 0.0f;
 
-    readPulseCounters();   // windSpeedMs, windGustMs, rainMM, rainMMSinceStart
+    float subSampleRainMm = readPulseCounters();   // also updates windSpeedMs, windGustMs, rainMMSinceStart
 
     if (gCfg.windEn) {
         uint16_t dir = readWindDirection();
@@ -308,7 +307,7 @@ static void takeSample()
         windSpeedSum  += windSpeedMs;
     }
     if (gCfg.rainEn)
-        rainCycleMm += rainMM;
+        rainCycleMm += subSampleRainMm;
 
     if (bme280Present) {
         readBme280();
@@ -395,7 +394,7 @@ static void processDownlink(const uint8_t* data, size_t len)
             for (size_t i = 1; i + 2 < len; i += 3) {
                 uint8_t paramId = data[i];
                 int16_t value = (int16_t)(((uint16_t)data[i + 1] << 8) | data[i + 2]);
-                bool ok = applyDownlinkParam(paramId, value);
+                bool ok = applyParam(paramId, value);
                 dbgSerial.printf("Downlink: set param %u = %d -> %s\n",
                               paramId, value, ok ? "OK" : "INVALID");
                 anyApplied = anyApplied || ok;
@@ -536,7 +535,7 @@ void setup()
     display.displayOff();
 
     // Detects a device whose flash still has the old/stock partition table,
-    // missing the dedicated "cfgdata" NVS partition — see partition_repair.h
+    // missing the dedicated "cfgdata" NVS partition — see partition_check.h
     // for why this can happen after OTA, and why it can only be detected,
     // not fixed, from here. Neither normal operation nor the Wi-Fi portal
     // would work correctly on such a device (no config can be saved either
@@ -623,10 +622,14 @@ void setup()
         int joinAttempts = 0;
         do {
             persist.provision(gCfg.region, 0x00, gCfg.joinEui, gCfg.devEui, gCfg.appKey, gCfg.appKey);
-            persist.isProvisioned();
             loRaNode = persist.manage(&radio);
 
             if (!loRaNode || !loRaNode->isActivated()) {
+                // manage() allocates a new LoRaWANNode on every call - free
+                // the failed one, or a node without gateway coverage would
+                // leak heap on every retry.
+                delete loRaNode;
+                loRaNode = nullptr;
                 ++joinAttempts;
                 dbgSerial.printf("Join failed (attempt %d), retry in 2 s...\n", joinAttempts);
                 char buf[32];
@@ -662,8 +665,10 @@ void setup()
     wifiMqttSetup();
     webApiSetup();
 
-    // Setup abgeschlossen – jetzt normaler Messbetrieb. Display noch 20 s
-    // anzeigen, damit der erste Messwert sichtbar ist, danach Timeout.
+    // Setup done - normal operation. Take a first sub-sample right away so
+    // the 20 s boot display shows real readings instead of zeros (the first
+    // full cycle only completes after uplinkIntervalSec).
+    takeSample();
     activateDisplay(20000);
 
     // Enable WDT for the loop task from here
@@ -723,9 +728,9 @@ void loop()
         // Display update and LoRa send are independent conditions - keep
         // them as separate statements rather than duplicating the loraEn
         // check across both display-state branches.
-        if (displayUntilMs > 0) drawDisplay();
-        if (gCfg.loraEn)        sendLoRa();
-        if (displayUntilMs > 0) display.display();
+        if (displayActive) drawDisplay();
+        if (gCfg.loraEn)   sendLoRa();
+        if (displayActive) display.display();
 
         mqttPublishTelemetry();   // no-op unless wifiEn+mqttEn and currently connected
         pushHistorySample();      // record this cycle's finished values for /chart

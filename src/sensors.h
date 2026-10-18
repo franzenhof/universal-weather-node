@@ -8,16 +8,16 @@
 #define PIN_ADC_VOLTBATTERY     1   // LiPo voltage measurement (ADC)
 #define PIN_ADC_WINDDIRECTION   2   // Davis wind direction (potentiometer, ADC)
 #define PIN_ADC_BATCTRL        37   // HIGH enables ADC measurement path (from heltec wifi lora v3 board rev. 3.2)
-#define PIN_1WIRE_HSS          47   // High-side switch VCC_1WIRE (LP0701N3-G via VN2222L, from lorawan-weather-node pcb rev 1.3)
+#define PIN_1WIRE_HSS          47   // High-side switch VCC_1WIRE (LP0701N3-G via TN2106N3-G, from lorawan-weather-node pcb rev 1.3)
 #define PIN_I2C_SDA_BME280     41
 #define PIN_I2C_SCL_BME280     42
 
 // ============================================================================
-// PCNT CONFIGURATION (reed switch to GND, debounced by a 330 Ω / 100 nF RC
-// — tau = 33 µs, plus a 1 kOhm series resistor into the ESP32 pin for input
-// protection only, not part of the debounce). 33 µs filters HF noise but is
-// far shorter than typical mechanical reed-switch bounce (1-10 ms), so the
-// hardware alone does not debounce contact bounce — see
+// PCNT CONFIGURATION (reed switch to GND). Hardware debounce on the PCB (see
+// README "Custom PCB"): wind speed 330 Ω + 4.7 kΩ + 100 nF (tau ~0.5-0.9 ms),
+// rain 330 Ω + 10 kΩ + 1 µF (tau ~10-15 ms), plus a 74LVC2G14 Schmitt
+// trigger on Rev 1.3+. The wind filter is deliberately short (fast pulses at
+// high wind), so occasional contact bounce/EMI can still get through — see
 // MAX_PLAUSIBLE_WIND_SPEED_MS below for the software-side guard.
 // ============================================================================
 #define PCNT_UNIT_WINDSPEED     PCNT_UNIT_0
@@ -69,7 +69,7 @@ void sensorsInit(const PinSet& pins);
 int      adcAverage(int pin, int samples = 8);
 float    readBatteryVoltage();
 uint16_t readWindDirection();
-void     readPulseCounters();   // updates windSpeedMs/windGustMs/rainMM/rainMMSinceStart/rainRateMmH
+float    readPulseCounters();   // updates windSpeedMs/windGustMs/rainMMSinceStart; returns this sub-sample's rain (mm)
 void     readBme280();          // updates bme280TempC/Humidity/PressAbs/PressSea
 // Non-blocking DS18B20 read, split across two calls so loop() (button, WiFi/
 // MQTT poll, watchdog) stays responsive during the ~750 ms conversion time

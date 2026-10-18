@@ -3,8 +3,17 @@
 #include "units.h"
 #include <Arduino.h>
 #include <DallasTemperature.h>
+#include <esp_timer.h>
 
 namespace {
+
+// Seconds since boot from the 64-bit esp_timer. millis()/1000 wraps from
+// 4294967 back to 0 after 49.7 days while bucket ages are computed modulo
+// 2^32, which would turn every pre-wrap bucket's age into ~4.29e9 s.
+uint32_t uptimeSec()
+{
+    return (uint32_t)(esp_timer_get_time() / 1000000LL);
+}
 
 // Compact scaled storage, reusing the exact scaling conventions already
 // established in the compact binary LoRaWAN format (lora_payload.cpp): x100
@@ -16,7 +25,7 @@ namespace {
 // (DS18B20_INVALID_X10) instead of a validMask bit; same idea as
 // DEVICE_DISCONNECTED_C, which is exactly where that sentinel is checked.
 struct HistorySample {
-    uint32_t bucketEndSec;      // millis()/1000 when this bucket was finalized
+    uint32_t bucketEndSec;      // uptimeSec() when this bucket was finalized
     uint8_t  validMask;
     int16_t  windSpeedX100;     // average over the bucket
     int16_t  windGustX100;      // max over the bucket
@@ -262,7 +271,7 @@ void serializeTier(JsonDocument& doc, unsigned long nowSec, const HistorySample*
 
 void pushHistorySample()
 {
-    unsigned long nowSec = millis() / 1000UL;
+    unsigned long nowSec = uptimeSec();
 
     xSemaphoreTake(historyMutex, portMAX_DELAY);
 
@@ -282,7 +291,7 @@ void pushHistorySample()
 void buildHistoryJson(JsonDocument& doc, bool coarse)
 {
     doc.clear();
-    unsigned long nowSec = millis() / 1000UL;
+    unsigned long nowSec = uptimeSec();
 
     // Holds the lock for the whole read+JSON-build loop, not just an index
     // snapshot — simpler than copying samples out first, and the lock-out is

@@ -29,6 +29,12 @@ Config runConfigPortal(const Config& cur)
     // same session doesn't build on top of the first save's result.
     const Config curSnapshot = cur;
 
+    // Set by /calibrate/save below. The calibration is persisted (and copied
+    // into gCfg) right there, but buildConfig() starts from curSnapshot and
+    // the form's sensor-type field still shows the pre-calibration value -
+    // without this, closing the portal would write the old table back.
+    bool calibratedThisSession = false;
+
     // If the parallel WiFi/MQTT transport (wifi_mqtt.cpp) already has an
     // active STA connection at this point, WiFiManager's own "disconnect
     // STA before starting the AP" workaround (startConfigPortal() only runs
@@ -209,7 +215,7 @@ Config runConfigPortal(const Config& cur)
     // - /help, /help.md: rendered README help page (works fully offline, no CDN)
     // - /calibrate*: guided wind-direction calibration for resistor-ladder/
     //   reed-switch vanes (see include/calibrate_page.h)
-    wm.setWebServerCallback([&wm]() {
+    wm.setWebServerCallback([&wm, &calibratedThisSession]() {
         wm.server->on("/decoder", [&wm]() {
             wm.server->sendHeader("Content-Disposition",
                                   "attachment; filename=\"weather-node-decoder.js\"");
@@ -230,7 +236,7 @@ Config runConfigPortal(const Config& cur)
             snprintf(buf, sizeof(buf), "{\"adc\":%d}", adc);
             wm.server->send(200, "application/json", buf);
         });
-        wm.server->on("/calibrate/save", HTTP_POST, [&wm]() {
+        wm.server->on("/calibrate/save", HTTP_POST, [&wm, &calibratedThisSession]() {
             String body = wm.server->arg("plain");
             JsonDocument doc;
             if (deserializeJson(doc, body)) {
@@ -241,8 +247,8 @@ Config runConfigPortal(const Config& cur)
             int n = 0;
             for (JsonObject p : doc["positions"].as<JsonArray>()) {
                 if (n >= 16) break;
-                c.windDirCalAdc[n] = (uint16_t)p["adc"].as<int>();
-                c.windDirCalDeg[n] = (uint16_t)p["deg"].as<int>();
+                c.windDirCalAdc[n] = (uint16_t)constrain(p["adc"].as<int>(), 0, 4095);
+                c.windDirCalDeg[n] = (uint16_t)(((p["deg"].as<int>() % 360) + 360) % 360);
                 n++;
             }
             if (n == 0) {
@@ -259,6 +265,7 @@ Config runConfigPortal(const Config& cur)
             gCfg.windDirSensorType = c.windDirSensorType;
             memcpy(gCfg.windDirCalAdc, c.windDirCalAdc, sizeof(gCfg.windDirCalAdc));
             memcpy(gCfg.windDirCalDeg, c.windDirCalDeg, sizeof(gCfg.windDirCalDeg));
+            calibratedThisSession = true;
             wm.server->send(200, "text/plain",
                             "Calibration saved (" + String(n) + " positions). You can close this page.");
         });
@@ -289,14 +296,23 @@ Config runConfigPortal(const Config& cur)
         int ss = atoi(p_sample.getValue());
         int uplinkIntervalSecVal = c.uplinkIntervalSec; // std::min can't deduce a common type across int/volatile int
         c.sampleSec        = (ss > 0) ? min(ss, uplinkIntervalSecVal) : c.sampleSec;
-        c.windDirOffsetDeg = atoi(p_windoff.getValue());
+        c.windDirOffsetDeg = constrain(atoi(p_windoff.getValue()), -180, 180);
         c.windUnitMs       = (atoi(p_windunit.getValue()) == 0) ? 0 : 1;
         c.unitSystem       = (atoi(p_unitsys.getValue()) == 1) ? 1 : 0;
         float rainMmPerTipVal = atof(p_rainmmtip.getValue());
         if (rainMmPerTipVal > 0.0f) c.rainMmPerTip = rainMmPerTipVal;
         float windMsPerPpsVal = atof(p_windmspp.getValue());
         if (windMsPerPpsVal > 0.0f) c.windMsPerPps = windMsPerPpsVal;
-        c.windDirSensorType = (atoi(p_winddirtyp.getValue()) == 1) ? 1 : 0;
+        // Calibration table: always the latest one - gCfg is updated by
+        // /calibrate/save during this session, otherwise equals curSnapshot.
+        c.windDirCalCount = gCfg.windDirCalCount;
+        memcpy(c.windDirCalAdc, gCfg.windDirCalAdc, sizeof(c.windDirCalAdc));
+        memcpy(c.windDirCalDeg, gCfg.windDirCalDeg, sizeof(c.windDirCalDeg));
+        // A calibration saved this session switches to the table, unless the
+        // user explicitly changed the sensor-type field afterwards.
+        int formDirType = (atoi(p_winddirtyp.getValue()) == 1) ? 1 : 0;
+        c.windDirSensorType = (calibratedThisSession && formDirType == curSnapshot.windDirSensorType)
+                              ? 1 : formDirType;
         c.windEn           = atoi(p_winden.getValue());
         c.rainEn           = atoi(p_rainen.getValue());
         c.lipoEn           = atoi(p_lipo.getValue());

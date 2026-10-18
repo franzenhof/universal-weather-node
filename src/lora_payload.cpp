@@ -5,27 +5,16 @@
 
 #include <Arduino.h>
 #include <DallasTemperature.h>   // DEVICE_DISCONNECTED_C
+#include <esp_timer.h>
+#include "payload.h"
 
 CayenneLPP lpp(200);
-uint8_t    binBuf[64];
+uint8_t    binBuf[BIN_MAX_SIZE];
 size_t     binLen = 0;
 
-// CayenneLPP analog-input fields — and this project's own binary format,
-// which mirrors the same scaling — pack values as (value * 100) into a
-// signed 16-bit field. Anything outside +-327.67 silently wraps instead of
-// failing visibly: CayenneLPP::addField() only range-checks the sign bit
-// for negative values, and a raw C++ (int16_t) cast of an out-of-range float
-// is equally unchecked. Wind speed/gust can no longer reach this range
-// (MAX_PLAUSIBLE_WIND_SPEED_MS in sensors.cpp already caps them well below
-// it), but rain rate is derived from the same kind of pulse counting without
-// an equivalent guard, and the debug free-heap/uptime channels legitimately
-// exceed it during normal long-term operation (e.g. >13.6 days uptime) —
-// clamp defensively right before encoding rather than rely on each caller.
-constexpr float LPP_ANALOG_LIMIT = 327.67f;
-static inline float clampLppAnalog(float v)
-{
-    return constrain(v, -LPP_ANALOG_LIMIT, LPP_ANALOG_LIMIT);
-}
+// ============================================================================
+// MEASUREMENTS FOR THIS CYCLE (shared by both wire formats)
+// ============================================================================
 
 // Status byte: BME280 Bit0, Bus1 Bit1, errors Bit2-5, imperial units Bit6,
 // wind unit Bit7 (0=km/h, 1=m/s; ignored when Bit6 set). Shared by both wire
@@ -42,128 +31,112 @@ static uint8_t computeStatusByte()
     return status;
 }
 
-// ============================================================================
-// BUILD AND SEND LPP PACKET
-// ============================================================================
-void buildLppPacket()
+static Measurements currentMeasurements()
 {
-    lpp.reset();
-    if (gCfg.windEn) {
-        lpp.addDirection  (1, windDirection);
-        lpp.addAnalogInput(1, clampLppAnalog(windSpeedForOutput(windSpeedMs, gCfg)));
-        lpp.addAnalogInput(2, clampLppAnalog(windSpeedForOutput(windGustMs,  gCfg)));
+    Measurements m;
+    m.status = computeStatusByte();
+    m.hasWind = gCfg.windEn;
+    m.windDirDeg = windDirection;
+    m.windSpeed  = windSpeedForOutput(windSpeedMs, gCfg);
+    m.windGust   = windSpeedForOutput(windGustMs,  gCfg);
+    m.hasRain = gCfg.rainEn;
+    m.rainRate       = rainRateForOutput(rainRateMmH, gCfg);
+    m.rainCycle      = rainForOutput(rainMM, gCfg);
+    m.rainSinceStart = rainForOutput(rainMMSinceStart, gCfg);
+    m.hasBattery = gCfg.lipoEn;
+    m.batteryV   = batteryVolt;
+    m.hasBme = bme280Present;
+    m.humidityPct = bme280Humidity;
+    m.pressureQnh = pressureForOutput(bme280PressSea, gCfg);
+    m.pressureAbs = pressureForOutput(bme280PressAbs, gCfg);
+    m.bmeTemp     = temperatureForOutput(bme280TempC, gCfg);
+    for (int i = 0; i < 3; i++) {
+        m.hasDs18b20[i] = (i < bus1Count) && bus1Temps[i] != DEVICE_DISCONNECTED_C;
+        m.ds18b20[i]    = temperatureForOutput(bus1Temps[i], gCfg);
     }
-    if (gCfg.rainEn) {
-        lpp.addAnalogInput(3, clampLppAnalog(rainRateForOutput(rainRateMmH, gCfg)));
-        // Distance field is intentionally used as a mm/in carrier for rain
-        // values (unit indicated by the status byte's imperial bit below).
-        lpp.addDistance   (1, rainForOutput(rainMM, gCfg));
-        lpp.addDistance   (2, rainForOutput(rainMMSinceStart, gCfg));
-    }
-
-    lpp.addDigitalInput   (2, computeStatusByte());
-    if (gCfg.lipoEn) lpp.addVoltage(1, batteryVolt);
-    if (bme280Present) {
-        lpp.addRelativeHumidity  (1, bme280Humidity);
-        lpp.addBarometricPressure(1, pressureForOutput(bme280PressSea, gCfg));
-        lpp.addBarometricPressure(2, pressureForOutput(bme280PressAbs, gCfg));
-        lpp.addTemperature       (1, temperatureForOutput(bme280TempC, gCfg));
-    }
-    for (int i = 0; i < bus1Count; i++)
-        if (bus1Temps[i] != DEVICE_DISCONNECTED_C)
-            lpp.addTemperature(2 + i, temperatureForOutput(bus1Temps[i], gCfg));
-
-    if (gCfg.debugMode) {
-        // Keep debug channels high so production channels stay stable and compact.
-        lpp.addDigitalInput(200, loopCount);
-        lpp.addTemperature (201, temperatureForOutput(cpuTemperature, gCfg));
-        lpp.addDigitalInput(202, (uint8_t)min(sendFailCount, 255));
-        lpp.addAnalogInput (203, clampLppAnalog((float)ESP.getFreeHeap() / 1024.0f));
-        lpp.addAnalogInput (204, clampLppAnalog((float)millis() / 3600000.0f));
-    }
-
-    // EU868: DR0/SF12 = max 51 bytes, DR5/SF7 = max 222 bytes payload
-    if (lpp.getSize() > 51)
-        dbgSerial.printf("Info: LPP packet %d bytes (> DR0 limit 51, OK from DR3)\n", lpp.getSize());
+    m.debug = gCfg.debugMode;
+    m.dbgCycle    = loopCount;
+    m.dbgSendFail = (uint8_t)min(sendFailCount, 255);
+    m.dbgCpuTemp  = temperatureForOutput(cpuTemperature, gCfg);
+    m.dbgHeapKib  = (float)ESP.getFreeHeap() / 1024.0f;
+    // esp_timer (64 bit) rather than millis(), which wraps after 49.7 days.
+    m.dbgUptimeH  = (float)(esp_timer_get_time() / 1000000LL) / 3600.0f;
+    return m;
 }
 
 // ============================================================================
-// BUILD COMPACT BINARY PACKET (alternative to CayenneLPP, ~50% smaller)
-//
-// Layout: [version:1][presence bitmask:4 LE][field data...] — only fields
-// whose bit is set in the mask are present, in ascending bit-index order.
-// Same value semantics/scaling as the CayenneLPP fields above, just packed
-// without per-field channel/type bytes. See chirpstack/decoder.js (parseBin)
-// for the matching decoder, dispatched by FPort (3 = binary, 1 = CayenneLPP).
+// CAYENNELPP (FPort 1)
 // ============================================================================
-enum BinField : uint8_t {
-    BIN_WIND_DIR = 0, BIN_WIND_SPEED, BIN_WIND_GUST,
-    BIN_RAIN_RATE, BIN_RAIN_MM, BIN_RAIN_SINCE,
-    BIN_STATUS, BIN_BATTERY,
-    BIN_BME_HUMIDITY, BIN_BME_PRESS_QNH, BIN_BME_PRESS_ABS, BIN_BME_TEMP,
-    BIN_DS18B20_0, BIN_DS18B20_1, BIN_DS18B20_2,
-    BIN_DBG_CYCLE, BIN_DBG_CPU_TEMP, BIN_DBG_FAIL_COUNT, BIN_DBG_FREE_HEAP, BIN_DBG_UPTIME,
-};
-constexpr uint8_t BIN_PROTO_VERSION = 1;
 
-static inline void binPutU8 (uint8_t* buf, size_t& pos, uint8_t v)  { buf[pos++] = v; }
-static inline void binPutU16(uint8_t* buf, size_t& pos, uint16_t v) { buf[pos++] = (v >> 8) & 0xFF; buf[pos++] = v & 0xFF; }
-static inline void binPutI16(uint8_t* buf, size_t& pos, int16_t v)  { binPutU16(buf, pos, (uint16_t)v); }
+// CayenneLPP converts with a truncating cast ((uint32_t)(|v| * mult)), so
+// e.g. 12.34 would be sent as 12.33. Round to the field's resolution first
+// and nudge a quarter step away from zero so the cast lands on the rounded
+// value. Values outside the field's range are clamped instead of wrapping:
+// CayenneLPP::addField() doesn't range-check, so an analog input above
+// ±327.67 would wrap silently.
+static float lppPrep(float v, float mult, float lo, float hi)
+{
+    v = constrain(v, lo, hi);
+    float steps = roundf(v * mult);
+    return (steps + (steps >= 0.0f ? 0.25f : -0.25f)) / mult;
+}
+static void lppAnalog(uint8_t ch, float v) { lpp.addAnalogInput(ch, lppPrep(v, 100.0f, -327.68f, 327.67f)); }
+static void lppTemp  (uint8_t ch, float v) { lpp.addTemperature(ch, lppPrep(v, 10.0f, -3276.8f, 3276.7f)); }
+static void lppUInt  (uint8_t ch, float v) { lpp.addGenericSensor(ch, lppPrep(v, 1.0f, 0.0f, 4294967295.0f)); }
 
+void buildLppPacket()
+{
+    const Measurements m = currentMeasurements();
+    lpp.reset();
+    if (m.hasWind) {
+        lpp.addDirection(1, m.windDirDeg);
+        lppAnalog(1, m.windSpeed);
+        lppAnalog(2, m.windGust);
+    }
+    if (m.hasRain) {
+        lppAnalog(3, m.rainRate);
+        // Distance field is intentionally used as a mm/in carrier for rain
+        // values (x1000 uint32; unit indicated by the status byte's imperial bit).
+        lpp.addDistance(1, lppPrep(m.rainCycle,      1000.0f, 0.0f, 4294967.0f));
+        lpp.addDistance(2, lppPrep(m.rainSinceStart, 1000.0f, 0.0f, 4294967.0f));
+    }
+
+    lpp.addDigitalInput(2, m.status);
+    if (m.hasBattery) lpp.addVoltage(1, lppPrep(m.batteryV, 100.0f, 0.0f, 655.35f));
+    if (m.hasBme) {
+        lpp.addRelativeHumidity(1, lppPrep(m.humidityPct, 2.0f, 0.0f, 127.5f));
+        // Barometric is uint16 x10. In imperial mode the value is sent x10
+        // (field holds inHg x100) - 0.1 inHg would be 3.4 hPa resolution;
+        // the decoder divides by 10 again when the imperial bit is set.
+        const float pScale = m.imperial() ? 10.0f : 1.0f;
+        lpp.addBarometricPressure(1, lppPrep(m.pressureQnh * pScale, 10.0f, 0.0f, 6553.5f));
+        lpp.addBarometricPressure(2, lppPrep(m.pressureAbs * pScale, 10.0f, 0.0f, 6553.5f));
+        lppTemp(1, m.bmeTemp);
+    }
+    for (int i = 0; i < 3; i++)
+        if (m.hasDs18b20[i]) lppTemp(2 + i, m.ds18b20[i]);
+
+    if (m.debug) {
+        // Keep debug channels high so production channels stay stable and compact.
+        lpp.addDigitalInput(200, m.dbgCycle);
+        lppTemp            (201, m.dbgCpuTemp);
+        lpp.addDigitalInput(202, m.dbgSendFail);
+        lppUInt            (203, m.dbgHeapKib);           // KiB
+        lppUInt            (204, m.dbgUptimeH * 10.0f);   // 0.1 h
+    }
+
+    if (lpp.getError() != LPP_ERROR_OK)
+        dbgSerial.printf("LPP encoding error %d - payload truncated\n", lpp.getError());
+    // EU868: DR0-DR2 = max 51 bytes, DR3 = 115, DR4-DR5 = 222
+    if (lpp.getSize() > 51)
+        dbgSerial.printf("Info: LPP packet %d bytes (> 51, needs DR3 or faster on EU868)\n", lpp.getSize());
+}
+
+// ============================================================================
+// COMPACT BINARY (FPort 3) - layout and encoder: payload.h / payload_binary.cpp
+// ============================================================================
 void buildBinaryPacket()
 {
-    uint32_t mask = 0;
-    uint8_t  data[48];
-    size_t   dpos = 0;
-
-    if (gCfg.windEn) {
-        mask |= (1UL << BIN_WIND_DIR);   binPutU16(data, dpos, windDirection);
-        mask |= (1UL << BIN_WIND_SPEED); binPutI16(data, dpos, (int16_t)roundf(clampLppAnalog(windSpeedForOutput(windSpeedMs, gCfg)) * 100));
-        mask |= (1UL << BIN_WIND_GUST);  binPutI16(data, dpos, (int16_t)roundf(clampLppAnalog(windSpeedForOutput(windGustMs,  gCfg)) * 100));
-    }
-    if (gCfg.rainEn) {
-        mask |= (1UL << BIN_RAIN_RATE); binPutI16(data, dpos, (int16_t)roundf(clampLppAnalog(rainRateForOutput(rainRateMmH, gCfg)) * 100));
-        mask |= (1UL << BIN_RAIN_MM);   binPutU16(data, dpos, (uint16_t)roundf(rainForOutput(rainMM, gCfg) * 10));
-        mask |= (1UL << BIN_RAIN_SINCE);binPutU16(data, dpos, (uint16_t)roundf(rainForOutput(rainMMSinceStart, gCfg) * 10));
-    }
-
-    mask |= (1UL << BIN_STATUS); binPutU8(data, dpos, computeStatusByte());
-
-    if (gCfg.lipoEn) {
-        mask |= (1UL << BIN_BATTERY);
-        binPutU16(data, dpos, (uint16_t)roundf(batteryVolt * 100));
-    }
-
-    if (bme280Present) {
-        mask |= (1UL << BIN_BME_HUMIDITY);  binPutU8 (data, dpos, (uint8_t)roundf(bme280Humidity * 2));
-        mask |= (1UL << BIN_BME_PRESS_QNH); binPutU16(data, dpos, (uint16_t)roundf(pressureForOutput(bme280PressSea, gCfg) * 10));
-        mask |= (1UL << BIN_BME_PRESS_ABS); binPutU16(data, dpos, (uint16_t)roundf(pressureForOutput(bme280PressAbs, gCfg) * 10));
-        mask |= (1UL << BIN_BME_TEMP);      binPutI16(data, dpos, (int16_t)roundf(temperatureForOutput(bme280TempC, gCfg) * 10));
-    }
-
-    for (int i = 0; i < bus1Count && i < 3; i++) {
-        if (bus1Temps[i] != DEVICE_DISCONNECTED_C) {
-            mask |= (1UL << (BIN_DS18B20_0 + i));
-            binPutI16(data, dpos, (int16_t)roundf(temperatureForOutput(bus1Temps[i], gCfg) * 10));
-        }
-    }
-
-    if (gCfg.debugMode) {
-        mask |= (1UL << BIN_DBG_CYCLE);      binPutU8 (data, dpos, loopCount);
-        mask |= (1UL << BIN_DBG_CPU_TEMP);   binPutI16(data, dpos, (int16_t)roundf(temperatureForOutput(cpuTemperature, gCfg) * 10));
-        mask |= (1UL << BIN_DBG_FAIL_COUNT); binPutU8 (data, dpos, (uint8_t)min(sendFailCount, 255));
-        mask |= (1UL << BIN_DBG_FREE_HEAP);  binPutU16(data, dpos, (uint16_t)(ESP.getFreeHeap() / 1024));
-        mask |= (1UL << BIN_DBG_UPTIME);     binPutU16(data, dpos, (uint16_t)roundf((float)millis() / 3600000.0f * 10));
-    }
-
-    size_t pos = 0;
-    binBuf[pos++] = BIN_PROTO_VERSION;
-    binBuf[pos++] = (mask >>  0) & 0xFF;
-    binBuf[pos++] = (mask >>  8) & 0xFF;
-    binBuf[pos++] = (mask >> 16) & 0xFF;
-    binBuf[pos++] = (mask >> 24) & 0xFF;
-    memcpy(binBuf + pos, data, dpos);
-    binLen = pos + dpos;
-
+    binLen = encodeBinary(currentMeasurements(), binBuf);
     dbgSerial.printf("Info: binary packet %d bytes (payloadFormat=1)\n", (int)binLen);
 }

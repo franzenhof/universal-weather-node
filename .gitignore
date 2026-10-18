@@ -8,3 +8,6 @@ kicad/*
 kicad
 .DS_Store
 
+include/generated_version.h
+include/decoder_js.h
+include/readme_md.h

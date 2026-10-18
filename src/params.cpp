@@ -5,21 +5,21 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-bool applyDownlinkParam(uint8_t paramId, int16_t value)
+bool applyParam(uint8_t paramId, int16_t value)
 {
     switch (paramId) {
-        case 1: // uplinkIntervalSec
+        case PARAM_UPLINK_INTERVAL_SEC: // uplinkIntervalSec
             if (value < 5 || value > 3600) return false;
             gCfg.uplinkIntervalSec = value;
             if (gCfg.sampleSec > gCfg.uplinkIntervalSec) {
                 gCfg.sampleSec = gCfg.uplinkIntervalSec;
             }
             return true;
-        case 2: // sampleSec
+        case PARAM_SAMPLE_SEC: // sampleSec
             if (value < 1 || value > gCfg.uplinkIntervalSec) return false;
             gCfg.sampleSec = value;
             return true;
-        case 3: // windEn
+        case PARAM_WIND_EN: // windEn
             if (value != 0 && value != 1) return false;
             if (gCfg.windEn == value) return true;
             gCfg.windEn = value;
@@ -31,7 +31,7 @@ bool applyDownlinkParam(uint8_t paramId, int16_t value)
                 windGustMs = 0.0f;
             }
             return true;
-        case 4: // rainEn
+        case PARAM_RAIN_EN: // rainEn
             if (value != 0 && value != 1) return false;
             if (gCfg.rainEn == value) return true;
             gCfg.rainEn = value;
@@ -43,44 +43,44 @@ bool applyDownlinkParam(uint8_t paramId, int16_t value)
                 rainRateMmH = 0.0f;
             }
             return true;
-        case 5: // lipoEn
+        case PARAM_LIPO_EN: // lipoEn
             if (value != 0 && value != 1) return false;
             gCfg.lipoEn = value;
             return true;
-        case 6: // debugMode
+        case PARAM_DEBUG_MODE: // debugMode
             if (value != 0 && value != 1) return false;
             gCfg.debugMode = value;
             return true;
-        case 7: // windDirOffsetDeg
+        case PARAM_WIND_DIR_OFFSET_DEG: // windDirOffsetDeg
             if (value < -180 || value > 180) return false;
             gCfg.windDirOffsetDeg = value;
             return true;
-        case 8: // windUnitMs
+        case PARAM_WIND_UNIT_MS: // windUnitMs
             if (value != 0 && value != 1) return false;
             gCfg.windUnitMs = value;
             return true;
-        case 9: // cpuFreqMhz
+        case PARAM_CPU_FREQ_MHZ: // cpuFreqMhz
             if (value != 80 && value != 240) return false;
             gCfg.cpuFreqMhz = value;
             setCpuFrequencyMhz(gCfg.cpuFreqMhz);
             return true;
-        case 10: // payloadFormat
+        case PARAM_PAYLOAD_FORMAT: // payloadFormat
             if (value != 0 && value != 1) return false;
             gCfg.payloadFormat = value;
             return true;
-        case 11: // unitSystem
+        case PARAM_UNIT_SYSTEM: // unitSystem
             if (value != 0 && value != 1) return false;
             gCfg.unitSystem = value;
             return true;
-        case 12: // rainMmPerTip, value = mm/tip x1000 (e.g. 200 = 0.2mm)
+        case PARAM_RAIN_MM_PER_TIP_X1000: // rainMmPerTip, value = mm/tip x1000 (e.g. 200 = 0.2mm)
             if (value < 1 || value > 5000) return false;
             gCfg.rainMmPerTip = value / 1000.0f;
             return true;
-        case 13: // windMsPerPps, value = (m/s per pulse/s) x1000
+        case PARAM_WIND_MS_PER_PPS_X1000: // windMsPerPps, value = (m/s per pulse/s) x1000
             if (value < 1 || value > 10000) return false;
             gCfg.windMsPerPps = value / 1000.0f;
             return true;
-        case 14: // windDirSensorType
+        case PARAM_WIND_DIR_SENSOR_TYPE: // windDirSensorType
             if (value != 0 && value != 1) return false;
             gCfg.windDirSensorType = value;
             return true;

@@ -23,17 +23,20 @@ The images below give a quick impression of the hardware journey from empty PCB 
 - [Units (Metric/Imperial)](#units-metricimperial)
 - [CayenneLPP Payload Channels](#cayennelpp-payload-channels)
 - [Compact Binary Payload Format (Alternative, ~50% Smaller)](#compact-binary-payload-format-alternative-50-smaller)
+- [Build & Flash](#build--flash)
 - [Initial Configuration (Wi-Fi Portal)](#initial-configuration-wi-fi-portal)
 - [Parallel Wi-Fi + MQTT Transport (Optional)](#parallel-wi-fi--mqtt-transport-optional)
 - [User Button (GPIO 0)](#user-button-gpio-0)
 - [ChirpStack Payload Decoder](#chirpstack-payload-decoder)
 - [TTN (The Things Stack) Instead of Private ChirpStack](#ttn-the-things-stack-instead-of-private-chirpstack)
+- [LoRaWAN Session & Join](#lorawan-session--join)
 - [LoRaWAN Downlink Commands](#lorawan-downlink-commands)
 - [Error Handling / Robustness](#error-handling--robustness)
 - [Uplink Interval and Timing](#uplink-interval-and-timing)
 - [Project Structure](#project-structure)
 - [Libraries](#libraries)
 - [Technical Notes](#technical-notes)
+- [Changelog](#changelog)
 - [License & Open Source](#-license--open-source)
 
 ## Project in Pictures
@@ -319,7 +322,7 @@ A configurable **north offset** (–180° to +180°) corrects the mounting orien
 Raw value (0–4095, 12-bit ADC) → map(0, 4095, 0, 359) → + offset → mod 360
 ```
 
-The low-pass filter C6 (10 µF + potentiometer source impedance ~10 kΩ) gives τ ≈ 100 ms (settling time ~500 ms), which is appropriate for typical vane movement speeds.
+The low-pass filter **C11 (1 µF)** together with the potentiometer's source impedance — at most 5 kΩ for the 20 kΩ Davis potentiometer (wiper at mid position) — gives τ ≤ 5 ms (settled within ~25 ms). That suppresses noise on the cable while still following vane movement well within one `sampleSec`.
 
 > This linear mapping only applies to continuous-potentiometer vanes (`windDirSensorType = 0`). Reed-switch/resistor-ladder vanes use a calibrated lookup table instead — see [Generic Sensor Calibration](#generic-sensor-calibration).
 
@@ -334,10 +337,10 @@ Rain rate [mm/h] = rain [mm] / (interval [ms] / 3,600,000)
 
 > `rainMmPerTip` (default `0.2`) is configurable for other tipping-bucket rain gauges — see [Generic Sensor Calibration](#generic-sensor-calibration).
 
-The since-start accumulator (`rainMMSinceStart`) survives normal operation in **RTC_DATA_ATTR** (lost on power interruption, resettable via downlink `0x01`).
+The since-start accumulator (`rainMMSinceStart`) lives in **RTC_NOINIT** memory: it survives restarts (downlink `0x02`, the automatic restart after 10 send failures, watchdog resets, OTA) and is reset only by a power interruption or downlink `0x01`.
 
 ### Temperatures (DS18B20)
-Up to **3 sensors per bus** are detected automatically (`getDeviceCount()`).  
+Up to **3 sensors per bus** are detected automatically: the bus is searched at the start of every DS18B20 conversion, right after the 1-Wire supply is switched on (Rev 1.3 switches it off between cycles), so probes are hot-pluggable.  
 The index corresponds to the order of ROM addresses on the bus.
 
 ### Barometric Pressure (BME280)
@@ -355,7 +358,7 @@ QNH = absolute pressure × (1 - 0.0000226 × altitude[m])^(-5.255)
 
 ### Rain gauge and wind-speed: drop-in compatible, just recalibrate the ratio
 
-Both the **Rain** input (RJ11 pins 3/4) and the **Wind Speed** input (RJ11 pin 5, shared with the wind connector) are wired identically on this PCB: a **4.7 kΩ pull-up to 3.3 V**, a **330 Ω series resistor** for current limiting, TVS/Schottky ESD clamps, and a **100 nF filter capacitor** — the same RC-debounced, pulled-up digital input in both cases (see `PCNT CONFIGURATION` in `src/main.cpp` and the `Connector Davis Rain` / `Connector for Davis Windsensor` blocks in the schematic). Electrically, this is exactly what **any** simple 2-wire reed-switch sensor needs (one wire to the pulse GPIO, one wire to GND) — there is nothing Davis-specific about it.
+Both the **Rain** input (RJ11 pins 3/4) and the **Wind Speed** input (RJ11 pin 5, shared with the wind connector) are the same kind of input on this PCB: a pull-up to 3.3 V, a **330 Ω series resistor** for current limiting, TVS/Schottky ESD clamps and an RC low-pass filter — only the filter values differ (wind: 4.7 kΩ / 100 nF, rain: 10 kΩ / 1 µF, see [Custom PCB](#custom-pcb)), plus the Schmitt trigger on Rev 1.3. See the `Connector Davis Rain` / `Connector for Davis Windsensor` blocks in the schematic and the PCNT setup in `src/sensors.cpp`. Electrically, this is exactly what **any** simple 2-wire reed-switch sensor needs (one wire to the pulse GPIO, one wire to GND) — there is nothing Davis-specific about it.
 
 **So: any 2-wire reed-switch tipping-bucket rain gauge or cup anemometer can be wired to the existing connectors with no hardware changes at all.** You only need to tell the firmware the sensor's pulse ratio:
 
@@ -426,7 +429,7 @@ A single grouped switch, **`unitSystem`** (`0` = Metric, `1` = Imperial), contro
 | `1` Imperial | mph | in, in/h | °F | inHg |
 
 - Wind direction (°), humidity (%), battery voltage (V), and debug fields (free heap, uptime) are unaffected — no imperial equivalent applies.
-- **LoRaWAN (both CayenneLPP and compact binary):** values are converted *before* encoding — the wire format doesn't change, only the number. The CayenneLPP/binary status byte's **Bit 6** tells the decoder which system is in use for that uplink (see [chirpstack/decoder.js](chirpstack/decoder.js)); Bit 6 set overrides Bit 7 (km/h-vs-m/s), forcing mph.
+- **LoRaWAN (both CayenneLPP and compact binary):** values are converted *before* encoding. The status byte's **Bit 6** tells the decoder which system is in use for that uplink (see [chirpstack/decoder.js](chirpstack/decoder.js)); Bit 6 set overrides Bit 7 (km/h-vs-m/s), forcing mph. Because inches and inHg are much larger units, imperial rain and pressure use a finer scaling on the wire (rain 0.001 in, pressure 0.01 inHg — see the payload sections below); the decoder handles this automatically. Decoded field names keep their historical `_mm`/`_hpa` suffixes — the actual unit is in `status.*_unit`.
 - **MQTT/REST JSON:** field names are unit-neutral (e.g. `temp`, not `tempC`); a sibling `*Unit` field (e.g. `tempUnit`) always tells you which unit that number is in — see the JSON example in [Parallel Wi-Fi + MQTT Transport](#parallel-wi-fi--mqtt-transport-optional).
 - **Home Assistant discovery:** `unit_of_measurement` on each entity reflects the current setting, re-published on the next MQTT reconnect after a change.
 - Settable in the Wi-Fi portal, via LoRaWAN downlink parameter `11`, via MQTT command, or via the web settings page (`/api/settings`).
@@ -441,32 +444,36 @@ A single grouped switch, **`unitSystem`** (`0` = Metric, `1` = Imperial), contro
 | Ch 1 | Analog Input | Avg wind speed | m/s or km/h / mph | `windEn = 1` |
 | Ch 2 | Analog Input | Wind gust (maximum) | m/s or km/h / mph | `windEn = 1` |
 | Ch 3 | Analog Input | Rain rate | mm/h / in/h | `rainEn = 1` |
-| Ch 1 | Distance | Rain current cycle | mm / in | `rainEn = 1` |
-| Ch 2 | Distance | Rain since start | mm / in | `rainEn = 1` |
+| Ch 1 | Distance | Rain current cycle (resolution 0.001) | mm / in | `rainEn = 1` |
+| Ch 2 | Distance | Rain since start (resolution 0.001) | mm / in | `rainEn = 1` |
 | Ch 2 | Digital Input | Status bitfield (BME280, 1-Wire, send-fail count, wind unit, **imperial units flag**) | bitfield | always |
 | Ch 200 | Digital Input | Cycle counter (debug) | 0–255 | `debugMode = 1` |
 | Ch 202 | Digital Input | Send fail counter (debug) | 0–255 | `debugMode = 1` |
 | Ch 201 | Temperature | CPU temperature (debug) | °C / °F | `debugMode = 1` |
-| Ch 203 | Analog Input | Free heap (debug) | KiB (always) | `debugMode = 1` |
-| Ch 204 | Analog Input | Uptime (debug) | h (always) | `debugMode = 1` |
+| Ch 203 | Generic Sensor | Free heap (debug) | KiB (always) | `debugMode = 1` |
+| Ch 204 | Generic Sensor | Uptime (debug, value = 0.1 h) | h (always) | `debugMode = 1` |
 | Ch 1 | Voltage | LiPo voltage | V (always) | `lipoEn = 1` |
 | Ch 1 | Rel. Humidity | Humidity | % (always) | BME280 detected |
-| Ch 1 | Baro. Pressure | Barometric pressure QNH | hPa / inHg | BME280 detected |
-| Ch 2 | Baro. Pressure | Barometric pressure absolute | hPa / inHg | BME280 detected |
+| Ch 1 | Baro. Pressure | Barometric pressure QNH | hPa / inHg ×10¹ | BME280 detected |
+| Ch 2 | Baro. Pressure | Barometric pressure absolute | hPa / inHg ×10¹ | BME280 detected |
 | Ch 1 | Temperature | BME280 temperature | °C / °F | BME280 detected |
 | Ch 2–4 | Temperature | DS18B20 sensor 0–2 | °C / °F | sensor detected |
 
 > **Units:** Which column applies is selected by the **`unitSystem`** portal parameter (see [Units (Metric/Imperial)](#units-metricimperial)) and indicated per-uplink by the status bitfield's imperial-units bit — the decoder reads this bit and labels values accordingly, no separate firmware version needed.
+>
+> ¹ In imperial mode the firmware sends inHg ×10 into the Barometric field (which itself is ×10), i.e. 0.01 inHg resolution instead of 0.1 inHg (≈ 3.4 hPa); the decoder divides by 10 again when the imperial bit is set.
+>
+> **Value ranges:** all values are rounded to the field's resolution and clamped to its range (never wrapped). Analog Input covers ±327.67.
 
 > **Rain encoding note:** The payload uses the CayenneLPP **Distance** type for rain values, but in this project it is interpreted as **mm or in** (`rain_cycle_mm`, `rain_since_start_mm`), not meters.
 > Use the provided decoder in [chirpstack/decoder.js](chirpstack/decoder.js). Generic CayenneLPP decoders might assume meters, but you have to know the values are millimeters/inches.
 
 > In normal operation (`debugMode = 0`) no debug telemetry is sent.
 
-> **Payload size:**  
-> Minimal config (DS18B20 only): approx. 15–30 bytes – fits in DR0 (SF12, 51 bytes).  
-> Full config (wind + rain + BME280 + 3× DS18B20 + LiPo): approx. 70–75 bytes – requires **DR2 (SF10)** or higher.  
-> With a private ChirpStack server and normal gateway distance this is not an issue.
+> **Payload size (CayenneLPP):**  
+> Minimal config (status + 1–3 × DS18B20): 7–15 bytes.  
+> Full config (wind + rain + BME280 + 3× DS18B20 + LiPo): **62 bytes**; with debug mode 84 bytes.  
+> EU868 limits the application payload per data rate: **DR0–DR2 (SF12–SF10): 51 bytes**, DR3 (SF9): 115 bytes, DR4–DR5: 222 bytes. The full configuration therefore needs **DR3 or faster** — fine for a private ChirpStack at normal gateway distance; for weak links use the [compact binary format](#compact-binary-payload-format-alternative-50-smaller) (35 bytes).
 
 ---
 
@@ -481,7 +488,7 @@ Instead of CayenneLPP, the uplink can be sent as a compact custom binary format 
 
 Both formats are decoded by the **same** [chirpstack/decoder.js](chirpstack/decoder.js) — it dispatches automatically based on the uplink's FPort and produces identical named JSON fields either way, so downstream consumers (Grafana, dashboards, MQTT/REST JSON) don't need to know which format is on the wire.
 
-**Layout:** `[version: 1 byte][presence bitmask: 4 bytes, little-endian][field data...]` — only fields whose bit is set in the mask are included, in ascending bit-index order; values are big-endian with the same scaling as CayenneLPP.
+**Layout:** `[version: 1 byte][presence bitmask: 4 bytes, little-endian][field data...]` — only fields whose bit is set in the mask are included, in ascending bit-index order; values are big-endian, rounded, and clamped to the field's range. Current protocol version: **2** (the decoder still accepts version 1 from older firmware, see the note below).
 
 | Bit | Field | Encoding | Active when |
 |-----|-------|----------|-------------|
@@ -489,13 +496,13 @@ Both formats are decoded by the **same** [chirpstack/decoder.js](chirpstack/deco
 | 1 | Wind speed (avg) | `i16`, ×100, per unit system | `windEn = 1` |
 | 2 | Wind gust | `i16`, ×100, per unit system | `windEn = 1` |
 | 3 | Rain rate | `i16`, ×100, mm/h or in/h | `rainEn = 1` |
-| 4 | Rain (cycle) | `u16`, ×10, mm or in | `rainEn = 1` |
-| 5 | Rain since start | `u16`, ×10, mm or in | `rainEn = 1` |
+| 4 | Rain (cycle) | `u16`, ×10 mm / ×1000 in | `rainEn = 1` |
+| 5 | Rain since start | `u32`, ×10 mm / ×1000 in | `rainEn = 1` |
 | 6 | Status byte | `u8` (same bitfield as CayenneLPP Ch 2 Digital Input, incl. imperial-units bit) | always |
 | 7 | Battery voltage | `u16`, ×100, V (always) | `lipoEn = 1` |
 | 8 | BME280 humidity | `u8`, ×2, % (always) | BME280 detected |
-| 9 | BME280 pressure QNH | `u16`, ×10, hPa or inHg | BME280 detected |
-| 10 | BME280 pressure absolute | `u16`, ×10, hPa or inHg | BME280 detected |
+| 9 | BME280 pressure QNH | `u16`, ×10 hPa / ×100 inHg | BME280 detected |
+| 10 | BME280 pressure absolute | `u16`, ×10 hPa / ×100 inHg | BME280 detected |
 | 11 | BME280 temperature | `i16`, ×10, °C or °F | BME280 detected |
 | 12–14 | DS18B20 sensor 0–2 | `i16`, ×10 each, °C or °F | sensor detected |
 | 15 | Debug: cycle counter | `u8` | `debugMode = 1` |
@@ -504,16 +511,49 @@ Both formats are decoded by the **same** [chirpstack/decoder.js](chirpstack/deco
 | 18 | Debug: free heap | `u16`, KiB | `debugMode = 1` |
 | 19 | Debug: uptime | `u16`, ×10, hours | `debugMode = 1` |
 
-> **Payload size comparison:** Full config (wind + rain + BME280 + 3× DS18B20 + LiPo), no debug telemetry: CayenneLPP ≈ 70–75 bytes (requires DR2/SF10+) vs. compact binary ≈ 33 bytes — fits **DR0/SF12** (51-byte limit) even at maximum sensor configuration.
+> **Payload size comparison:** Full config (wind + rain + BME280 + 3× DS18B20 + LiPo), no debug telemetry: CayenneLPP 62 bytes (requires DR3/SF9+ on EU868) vs. compact binary **35 bytes** — fits **DR0/SF12** (51-byte limit) even at maximum sensor configuration; 43 bytes with debug mode.
 
-> **Rain accumulator resolution:** `rain_since_start_mm` uses a 16-bit field (0.1 mm resolution, max ≈ 6553 mm) instead of CayenneLPP's 32-bit Distance field — ample headroom between resets (downlink `0x01`), but not unlimited the way the CayenneLPP encoding is.
+> **Version 2 vs. 1:** version 1 (firmware up to 1.0.4) encoded rain and pressure ×10 in both unit systems — in imperial mode a single 0.2 mm tip (0.008 in) became 0 and pressure had 0.1 inHg resolution — and rain since start as `u16`, which wrapped above 6553.5 mm. Version 2 scales imperial values finer (the status byte, decoded first by the decoder, tells it which scale applies) and widens rain since start to `u32`. Metric values are encoded identically in both versions.
+
+---
+
+## Build & Flash
+
+PlatformIO project, single environment `heltec_wifi_lora_32_V3` (pinned `espressif32 @ 6.4.0`, Arduino core 2.x):
+
+```bash
+pio run                 # build
+pio run -t upload       # build + flash over USB (bootloader, partition table and app)
+pio device monitor      # serial log, 115200 baud
+```
+
+**A brand-new board, or one updated from firmware older than the `cfgdata` partition, must be flashed over USB once** — `pio run -t upload` writes the custom partition table (`partitions.csv`) together with the app. After that, updates can go over the air (see below). The `.bin` files in [`firmware/`](firmware/) are **app images only**: fine for OTA, but they cannot set up a new board on their own. Without PlatformIO, flash a new board with esptool using the build outputs from `.pio/build/heltec_wifi_lora_32_V3/`:
+
+```bash
+esptool.py --chip esp32s3 write_flash \
+  0x0     bootloader.bin \
+  0x8000  partitions.bin \
+  0x10000 firmware.bin          # or firmware/lorawan-weather-node-<version>.bin
+```
+
+**Versioning:** [`tools/version.py`](tools/version.py) runs as a pre-build script. It stamps the build with `git describe --tags --dirty --always` and generates three headers (git-ignored, regenerated on every build): `include/generated_version.h`, `include/decoder_js.h` (decoder download in the portal) and `include/readme_md.h` (help page). Only **release builds** — an exact tag such as `1.0.5` with a clean working tree, or an explicit `FW_VERSION=1.2.3 pio run` — are copied to `firmware/lorawan-weather-node-<version>.bin`; development builds are not.
+
+### Tests
+
+Host-side tests, no hardware required (Node.js; the round trip also needs a C++ compiler such as `c++`/`clang++`):
+
+```bash
+node test/decoder.test.js            # decoder regression tests (LPP metric/imperial, debug channels, binary v1/v2)
+node test/payload_roundtrip.test.js  # compiles src/payload_binary.cpp for the host, encodes known
+                                     # values and checks decoder.js decodes them back
+```
 
 ---
 
 ## Initial Configuration (Wi-Fi Portal)
 
 ### First boot
-On first power-up (no DevEUI stored in NVS) the Wi-Fi portal opens **automatically**:
+On first power-up (not yet provisioned — the portal has never been completed) the Wi-Fi portal opens **automatically**:
 
 1. The OLED display shows **"Config Portal"**, the AP SSID, the URL and brief instructions
 2. Connect your phone or laptop to the Wi-Fi network **"WeatherNode"** (no password)
@@ -706,7 +746,7 @@ Same `paramId` scheme as LoRaWAN downlink `0x10` (see the parameter table furthe
 
 **By design, the REST API only ever exposes non-secret operational parameters.** It is deliberately **not** a route into the full Wi-Fi config portal — WiFi credentials, the LoRaWAN AppKey, and MQTT credentials/CA certificate remain reachable only via physical button-press, first boot, or LoRaWAN downlink `0x03`. This keeps physical (or LoRaWAN-authenticated) access as the trust boundary for provisioning secrets, while still allowing convenient remote tweaks to day-to-day settings. If no admin password is configured yet, all admin-password-gated endpoints refuse access outright (403) rather than prompting for one that could never match.
 
-> **Data freshness:** `/api/data` does **not** trigger a new sensor reading — it just serializes whatever the relevant globals currently hold. How often those actually change depends on the sensor: **wind, rain, and BME280** are sub-sampled every `sampleSec` (`takeSample()` in `main.cpp` overwrites `windSpeedMs`/`bme280TempC`/`rainMM`/etc. with a fresh single-sample reading each time, only briefly replaced by the whole cycle's average/sum right when a cycle completes) — polling faster than `sampleSec` for these just returns the same value repeatedly, but polling at `sampleSec` cadence does show new readings between uplink cycles. **DS18B20 and battery/CPU temperature** are the exception: they're only measured once per full cycle (`computeFinalValues()`), so polling faster than `uplinkIntervalSec` gains nothing for those fields specifically. Check the **`nextCycleInSec`** field to see how long until the next cycle lands, or (with `debugMode = 1`) the **`cycle`** field — a wrapping counter incremented once per uplink cycle — to detect a new full-cycle measurement vs. a repeat of the last one.
+> **Data freshness:** `/api/data` does **not** trigger a new sensor reading — it just serializes whatever the relevant globals currently hold. How often those actually change depends on the sensor: **wind speed/gust and BME280** are sub-sampled every `sampleSec` (`takeSample()` in `main.cpp` overwrites `windSpeedMs`/`bme280TempC`/etc. with a fresh single-sample reading each time, only briefly replaced by the whole cycle's average right when a cycle completes) — polling faster than `sampleSec` for these just returns the same value repeatedly, but polling at `sampleSec` cadence does show new readings between uplink cycles. **Rain** (`rain`, `rainRate`) always shows the last *completed* cycle — a single 3 s sub-sample would read 0 most of the time, or 240 mm/h for one tip — while `rainSinceStart` grows with every sub-sample. **DS18B20 and battery/CPU temperature** are the exception: they're only measured once per full cycle (`computeFinalValues()`), so polling faster than `uplinkIntervalSec` gains nothing for those fields specifically. Check the **`nextCycleInSec`** field to see how long until the next cycle lands, or (with `debugMode = 1`) the **`cycle`** field — a wrapping counter incremented once per uplink cycle — to detect a new full-cycle measurement vs. a repeat of the last one.
 
 > **History buffer:** `/api/history` (and the dashboard at `/` built on top of it) is a two-tier in-RAM ring buffer, RRDtool-style — a **fine tier** (288 buckets × 5 min = 24h, the default) and a **coarse tier** (168 buckets × 1h = 7 days, `?range=7d`), so the recent view keeps fine detail while the week view stays cheap in RAM (~9 KB combined) rather than needing a single flat 2000+ sample buffer. Each completed measurement cycle merges into *both* tiers' current bucket — a running average for wind speed/rain rate/temperature/humidity/pressure/battery, a running **max** for wind gust (averaging away the peak would defeat the point), and a running **sum** for rain amount (`rainMm`, an accumulated quantity, not a rate) — independent of `uplinkIntervalSec`; a bucket is only finalized into the ring once its real-world time window elapses, so a short uplink interval no longer eats into how far back the buffer reaches. Neither tier is persisted across a restart (OTA update, watchdog restart, downlink `0x02`/`0x03`/`0xFF`) — for durable long-term history, use Grafana via MQTT/ChirpStack as described above. A bucket only records the channels that were enabled/detected during it (e.g. no wind entry if `windEn = 0`), so toggling a sensor mid-run shows up as a gap, not a misleading zero. The dashboard's own "current reading" (cards, compass) intentionally comes from `/api/data`, not the last history bucket — otherwise "now" would only refresh once per bucket (up to 5 min/1h) instead of once per uplink cycle. Each response also appends the *currently open* (not-yet-finalized) bucket as one extra, newest point — otherwise the charts would show "No data yet" for the first 5 min/1h after boot, even though the node has already been measuring; this live point simply gets more representative as more uplink cycles merge into it before it eventually finalizes. There's deliberately no way to clear this buffer from the dashboard — unlike the log buffer (which can fill up with debug noise worth clearing before watching for a specific event), there's no real use case for intentionally discarding your own trend data, and the buffer is RAM-only anyway (a restart already empties it).
 
@@ -735,7 +775,7 @@ When `mqttEn` is on, the node automatically publishes [Home Assistant MQTT disco
 
 | Press duration | When | Action |
 |---------------|------|--------|
-| — | First boot (no DevEUI stored) | Wi-Fi portal opens automatically |
+| — | First boot (not yet provisioned) | Wi-Fi portal opens automatically |
 | Short press (< 3 s, on release) | Normal operation | Turn on OLED display for 20 s |
 | Long press (≥ 3 s) | Normal operation or setup loops (join retries etc.) | Open Wi-Fi config portal → save → restart |
 
@@ -789,12 +829,12 @@ The file `chirpstack/decoder.js` contains the JavaScript decoder for ChirpStack 
 
 ## TTN (The Things Stack) Instead of Private ChirpStack
 
-The node can be used with TTN/TTS as well. No payload format change is required, because the uplink is still standard CayenneLPP and the same decoder logic can be used.
+The node can be used with TTN/TTS as well. No payload format change is required: the same decoder handles both CayenneLPP (FPort 1) and the compact binary format (FPort 3).
 
 ### What to configure
 
 1. In the Wi-Fi portal, set **LoRaWAN region** to the matching regional plan of your TTN deployment (for Europe typically `EU868`).
-2. In TTN, create an end device using **OTAA**, LoRaWAN 1.0.x profile, and copy **DevEUI / JoinEUI / AppKey** into the node portal.
+2. In TTN, create an end device using **OTAA** (LoRaWAN 1.0.x profile, or 1.1 with NwkKey = AppKey — see [LoRaWAN Session & Join](#lorawan-session--join)) and copy **DevEUI / JoinEUI / AppKey** into the node portal.
 3. Add the payload formatter (JavaScript) in TTN by reusing [chirpstack/decoder.js](chirpstack/decoder.js) logic (field names can stay the same).
 
 ### Fair-use and practical intervals (EU868)
@@ -803,7 +843,7 @@ TTN strongly favors low airtime and low uplink rates. Practical guidance for wea
 
 1. Prefer **60 s to 300 s** uplink intervals.
 2. Avoid high-spreading-factor operation with very short intervals.
-3. Keep payload compact (disable unused sensors in the portal).
+3. Keep payload compact (disable unused sensors in the portal, or use the compact binary format — 35 bytes fit every data rate, CayenneLPP's 62 bytes need DR3 or faster).
 
 For TTN community networks, very short uplink intervals are generally not appropriate and may violate fair-use expectations depending on data rate and gateway conditions.
 
@@ -817,11 +857,20 @@ In most cases: **no functional code changes** are required. The key points are c
 
 
 
+## LoRaWAN Session & Join
+
+* **Join:** OTAA via the `LoRaWAN_ESP32` library (RadioLib). The AppKey is passed as both AppKey and NwkKey, so the node works with **LoRaWAN 1.0.x and 1.1** network servers: RadioLib detects the server's version from the Join-Accept and uses the matching key derivation. With a 1.0.x device profile nothing else is needed; with a 1.1 profile, enter the same key as NwkKey and AppKey.
+* **Nonces** (DevNonce/JoinNonce) are stored in NVS by the library, so restarts never reuse a DevNonce.
+* **Session:** this node never deep-sleeps, and the library only restores the session after a deep-sleep wake — so **every restart performs a new OTAA join** (power-on, downlink `0x02`/`0x03`/`0xFF`, OTA update, the automatic restart after 10 send failures). In normal operation the session simply stays in RAM.
+* If the join fails, the node retries every 2 s (the display shows the attempt count and likely causes); hold the button for 3 s to open the portal and check the keys/region.
+
+---
+
 ## LoRaWAN Downlink Commands
 
 > The same commands and parameters below are also reachable via the MQTT command topic if the parallel Wi-Fi + MQTT transport is enabled — see [Parallel Wi-Fi + MQTT Transport](#parallel-wi-fi--mqtt-transport-optional).
 
-Downlinks are sent on **FPort 1** with a single byte:
+Downlinks are sent with a single byte (any application FPort; ChirpStack's default is 1). The network server delivers a queued downlink after the node's **next uplink**:
 
 | Byte | Function |
 |------|----------|
@@ -873,7 +922,7 @@ Valid parameters are stored persistently in NVS immediately.
 
 ### Watchdog Timer
 A **hardware watchdog** (120 s timeout) protects against hanging code.  
-It is activated only **after a successful LoRaWAN join** – allowing slow joins and Wi-Fi portal operation to run without a WDT reset.
+It is activated only **at the end of `setup()`**, i.e. after a successful LoRaWAN join — allowing slow joins and Wi-Fi portal operation to run without a WDT reset.
 
 ### Automatic Restart on Send Failures
 After **10 consecutive send failures** an automatic restart is triggered to renew the LoRaWAN join (e.g. after gateway outage or session timeout).
@@ -918,18 +967,36 @@ For TTN/community networks, use significantly longer intervals (typically at lea
 ├── src/
 │   ├── main.cpp             # Orchestration only: setup/loop, sampling, button, LoRaWAN send
 │   ├── config.h/.cpp        # Config struct, NVS load/save
-│   ├── partition_repair.h/.cpp # Detects a missing "cfgdata" partition after OTA from older firmware (logs; needs a reflash)
+│   ├── partition_check.h/.cpp  # Detects a missing "cfgdata" partition after OTA from older firmware (logs; needs a reflash)
 │   ├── globals.h            # Shared live state (extern) between the modules below
 │   ├── sensors.h/.cpp       # Pin/PCNT/ADC setup, sensor reads (wind, rain, BME280, DS18B20, battery)
-│   ├── lora_payload.h/.cpp  # CayenneLPP + compact binary uplink encoding
+│   ├── payload.h            # Measurements struct + compact binary layout (shared contract)
+│   ├── payload_binary.cpp   # Compact binary encoder (plain C++, host-testable)
+│   ├── lora_payload.h/.cpp  # Fills Measurements from the sensor globals; CayenneLPP encoder
+│   ├── history.h/.cpp       # Two-tier in-RAM history ring buffer for the dashboard
+│   ├── serial_log.h/.cpp    # Serial output + rolling in-RAM log for /api/log
 │   ├── portal.h/.cpp        # Wi-Fi config portal + web routes (/decoder, /help, /calibrate)
-│   ├── params.h/.cpp        # Transport-agnostic command/parameter actions (LoRaWAN + MQTT)
+│   ├── params.h/.cpp        # ParamId enum + transport-agnostic command/parameter actions (LoRaWAN, MQTT, web)
 │   ├── json_payload.h/.cpp  # Shared telemetry JSON builder (MQTT + REST API)
 │   ├── units.h/.cpp         # Metric/Imperial value + label conversion
 │   ├── wifi_mqtt.h/.cpp     # Wi-Fi/MQTT state machine, publish, HA discovery, MQTT commands
 │   └── web_api.h/.cpp       # REST API (/api/data) + web settings page
+├── include/
+│   ├── chart_page.h         # Dashboard (/) - self-contained HTML/JS
+│   ├── log_page.h           # Log viewer (/api/log)
+│   ├── help_page.h          # Help page renderer (/help)
+│   ├── calibrate_page.h     # Wind-direction calibration (/calibrate)
+│   └── generated_version.h, decoder_js.h, readme_md.h   # generated by tools/version.py (git-ignored)
 ├── chirpstack/
 │   └── decoder.js           # ChirpStack v3/v4 JavaScript payload decoder
+├── test/
+│   ├── decoder.test.js            # Decoder regression tests
+│   ├── payload_roundtrip.test.js  # Firmware encoder → decoder round trip
+│   └── payload_roundtrip.cpp      # Host helper for the round trip
+├── tools/version.py         # Pre-build script: version/decoder/README headers, release copy
+├── partitions.csv           # Custom partition table (dedicated cfgdata NVS partition)
+├── firmware/                # Release binaries (app images, for OTA)
+├── 3dprint/                 # Enclosure parts
 ├── pcblayout/
 │   ├── lorawan-weather-node-pcb.fzz                    # Fritzing Rev 1.3
 │   ├── lorawan-weather-node-pcb_Schaltplan.png
@@ -948,7 +1015,7 @@ For TTN/community networks, use significantly longer intervals (typically at lea
 
 | Library | Version | Purpose |
 |---------|---------|---------|
-| RadioLib | ^7.6.0 | LoRaWAN stack (OTAA, EU868) |
+| RadioLib | ^7.6.0 | LoRaWAN stack (OTAA, region configurable) |
 | Heltec_ESP32_LoRa_v3 | ^0.9.2 | Board support (display, heltec_temperature) |
 | LoRaWAN_ESP32 | ^1.2.0 | LoRaWAN session management (persistence) |
 | CayenneLPP | ^1.6.1 | Payload encoding |
@@ -976,7 +1043,7 @@ Below 80 MHz (XTAL mode) the APB clock drops proportionally → debounce filter 
 Because the GPIO numbers for 1-Wire are determined at runtime from the PCB revision, the `OneWire` and `DallasTemperature` objects are allocated on the heap with `new` (no static constructor with hard-coded pins possible).
 
 ### LoRaWAN Session Persistence
-The `LoRaWAN_ESP32` library stores the LoRaWAN session (frame counters, DevAddr, session keys) in NVS. A restart does not necessarily trigger a new OTAA join.
+The `LoRaWAN_ESP32` library stores only the join nonces in NVS; the session itself is kept in RTC memory and restored only after a deep-sleep wake, which this node never uses. Every restart therefore performs a new OTAA join — see [LoRaWAN Session & Join](#lorawan-session--join).
 
 ### ADC Linearity
 The ESP32-S3 ADC is non-linear (especially below 150 mV and above 3.1 V). For the wind direction potentiometer this is uncritical since values are mapped to 0–359° and the absolute measurement error remains < 5° in practice. For the battery voltage measurement a calibration factor is included in the code.
@@ -986,14 +1053,40 @@ The REST/web UI (`server.handleClient()`) runs on its own FreeRTOS task pinned t
 
 Running two tasks means a few pieces of state are now genuinely touched from both cores, addressed as follows:
 
-- **The `WebServer` object itself** (`begin()`/`stop()`/`handleClient()`): guarded by `serverMutex` in `web_api.cpp`. This covers more than it might look like at first: `webApiStop()` doesn't just stop the server once — it also `vTaskSuspend()`s `webApiTask` outright (guarded against a null task handle on the first-boot path, where `vTaskSuspend(NULL)` would otherwise suspend the *calling* task instead of doing nothing). Without that, the task's own poll loop would simply restart the server a few milliseconds later on its own — since it doesn't know a config portal is about to open — recreating exactly the port-80 conflict with WiFiManager's captive-portal server that `webApiStop()` exists to prevent. Every caller of `webApiStop()` (button long-press, first boot, downlink `0x03`) heads into `ESP.restart()` regardless of outcome, so a one-way suspend (never resumed) is correct rather than just a pause.
+- **The `WebServer` object itself** (`begin()`/`stop()`/`handleClient()`): guarded by `serverMutex` in `web_api.cpp`. This covers more than it might look like at first: `webApiStop()` sets an `apiStopped` flag under the same mutex (so a task already waiting on it can't restart the server in the gap before it is suspended) and then `vTaskSuspend()`s `webApiTask` outright (guarded against a null task handle on the first-boot path, where `vTaskSuspend(NULL)` would otherwise suspend the *calling* task instead of doing nothing). Without that, the task's own poll loop would simply restart the server a few milliseconds later on its own — since it doesn't know a config portal is about to open — recreating exactly the port-80 conflict with WiFiManager's captive-portal server that `webApiStop()` exists to prevent. Every caller of `webApiStop()` (button long-press, first boot, downlink `0x03`) heads into `ESP.restart()` regardless of outcome, so a one-way suspend (never resumed) is correct rather than just a pause.
 - **The dashboard's history ring buffers** (`src/history.cpp`): both tiers (fine and coarse, see below) and their in-progress accumulator buckets are guarded by one shared `historyMutex` — `pushHistorySample()` (main task, once per uplink cycle) writes into both tiers' current bucket and finalizes/appends when a bucket's window elapses, while `buildHistoryJson()` (reachable from the web task) reads them. Unlike a plain scalar, an in-progress index update read mid-write could hand back an out-of-bounds array index, not just a stale value, so this needs a real mutex rather than just a visibility guarantee. (There's no `historyClear()` — see the note above on why clearing this buffer isn't exposed at all.)
 - **The device's own log ring buffer** (`SerialLog`/`dbgSerial`, `src/serial_log.h`/`.cpp`): guarded by its own mutex for the same reason as the history buffer — nearly all logging happens from the main task, but `webApiTask` also logs its own start/stop messages, and `/api/log/raw`/`/api/log/clear` (web task) read/reset the same `logHead`/`logFull` state.
-- **The `Config` fields that `applyDownlinkParam()` (`src/params.cpp`) can write** — the plain `int` ones (`uplinkIntervalSec`, `sampleSec`, `windEn`, `rainEn`, `lipoEn`, `debugMode`, `windDirOffsetDeg`, `windUnitMs`, `cpuFreqMhz`, `payloadFormat`, `unitSystem`, `windDirSensorType`) plus the two `float` sensor-calibration ones (`rainMmPerTip`, `windMsPerPps`): all marked `volatile` in `config.h`. A single aligned 32-bit load/store is already atomic on this hardware, so the risk here isn't torn values — it's the compiler caching a read in a register across a loop iteration on one core while the other core writes it; `volatile` forces a fresh memory read each time. `std::atomic<int>`/`std::atomic<float>` were deliberately **not** used instead: `Config` is copied by value throughout (`loadConfig()`'s return, `portal.cpp`'s `Config c = cur`), and atomics aren't copyable, which would have broken that. One int-specific wrinkle: `volatile int` can't be passed directly into `std::min`/`std::max` alongside a plain `int` (template deduction can't unify the two cv-qualifications) — `portal.cpp`'s sample-interval clamp reads `uplinkIntervalSec` into a plain local `int` first to work around it; the two `float` fields never hit `min`/`max`/`constrain` anywhere, so no equivalent fixup was needed for them.
+- **The `Config` fields that `applyParam()` (`src/params.cpp`) can write** — the plain `int` ones (`uplinkIntervalSec`, `sampleSec`, `windEn`, `rainEn`, `lipoEn`, `debugMode`, `windDirOffsetDeg`, `windUnitMs`, `cpuFreqMhz`, `payloadFormat`, `unitSystem`, `windDirSensorType`) plus the two `float` sensor-calibration ones (`rainMmPerTip`, `windMsPerPps`): all marked `volatile` in `config.h`. A single aligned 32-bit load/store is already atomic on this hardware, so the risk here isn't torn values — it's the compiler caching a read in a register across a loop iteration on one core while the other core writes it; `volatile` forces a fresh memory read each time. `std::atomic<int>`/`std::atomic<float>` were deliberately **not** used instead: `Config` is copied by value throughout (`loadConfig()`'s return, `portal.cpp`'s `Config c = cur`), and atomics aren't copyable, which would have broken that. One int-specific wrinkle: `volatile int` can't be passed directly into `std::min`/`std::max` alongside a plain `int` (template deduction can't unify the two cv-qualifications) — `portal.cpp`'s sample-interval clamp reads `uplinkIntervalSec` into a plain local `int` first to work around it; the two `float` fields never hit `min`/`max`/`constrain` anywhere, so no equivalent fixup was needed for them.
 
 Everything else — the live sensor globals (`windSpeedMs`, `bme280TempC`, etc., read by `/api/data` and `/`) — is left as-is: `/api/settings` never writes them, so the only exposure is the main task writing while the web task reads, which at worst shows one stale/slightly-mismatched pair of values in a single response — self-correcting on the next refresh, not worth a lock.
 
 **TLS/HTTPS for this server was deliberately not pursued**, after weighing it: the ESP32 Arduino `WebServer` class has no secure equivalent to drop in (would mean building a per-connection TLS handshake layer on `WiFiClientSecure` from scratch, a much bigger lift than MQTT's use of the same library in the simpler client-verifying-a-server role); the RAM/latency cost of a TLS handshake is real on this hardware; and the actual secret at risk — the web admin password — only gates non-critical operational settings, not WiFi/LoRaWAN/MQTT credentials (those stay reachable only via the physical portal). If cleartext Basic Auth ever becomes a real concern, switching to Digest Auth would address that specific risk far more cheaply than full TLS.
+
+---
+
+## Changelog
+
+### Unreleased
+
+**Payload changes — update `decoder.js` in ChirpStack together with this firmware** (the new decoder still decodes payloads from older firmware):
+* Compact binary format **version 2**: in imperial mode rain is encoded ×1000 (0.001 in) and pressure ×100 (0.01 inHg) — previously a single 0.2 mm tip (0.008 in) was sent as 0 and pressure had ≈ 3.4 hPa resolution; rain since start is `u32` (previously wrapped above 6553.5 mm). Metric values are unchanged.
+* CayenneLPP: imperial pressure is sent with 0.01 inHg resolution (decoder divides by 10 when the imperial bit is set); debug channels Ch203 (free heap) and Ch204 (uptime, 0.1 h) are now *Generic Sensor* (previously saturated at 327).
+* All values are rounded instead of truncated and clamped instead of wrapped; the decoder no longer rounds rain to 0.1.
+
+**Fixes:**
+* Wind-direction calibration was lost when the portal closed after *Save Calibration* — the portal wrote its pre-calibration state back.
+* DS18B20 probes were never detected on PCB Rev 1.3: the bus was searched once at boot while its supply was still switched off. It is now searched every cycle after power-up, which also makes the probes hot-pluggable as documented.
+* Live web/REST rain values (`rain`, `rainRate`) were overwritten by every 3 s sub-sample (mostly 0, or 240 mm/h for a single tip); they now show the last completed cycle.
+* `rainMMSinceStart` did not survive restarts as documented (`RTC_DATA_ATTR` is re-initialized on every non-deep-sleep boot); it now survives restarts and watchdog resets and only resets on power loss or downlink `0x01`.
+* Dashboard history ages broke after 49.7 days of uptime (`millis()` wrap); it now uses a 64-bit uptime. Same for the debug uptime and the display timeout.
+* A short button press showed stale display content; the display is now redrawn, and the boot screen shows a first real reading.
+* PCNT counter wrap (every 32767 pulses) produced a negative delta: one rejected wind sample per wrap, and negative rain after ≈ 6553 mm.
+* Heap leak on every failed join attempt (a new `LoRaWANNode` was allocated per retry).
+* Possible race in `webApiStop()` that could restart the web server right before the config portal took port 80.
+* Input validation: wind-direction offset limited to ±180° in the portal (out-of-range NVS values no longer produce 65xxx°); web settings and MQTT values outside the int16 range are rejected instead of wrapping (`65836` → `300`), and invalid web settings are reported instead of silently ignored.
+* Default MQTT port is 1883, matching the default "no TLS" mode (was 8883).
+
+**Other:** `ParamId` enum instead of magic numbers (`applyDownlinkParam()` renamed to `applyParam()`); dashboard/log HTML moved from `web_api.cpp` into `include/`; `partition_repair` renamed to `partition_check` (it only detects); compact binary encoder split out as host-testable C++ with new decoder and round-trip tests; generated headers are no longer tracked and only release builds are copied to `firmware/`; README: build & flash, tests, LoRaWAN session & join, corrected payload sizes and data-rate limits, RC filter values (incl. wind-direction filter C11 = 1 µF), rain accumulator and DS18B20 behavior.
 
 ---
 

@@ -37,7 +37,7 @@ struct Config {
     char     region[8]         = "EU868"; // LoRaWAN region (default)
     int      pcbVersion        = PCB_REV_1_3;
     int      altitudeM         = 560; // default altitude above sea level (m)
-    // volatile: written by applyDownlinkParam() (params.cpp), which now runs
+    // volatile: written by applyParam() (params.cpp), which now runs
     // from either the main loop task (LoRaWAN downlink, MQTT command) or the
     // dedicated web-server task on core 0 (/api/settings POST, see
     // web_api.cpp) — volatile stops the compiler from caching a stale value
@@ -63,7 +63,7 @@ struct Config {
     // Generic (non-Davis) sensor calibration
     // ------------------------------------------------------------------
     // Same cross-task write path as the volatile int fields above
-    // (applyDownlinkParam() cases 12/13, params.cpp) — same rationale, just
+    // (applyParam() cases 12/13, params.cpp) — same rationale, just
     // float instead of int. Unlike those fields, neither of these is ever
     // passed into std::min/max/constrain anywhere in the codebase, so no
     // portal.cpp-style "can't deduce a common type" fixup was needed here.
@@ -89,7 +89,7 @@ struct Config {
     char     staticSubnet[16]  = "255.255.255.0";
     char     staticDns[16]     = "";  // optional; falls back to staticGateway if empty
     char     mqttHost[65]      = "";
-    int      mqttPort          = 8883;  // standard ports: 1883 = plain/no TLS, 8883 = TLS
+    int      mqttPort          = 1883;  // matches the mqttTlsMode default (plain); TLS brokers usually listen on 8883
     char     mqttUser[33]      = "";
     char     mqttPass[33]      = "";
     char     mqttTopic[65]     = "";  // optional topic prefix override; falls back to deviceName
