@@ -3,7 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
-pcblayout/lorawan-weather-node-pcb-gerberfile rev13/*
+pcb/v1.3/universal-weather-node-pcb-gerberfile rev13/*
 kicad/*
 kicad
 .DS_Store
@@ -11,3 +11,11 @@ kicad
 include/generated_version.h
 include/decoder_js.h
 include/readme_md.h
+
+# KiCad
+*.kicad_prl
+*-backups/
+fp-info-cache
+*.lck
+_autosave-*
+\#auto_saved_files\#
