@@ -62,9 +62,10 @@ if decoder_src.exists():
 # Embed README.md into a PROGMEM string so it can be served as a rendered
 # help page from the WiFi config portal and the persistent web server
 # (/help route). Single source of truth: the repo's README.md is the only
-# copy to maintain. The "Project in Pictures" image gallery is stripped since
-# the referenced JPEG/PNG files aren't embedded and would just show broken
-# image icons.
+# copy to maintain. Blocks between "<!-- help:skip -->" and
+# "<!-- /help:skip -->" (picture galleries, badges — raw HTML and images the
+# offline renderer in include/help_page.h can't show, and whose files
+# aren't embedded) are left out.
 readme_src = Path(env.get("PROJECT_DIR")) / "README.md"
 readme_hdr = Path(env.get("PROJECT_DIR")) / "include" / "readme_md.h"
 if readme_src.exists():
@@ -72,14 +73,17 @@ if readme_src.exists():
     out_lines = []
     skipping = False
     for line in lines:
-        if not skipping and line.strip() == "## Project in Pictures":
+        marker = line.strip()
+        if marker == "<!-- help:skip -->":
             skipping = True
             continue
-        if skipping:
-            if line.strip() == "---":
-                skipping = False
+        if marker == "<!-- /help:skip -->":
+            skipping = False
             continue
-        out_lines.append(line)
+        if not skipping:
+            out_lines.append(line)
+    if skipping:
+        raise RuntimeError("README.md: unterminated <!-- help:skip --> block")
     md = "\n".join(out_lines)
 
     delim = "READMEMD"
@@ -116,7 +120,7 @@ def copy_firmware(*args, **kwargs):
 
     firmware_dir = Path(env.get("PROJECT_DIR")) / "firmware"
     firmware_dir.mkdir(parents=True, exist_ok=True)
-    dst = firmware_dir / f"lorawan-weather-node-{version_string}.bin"
+    dst = firmware_dir / f"universal-weather-node-{version_string}.bin"
     shutil.copyfile(src, dst)
     print(f"Firmware copied to {dst}")
 
