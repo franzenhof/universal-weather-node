@@ -1,7 +1,9 @@
 #include "wifi_mqtt.h"
 #include "globals.h"
 #include "params.h"
+#include "board_io.h"
 #include "json_payload.h"
+#include "uv_calibration.h"
 #include "units.h"
 #include "generated_version.h"
 #include "serial_log.h"
@@ -11,6 +13,8 @@
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <memory>
+#include <new>
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -110,7 +114,7 @@ void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
     ids.add(mqttClientId());
     device["name"]         = gCfg.deviceName[0] != '\0' ? gCfg.deviceName : mqttClientId();
     device["manufacturer"] = "DIY";
-    device["model"]        = "LoRaWAN Weather Node";
+    device["model"]        = "Universal Weather Node";
     device["sw_version"]   = FIRMWARE_VERSION;
 
     char payload[768];
@@ -174,6 +178,58 @@ void publishHomeAssistantDiscovery()
         publishDiscoveryEntity("battery", "Battery Voltage", "V", "voltage",
                                 "{{ value_json.batteryVolt | default(None) }}");
     }
+    // PCB v2.0 I/O block
+    if (ioV2()) {
+        if (gCfg.uvEn) {
+            publishDiscoveryEntity("uv_sensor_volts", "UV Sensor Voltage", "V", "voltage",
+                                    "{{ value_json.uvSensorVolts | default(None) }}");
+            if (gCfg.uvIndexEn == 1 &&
+                uvCalibrationValid(gCfg.uvCalibrated == 1, gCfg.uvIndexSlope, gCfg.uvIndexOffset))
+                publishDiscoveryEntity("uv_index", "UV Index", "index", nullptr,
+                                        "{{ value_json.uvIndex | default(None) }}");
+        }
+        if (gCfg.wind2Mode) {
+            publishDiscoveryEntity("wind2_speed", "Wind 2 Speed", windUnit, nullptr,
+                                    "{{ value_json.wind2.speed | default(None) }}");
+            publishDiscoveryEntity("wind2_gust", "Wind 2 Gust", windUnit, nullptr,
+                                    "{{ value_json.wind2.gust | default(None) }}");
+            if (gCfg.wind2Mode == 2)
+                publishDiscoveryEntity("wind2_dir", "Wind 2 Direction", "\xC2\xB0", nullptr,
+                                        "{{ value_json.wind2.dirDeg | default(None) }}");
+        }
+        if (gCfg.auxAinEn && gCfg.wind2Mode != 2)
+            publishDiscoveryEntity("aux_analog", "AUX Analog Input", "V", "voltage",
+                                    "{{ value_json.auxAnalogV | default(None) }}");
+        if (gCfg.auxPulseEn && !gCfg.wind2Mode) {
+            publishDiscoveryEntity("aux_pulses", "AUX Pulses (cycle)", nullptr, nullptr,
+                                    "{{ value_json.auxPulses | default(None) }}");
+            publishDiscoveryEntity("aux_pulses_total", "AUX Pulses Total", nullptr, nullptr,
+                                    "{{ value_json.auxPulsesTotal | default(None) }}");
+        }
+        if (gCfg.heaterMode)
+            publishDiscoveryEntity("heater_duty", "Heater", "%", nullptr,
+                                    "{{ value_json.heater.dutyPct | default(None) }}");
+        if (gCfg.fanMode)
+            publishDiscoveryEntity("fan_duty", "Fan", "%", nullptr,
+                                    "{{ value_json.fan.dutyPct | default(None) }}");
+        if (gCfg.tachoEn)
+            publishDiscoveryEntity("fan_rpm", "Fan Speed", "rpm", nullptr,
+                                    "{{ value_json.fan.rpm | default(None) }}");
+        if (gCfg.veDirectEn) {
+            publishDiscoveryEntity("victron_battery_v", "Victron Battery Voltage", "V", "voltage",
+                                    "{{ value_json.victron.batteryV | default(None) }}");
+            publishDiscoveryEntity("victron_battery_a", "Victron Battery Current", "A", "current",
+                                    "{{ value_json.victron.batteryA | default(None) }}");
+            publishDiscoveryEntity("victron_pv_w", "Victron PV Power", "W", "power",
+                                    "{{ value_json.victron.pvW | default(None) }}");
+            publishDiscoveryEntity("victron_yield_today", "Victron Yield Today", "kWh", "energy",
+                                    "{{ value_json.victron.yieldTodayKWh | default(None) }}");
+            publishDiscoveryEntity("victron_soc", "Victron State of Charge", "%", "battery",
+                                    "{{ value_json.victron.socPct | default(None) }}");
+            publishDiscoveryEntity("victron_load_a", "Victron Load Current", "A", "current",
+                                    "{{ value_json.victron.loadA | default(None) }}");
+        }
+    }
     if (gCfg.debugMode) {
         publishDiscoveryEntity("cpu_temp", "CPU Temperature", tempUnit, "temperature",
                                 "{{ value_json.cpuTemp | default(None) }}");
@@ -191,7 +247,7 @@ void publishHomeAssistantDiscovery()
 // Parses a command received on the MQTT command topic and dispatches it
 // into the same transport-agnostic actions the LoRaWAN downlink uses
 // (see params.h). Two accepted shapes:
-//   {"cmd":"resetRain"|"restart"|"debugOn"|"debugOff"|"portal"|"factoryReset"}
+//   {"cmd":"resetRain"|"resetAuxPulses"|"restart"|"debugOn"|"debugOff"|"portal"|"factoryReset"}
 //   {"params":[{"id":1,"value":300}, ...]}   (same paramId scheme as FPort1 0x10)
 void handleCommandMessage(char* /*topic*/, byte* payload, unsigned int length)
 {
@@ -205,6 +261,7 @@ void handleCommandMessage(char* /*topic*/, byte* payload, unsigned int length)
     if (doc["cmd"].is<const char*>()) {
         const char* cmd = doc["cmd"];
         if      (!strcmp(cmd, "resetRain"))    cmdResetRainAccumulator();
+        else if (!strcmp(cmd, "resetAuxPulses")) cmdResetAuxPulses();
         else if (!strcmp(cmd, "restart"))      cmdRestart();
         else if (!strcmp(cmd, "debugOn"))      cmdSetDebugMode(true);
         else if (!strcmp(cmd, "debugOff"))     cmdSetDebugMode(false);
@@ -367,8 +424,18 @@ void mqttPublishTelemetry()
 
     JsonDocument doc;
     buildJsonPayload(doc);
-    char buf[1024];
-    size_t n = serializeJson(doc, buf, sizeof(buf));
-    bool ok = mqttClient.publish(topicData, (const uint8_t*)buf, n, false);
+    size_t n = measureJson(doc);
+    size_t packetSize = MQTT_MAX_HEADER_SIZE + 2 + strlen(topicData) + n;
+    if (doc.overflowed() || packetSize > UINT16_MAX ||
+        (packetSize > mqttClient.getBufferSize() && !mqttClient.setBufferSize((uint16_t)packetSize))) {
+        dbgSerial.println("MQTT telemetry: JSON/packet allocation failed or packet too large; not published.");
+        return;
+    }
+    std::unique_ptr<char[]> buf(new (std::nothrow) char[n + 1]);
+    if (!buf || serializeJson(doc, buf.get(), n + 1) != n) {
+        dbgSerial.println("MQTT telemetry: serialization/allocation failed; not published.");
+        return;
+    }
+    bool ok = mqttClient.publish(topicData, (const uint8_t*)buf.get(), n, false);
     dbgSerial.printf("MQTT publish to '%s': %s\n", topicData, ok ? "OK" : "FAILED");
 }

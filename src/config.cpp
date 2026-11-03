@@ -121,6 +121,8 @@ Config loadConfig()
     normalizeRegionInput(region.c_str(), c.region, sizeof(c.region));
 
     c.loraEn           = prefs.getInt    ("loraen",   c.loraEn);
+    c.lowPowerEn       = prefs.getInt    ("lowpower", c.lowPowerEn);
+    c.vanePowerSave    = prefs.getInt    ("vanesave", c.vanePowerSave);
     c.wifiEn           = prefs.getInt    ("wifien",   c.wifiEn);
     c.mqttEn           = prefs.getInt    ("mqtten",   c.mqttEn);
     c.webApiEn         = prefs.getInt    ("webapien", c.webApiEn);
@@ -139,6 +141,48 @@ Config loadConfig()
     c.mqttTlsMode      = prefs.getInt    ("mqtttls",  c.mqttTlsMode);
     prefs.getString("mqttcacert", c.mqttCaCert,   sizeof(c.mqttCaCert));
     prefs.getString("webadminpw", c.webAdminPass, sizeof(c.webAdminPass));
+
+    prefs.getString("tz",         c.timeZone,     sizeof(c.timeZone));
+    prefs.getString("ntpserver",  c.ntpServer,    sizeof(c.ntpServer));
+    prefs.getString("lat",        c.latitude,     sizeof(c.latitude));
+    prefs.getString("lon",        c.longitude,    sizeof(c.longitude));
+    prefs.getString("awkuser",    c.awekasUser,   sizeof(c.awekasUser));
+    prefs.getString("awkpass",    c.awekasPass,   sizeof(c.awekasPass));
+    c.awekasIntervalSec  = prefs.getInt("awkint", c.awekasIntervalSec);
+    prefs.getString("wuid",       c.wuStationId,  sizeof(c.wuStationId));
+    prefs.getString("wukey",      c.wuStationKey, sizeof(c.wuStationKey));
+    c.wuIntervalSec      = prefs.getInt("wuint",  c.wuIntervalSec);
+    prefs.getString("wcid",       c.wcloudId,     sizeof(c.wcloudId));
+    prefs.getString("wckey",      c.wcloudKey,    sizeof(c.wcloudKey));
+    c.wcloudIntervalSec  = prefs.getInt("wcint",  c.wcloudIntervalSec);
+    prefs.getString("wnpid",      c.wnetproId,    sizeof(c.wnetproId));
+    prefs.getString("wnpkey",     c.wnetproKey,   sizeof(c.wnetproKey));
+    c.wnetproIntervalSec = prefs.getInt("wnpint", c.wnetproIntervalSec);
+
+    c.auxAinEn         = prefs.getInt    ("auxainen",   c.auxAinEn);
+    c.auxAinScale      = prefs.getFloat  ("auxainscale", c.auxAinScale);
+    c.auxPulseEn       = prefs.getInt    ("auxpulseen", c.auxPulseEn);
+    c.wind2Mode        = prefs.getInt    ("wind2",      c.wind2Mode);
+    c.wind2DirOffsetDeg = prefs.getInt   ("wind2off",   c.wind2DirOffsetDeg);
+    c.heaterMode       = prefs.getInt    ("heatmode",   c.heaterMode);
+    c.heaterDutyPct    = prefs.getInt    ("heatduty",   c.heaterDutyPct);
+    c.heaterOnBelowDc  = prefs.getInt    ("heatbelow",  c.heaterOnBelowDc);
+    c.heaterMinDutyPct = prefs.getInt    ("heatminduty", c.heaterMinDutyPct);
+    c.heaterFullBelowDc = prefs.getInt   ("heatfull",   c.heaterFullBelowDc);
+    c.fanMode          = prefs.getInt    ("fanmode",    c.fanMode);
+    c.fanDutyPct       = prefs.getInt    ("fanduty",    c.fanDutyPct);
+    c.fanOnAboveDc     = prefs.getInt    ("fanabove",   c.fanOnAboveDc);
+    c.fanMinPvW        = prefs.getInt    ("fanminpv",   c.fanMinPvW);
+    c.tachoEn          = prefs.getInt    ("tachoen",    c.tachoEn);
+    c.tachoPpr         = prefs.getInt    ("tachoppr",   c.tachoPpr);
+    c.veDirectEn       = prefs.getInt    ("vedirecten", c.veDirectEn);
+    c.outMinBattDv     = prefs.getInt    ("outminbatt", c.outMinBattDv);
+    c.uvEn             = prefs.getInt    ("uven", c.uvEn);
+    c.uvAinScale       = prefs.getFloat  ("uvscale", c.uvAinScale);
+    c.uvIndexEn        = prefs.getInt    ("uvindexen", c.uvIndexEn);
+    c.uvCalibrated     = prefs.getInt    ("uvcal", c.uvCalibrated);
+    c.uvIndexSlope     = prefs.getFloat  ("uvslope", c.uvIndexSlope);
+    c.uvIndexOffset    = prefs.getFloat  ("uvoffset", c.uvIndexOffset);
 
     prefs.end();
     return c;
@@ -179,6 +223,8 @@ void saveConfig(const Config& c)
     ok &= checkWriteStr("region",      prefs.putString ("region",   c.region), c.region);
 
     ok &= checkWrite   ("loraen",      prefs.putInt    ("loraen",   c.loraEn), 4);
+    ok &= checkWrite   ("lowpower",    prefs.putInt    ("lowpower", c.lowPowerEn), 4);
+    ok &= checkWrite   ("vanesave",    prefs.putInt    ("vanesave", c.vanePowerSave), 4);
     ok &= checkWrite   ("wifien",      prefs.putInt    ("wifien",   c.wifiEn), 4);
     ok &= checkWrite   ("mqtten",      prefs.putInt    ("mqtten",   c.mqttEn), 4);
     ok &= checkWrite   ("webapien",    prefs.putInt    ("webapien", c.webApiEn), 4);
@@ -197,6 +243,48 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("mqtttls",     prefs.putInt    ("mqtttls",  c.mqttTlsMode), 4);
     ok &= checkWriteStr("mqttcacert",  prefs.putString ("mqttcacert", c.mqttCaCert), c.mqttCaCert);
     ok &= checkWriteStr("webadminpw",  prefs.putString ("webadminpw", c.webAdminPass), c.webAdminPass);
+
+    ok &= checkWriteStr("tz",          prefs.putString ("tz",         c.timeZone), c.timeZone);
+    ok &= checkWriteStr("ntpserver",   prefs.putString ("ntpserver",  c.ntpServer), c.ntpServer);
+    ok &= checkWriteStr("lat",         prefs.putString ("lat",        c.latitude), c.latitude);
+    ok &= checkWriteStr("lon",         prefs.putString ("lon",        c.longitude), c.longitude);
+    ok &= checkWriteStr("awkuser",     prefs.putString ("awkuser",    c.awekasUser), c.awekasUser);
+    ok &= checkWriteStr("awkpass",     prefs.putString ("awkpass",    c.awekasPass), c.awekasPass);
+    ok &= checkWrite   ("awkint",      prefs.putInt    ("awkint",     c.awekasIntervalSec), 4);
+    ok &= checkWriteStr("wuid",        prefs.putString ("wuid",       c.wuStationId), c.wuStationId);
+    ok &= checkWriteStr("wukey",       prefs.putString ("wukey",      c.wuStationKey), c.wuStationKey);
+    ok &= checkWrite   ("wuint",       prefs.putInt    ("wuint",      c.wuIntervalSec), 4);
+    ok &= checkWriteStr("wcid",        prefs.putString ("wcid",       c.wcloudId), c.wcloudId);
+    ok &= checkWriteStr("wckey",       prefs.putString ("wckey",      c.wcloudKey), c.wcloudKey);
+    ok &= checkWrite   ("wcint",       prefs.putInt    ("wcint",      c.wcloudIntervalSec), 4);
+    ok &= checkWriteStr("wnpid",       prefs.putString ("wnpid",      c.wnetproId), c.wnetproId);
+    ok &= checkWriteStr("wnpkey",      prefs.putString ("wnpkey",     c.wnetproKey), c.wnetproKey);
+    ok &= checkWrite   ("wnpint",      prefs.putInt    ("wnpint",     c.wnetproIntervalSec), 4);
+
+    ok &= checkWrite   ("auxainen",    prefs.putInt    ("auxainen",   c.auxAinEn), 4);
+    ok &= checkWrite   ("auxainscale", prefs.putFloat  ("auxainscale", c.auxAinScale), 4);
+    ok &= checkWrite   ("auxpulseen",  prefs.putInt    ("auxpulseen", c.auxPulseEn), 4);
+    ok &= checkWrite   ("wind2",       prefs.putInt    ("wind2",      c.wind2Mode), 4);
+    ok &= checkWrite   ("wind2off",    prefs.putInt    ("wind2off",   c.wind2DirOffsetDeg), 4);
+    ok &= checkWrite   ("heatmode",    prefs.putInt    ("heatmode",   c.heaterMode), 4);
+    ok &= checkWrite   ("heatduty",    prefs.putInt    ("heatduty",   c.heaterDutyPct), 4);
+    ok &= checkWrite   ("heatbelow",   prefs.putInt    ("heatbelow",  c.heaterOnBelowDc), 4);
+    ok &= checkWrite   ("heatminduty", prefs.putInt    ("heatminduty", c.heaterMinDutyPct), 4);
+    ok &= checkWrite   ("heatfull",    prefs.putInt    ("heatfull",   c.heaterFullBelowDc), 4);
+    ok &= checkWrite   ("fanmode",     prefs.putInt    ("fanmode",    c.fanMode), 4);
+    ok &= checkWrite   ("fanduty",     prefs.putInt    ("fanduty",    c.fanDutyPct), 4);
+    ok &= checkWrite   ("fanabove",    prefs.putInt    ("fanabove",   c.fanOnAboveDc), 4);
+    ok &= checkWrite   ("fanminpv",    prefs.putInt    ("fanminpv",   c.fanMinPvW), 4);
+    ok &= checkWrite   ("tachoen",     prefs.putInt    ("tachoen",    c.tachoEn), 4);
+    ok &= checkWrite   ("tachoppr",    prefs.putInt    ("tachoppr",   c.tachoPpr), 4);
+    ok &= checkWrite   ("vedirecten",  prefs.putInt    ("vedirecten", c.veDirectEn), 4);
+    ok &= checkWrite   ("outminbatt",  prefs.putInt    ("outminbatt", c.outMinBattDv), 4);
+    ok &= checkWrite   ("uven",        prefs.putInt    ("uven", c.uvEn), 4);
+    ok &= checkWrite   ("uvscale",     prefs.putFloat  ("uvscale", c.uvAinScale), 4);
+    ok &= checkWrite   ("uvindexen",   prefs.putInt    ("uvindexen", c.uvIndexEn), 4);
+    ok &= checkWrite   ("uvcal",       prefs.putInt    ("uvcal", c.uvCalibrated), 4);
+    ok &= checkWrite   ("uvslope",     prefs.putFloat  ("uvslope", c.uvIndexSlope), 4);
+    ok &= checkWrite   ("uvoffset",    prefs.putFloat  ("uvoffset", c.uvIndexOffset), 4);
     prefs.end();
 
     // Non-secret summary only — never log AppKey/WiFi/MQTT credentials/CA cert.

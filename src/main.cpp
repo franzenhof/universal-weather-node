@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
 /**
- * LoRaWAN Weather Node – Heltec WiFi LoRa V3
+ * Universal Weather Node – Heltec WiFi LoRa V3
  *
  * Sensors:
  *   - Davis rain sensor     (reed switch, PCNT)
@@ -9,6 +9,8 @@
  *   - BME280                (temperature, humidity, barometric pressure – I2C)
  *   - DS18B20 Bus 1         (up to 3 sensors, 1-Wire)
  *   - LiPo battery          (voltage measurement via voltage divider + ADC, optional)
+ *   - PCB v2.0 only (board_io.cpp, all off by default): AUX analog + pulse
+ *     input, heater/fan outputs (PWM, on/auto), fan tacho, Victron VE.Direct
  *
  * Transmission: LoRaWAN (CayenneLPP or compact binary, region configurable)
  * and/or WiFi + MQTT, see README.md.
@@ -28,8 +30,9 @@
  *   0x03 → open Wi-Fi config portal (takes effect after current send cycle)
  *   0x04 → enable debug mode (persistent)
  *   0x05 → disable debug mode (persistent)
+ *   0x06 → reset AUX pulse total (PCB v2.0)
  *   0x10 → set parameter(s): [0x10, paramId, valueMSB, valueLSB, ...]
- *           paramId 1..14 (signed 16-bit values, validated — see ParamId in
+ *           paramId 1..40 (signed 16-bit values, validated — see ParamId in
  *           params.h, also reachable via MQTT and the web settings page)
  *   0xFF → factory reset: wipe all config (NVS) and restart into the
  *           first-boot config portal
@@ -65,6 +68,11 @@
 #include "portal.h"
 #include "serial_log.h"
 #include "partition_check.h"
+#include "time_sync.h"
+#include "wx_upload.h"
+#include "board_io.h"
+#include "low_power.h"
+#include "lora_transport.h"
 
 // ============================================================================
 // DISPLAY MANAGEMENT
@@ -144,6 +152,7 @@ void IRAM_ATTR buttonISR()
 // config portal..." message immediately anyway).
 static void openPortalSaveAndRestart(bool showStartScreen = true)
 {
+    ioSuspendOutputs();
     if (showStartScreen) {
         activateDisplay(5000);
         display.clear();
@@ -214,22 +223,6 @@ static void handleButton()
     }
 }
 
-// Waits 'ms' milliseconds, polling the button every 50 ms.
-// This ensures the button stays responsive during blocking setup loops.
-static void waitWithButtonPoll(unsigned long ms)
-{
-    unsigned long start = millis();
-    while (millis() - start < ms) {
-        handleButton();
-        vTaskDelay(50 / portTICK_PERIOD_MS);
-    }
-}
-
-// ============================================================================
-// HARDWARE OBJECTS
-// ============================================================================
-LoRaWANNode* loRaNode = nullptr;
-
 // ============================================================================
 // MEASUREMENT DATA
 // ============================================================================
@@ -253,6 +246,7 @@ static float         bme280PressSeaSum = 0.0f;
 static float         bme280HumSum     = 0.0f;
 static float         rainCycleMm      = 0.0f;
 static int           subSampleCount   = 0;
+static int           bme280SampleCount = 0;   // < subSampleCount if the BME280 was (un)plugged mid-cycle
 static unsigned long lastSampleMs     = 0;
 unsigned long        lastSendMs       = 0;
 
@@ -260,6 +254,7 @@ unsigned long        lastSendMs       = 0;
 // (see loop()) — sampling/next-cycle checks are frozen during this window,
 // exactly like they were while readOneWire() used to block for it.
 static bool          sendPending      = false;
+static bool          vaneOffForMode   = false;   // true while low-power mode keeps the vane supply off
 static unsigned long sendElapsedMs    = 0;
 
 // ============================================================================
@@ -278,6 +273,7 @@ static void resetAccumulators()
     bme280HumSum      = 0.0f;
     rainCycleMm       = 0.0f;
     subSampleCount    = 0;
+    bme280SampleCount = 0;
     loopCount++;   // increment cycle counter after transmission
     // windGustMs is intentionally left untouched here (see takeSample()):
     // resetting it eagerly would make it read 0 — while windSpeedMs still
@@ -300,7 +296,15 @@ static void takeSample()
     float subSampleRainMm = readPulseCounters();   // also updates windSpeedMs, windGustMs, rainMMSinceStart
 
     if (gCfg.windEn) {
+        // Low-power mode: the vane supply is only on around the reading; the
+        // filter (330R + 10k + up to 5k wiper, 1 uF: tau ~15 ms) starts fully
+        // discharged and needs ~6 tau for < 0.3 % error (spent in light sleep).
+        // Otherwise the supply stays on (also after leaving low-power mode).
+        bool vaneSwitched = lowPowerActive() && ioV2() && gCfg.vanePowerSave;
+        if (vaneSwitched) { windVaneSupply(true); lowPowerSleep(100); }
+        else windVaneSupply(true);
         uint16_t dir = readWindDirection();
+        if (vaneSwitched) windVaneSupply(false);
         float rad     = dir * DEG_TO_RAD;
         windDirSinSum += sinf(rad);
         windDirCosSum += cosf(rad);
@@ -309,13 +313,14 @@ static void takeSample()
     if (gCfg.rainEn)
         rainCycleMm += subSampleRainMm;
 
-    if (bme280Present) {
-        readBme280();
+    if (readBme280()) {
         bme280TempSum     += bme280TempC;
         bme280PressAbsSum += bme280PressAbs;
         bme280PressSeaSum += bme280PressSea;
         bme280HumSum      += bme280Humidity;
+        bme280SampleCount++;
     }
+    ioSample();   // PCB v2.0: AUX analog input, fan state for the stall check
     subSampleCount++;
 }
 
@@ -342,15 +347,16 @@ static void computeFinalValues(unsigned long elapsedMs)
                       ? rainCycleMm / ((float)elapsedMs / 3600000.0f)
                       : 0.0f;
     }
-    if (bme280Present) {
-        bme280TempC    = bme280TempSum    / subSampleCount;
-        bme280PressAbs = bme280PressAbsSum / subSampleCount;
-        bme280PressSea = bme280PressSeaSum / subSampleCount;
-        bme280Humidity = bme280HumSum     / subSampleCount;
+    if (bme280Present && bme280SampleCount > 0) {
+        bme280TempC    = bme280TempSum    / bme280SampleCount;
+        bme280PressAbs = bme280PressAbsSum / bme280SampleCount;
+        bme280PressSea = bme280PressSeaSum / bme280SampleCount;
+        bme280Humidity = bme280HumSum     / bme280SampleCount;
     }
 
     cpuTemperature = heltec_temperature();
     batteryVolt    = gCfg.lipoEn ? readBatteryVoltage() : 0.0f;
+    ioFinishCycle(elapsedMs);
 
     dbgSerial.printf("[Cycle %d samples] Wind: %d°, %.1f m/s (gust %.1f) | "
                   "Rain: %.1f mm @ %.1f mm/h | Batt: %.2fV | CPU: %.1f°C\n",
@@ -380,6 +386,9 @@ static void processDownlink(const uint8_t* data, size_t len)
             break;
         case 0x05:
             cmdSetDebugMode(false);
+            break;
+        case 0x06:
+            cmdResetAuxPulses();
             break;
         case 0xFF:
             cmdFactoryReset();
@@ -448,9 +457,8 @@ static void sendLoRa()
         snprintf(buf, sizeof(buf), "Code %d  Attempt %d/10", state, sendFailCount);
         display.drawString(0, 55, buf);
         if (sendFailCount >= 10) {
-            dbgSerial.println("Too many send failures – restarting for new join.");
-            delay(1000);
-            ESP.restart();
+            loraReconnect();
+            sendFailCount = 0;
         }
     }
 }
@@ -488,7 +496,14 @@ static void drawDisplay()
         snprintf(buf, sizeof(buf), "no BME280");
     display.drawString(0, 22, buf);
 
-    snprintf(buf, sizeof(buf), "Batt: %.3fV", batteryVolt);
+    if (gIo.veValid && !isnan(gIo.ve.battV)) {
+        // Victron: battery + PV power, plus which outputs are on
+        int n = snprintf(buf, sizeof(buf), "Bat %.2fV", gIo.ve.battV);
+        if (!isnan(gIo.ve.pvW)) n += snprintf(buf + n, sizeof(buf) - n, " PV %.0fW", gIo.ve.pvW);
+        snprintf(buf + n, sizeof(buf) - n, "%s%s", gIo.heaterOn ? " H" : "", gIo.fanOn ? " F" : "");
+    } else {
+        snprintf(buf, sizeof(buf), "Batt: %.3fV%s%s", batteryVolt, gIo.heaterOn ? " H" : "", gIo.fanOn ? " F" : "");
+    }
     display.drawString(0, 33, buf);
 }
 
@@ -559,6 +574,16 @@ void setup()
     gCfg = loadConfig();
     setCpuFrequencyMhz(gCfg.cpuFreqMhz);
 
+    // PCB v2.0 revision ID on GPIO20 (ADC2: before WiFi/the portal). A v2.0
+    // board always runs as v2.0; without an ID the stored revision applies
+    // (2.0 can also be set manually there).
+    if (detectPcbV2()) gCfg.pcbVersion = PCB_REV_2_0;
+    else if (gCfg.pcbVersion == PCB_REV_2_0)
+        dbgSerial.println("PCB v2.0 set manually (no revision ID read).");
+    // v2.0: R38 holds the vane supply off until the firmware switches it on -
+    // before the first-boot portal, whose calibration wizard reads the vane.
+    windVaneSupply(true);
+
     // Boot-Anzeige: kurzer Hinweis, dann direkt weiter
     display.displayOn();
     display.clear();
@@ -592,70 +617,9 @@ void setup()
     dbgSerial.printf("PCB rev %d: Wind=GPIO%d, Rain=GPIO%d, 1-Wire=GPIO%d\n",
                   gCfg.pcbVersion, pins.windSpeed, pins.rain, pins.oneWire);
 
-    // Initialize radio + join LoRaWAN — only if the LoRaWAN transport is
-    // enabled. This blocks (with infinite retry) until joined, so it must
-    // never run for a WiFi/MQTT-only node, or setup() would hang forever.
-    if (gCfg.loraEn) {
-        int16_t radioState = RADIOLIB_ERR_UNKNOWN;
-        display.clear();
-        display.drawString(0, 0, "Radio init...");
-        display.display();
-        while (radioState != RADIOLIB_ERR_NONE) {
-            radioState = radio.begin();
-            if (radioState != RADIOLIB_ERR_NONE) {
-                char buf[32];
-                snprintf(buf, sizeof(buf), "Error code: %d", radioState);
-                display.clear();
-                display.drawString(0,  0, "Radio Error");
-                display.drawString(0, 11, buf);
-                display.drawString(0, 22, "Retry in 2 s...");
-                display.display();
-                dbgSerial.printf("Radio init failed (code %d)\n", radioState);
-                waitWithButtonPoll(2000);
-            }
-        }
-
-        // LoRaWAN join
-        display.clear();
-        display.drawString(0, 0, "LoRaWAN Join...");
-        display.display();
-        int joinAttempts = 0;
-        do {
-            persist.provision(gCfg.region, 0x00, gCfg.joinEui, gCfg.devEui, gCfg.appKey, gCfg.appKey);
-            loRaNode = persist.manage(&radio);
-
-            if (!loRaNode || !loRaNode->isActivated()) {
-                // manage() allocates a new LoRaWANNode on every call - free
-                // the failed one, or a node without gateway coverage would
-                // leak heap on every retry.
-                delete loRaNode;
-                loRaNode = nullptr;
-                ++joinAttempts;
-                dbgSerial.printf("Join failed (attempt %d), retry in 2 s...\n", joinAttempts);
-                char buf[32];
-                snprintf(buf, sizeof(buf), "Attempt %d – retry in 2 s", joinAttempts);
-                display.clear();
-                display.drawString(0,  0, "Join failed");
-                display.drawString(0, 11, buf);
-                display.drawString(0, 22, "Possible causes:");
-                display.drawString(0, 33, "- Wrong keys");
-                display.drawString(0, 44, "- No gateway");
-                display.drawString(0, 55, "Hold 3s: Config portal");
-                display.display();
-                waitWithButtonPoll(2000);
-            }
-        } while (!loRaNode || !loRaNode->isActivated());
-    } else {
-        dbgSerial.println("LoRaWAN disabled (loraEn=0) - skipping radio init/join.");
-        display.clear();
-        display.drawString(0, 0, "LoRaWAN disabled");
-        display.drawString(0, 16, gCfg.wifiEn ? "WiFi/MQTT mode" : "No transport enabled!");
-        display.display();
-        delay(1500);
-    }
-
     // BME280, 1-Wire, PCNT counters, bus1Temps[] init
     sensorsInit(pins);
+    ioInit();   // PCB v2.0 I/O block (outputs off, enabled inputs started)
 
     lastSampleMs = millis();
     lastSendMs   = millis();
@@ -664,6 +628,7 @@ void setup()
     // loop() for the non-blocking connect state machine).
     wifiMqttSetup();
     webApiSetup();
+    wxUploadSetup();
 
     // Setup done - normal operation. Take a first sub-sample right away so
     // the 20 s boot display shows real readings instead of zeros (the first
@@ -684,6 +649,8 @@ void loop()
     handleButton();
     updateDisplayState();
     wifiMqttPoll();   // non-blocking; no-op unless wifiEn is set
+    ioPoll();         // PCB v2.0: VE.Direct, pulse counters, outputs
+    timeSyncPoll();   // starts SNTP once WiFi is first up
     // Web server (handleClient()) now runs on its own FreeRTOS task on core
     // 0 (spawned by webApiSetup() in setup()) instead of being polled here —
     // see web_api.cpp's webApiTask for why (mainly: so an HTTP request isn't
@@ -720,20 +687,29 @@ void loop()
     if (sendPending && pollOneWireConversion()) {
         sendPending = false;
 
-        if (gCfg.loraEn) {
-            if (gCfg.payloadFormat == 1) buildBinaryPacket();
-            else                          buildLppPacket();
+        if (loraReady()) {
+            // Largest payload the current data rate allows (ADR can switch to
+            // SF12 = 51 bytes on EU868); the builders leave out the least
+            // important fields until the packet fits.
+            size_t limit = loRaNode->getMaxPayloadLen();
+            if (gCfg.payloadFormat == 1) buildBinaryPacket(limit);
+            else                          buildLppPacket(limit);
         }
 
         // Display update and LoRa send are independent conditions - keep
         // them as separate statements rather than duplicating the loraEn
         // check across both display-state branches.
         if (displayActive) drawDisplay();
-        if (gCfg.loraEn)   sendLoRa();
+        if (loraReady()) sendLoRa();
+        else if (gCfg.loraEn) dbgSerial.println("LoRa uplink skipped: not joined (measurements/WiFi continue).");
+        // Low-power mode: SX1262 into sleep (warm start, config kept) until
+        // the next uplink - RadioLib wakes it again on the next command.
+        if (gCfg.loraEn && lowPowerActive()) loraSleep();
         if (displayActive) display.display();
 
         mqttPublishTelemetry();   // no-op unless wifiEn+mqttEn and currently connected
         pushHistorySample();      // record this cycle's finished values for /chart
+        wxUploadPushCycle();      // feed AWEKAS/WU/... windows + daily rain total
 
         resetAccumulators();
 
@@ -743,5 +719,22 @@ void loop()
         }
     }
 
-    vTaskDelay(50 / portTICK_PERIOD_MS);   // short yield, no busy-wait
+    // RadioLib's individual join exchange is synchronous (several seconds),
+    // but no retry loop can hold setup/measurement service indefinitely.
+    if (!sendPending) loraPoll();
+
+    // Low-power mode: light sleep until the next sub-sample / uplink (VE.Direct
+    // needs ~2.5 s awake before an uplink to catch a frame); otherwise a short yield.
+    if (lowPowerActive() && !sendPending) {
+        if (gCfg.vanePowerSave && !vaneOffForMode) { windVaneSupply(false); vaneOffForMode = true; }
+        if (!gCfg.vanePowerSave && vaneOffForMode)  { windVaneSupply(true);  vaneOffForMode = false; }
+        unsigned long t = millis();
+        unsigned long toSample = sampleMs - min(sampleMs, t - lastSampleMs);
+        unsigned long toSend   = sendTargetMs - min(sendTargetMs, t - lastSendMs);
+        if (gCfg.veDirectEn) toSend = (toSend > 2500) ? toSend - 2500 : 0;
+        lowPowerSleep(min(toSample, toSend));
+    } else {
+        if (vaneOffForMode) { windVaneSupply(true); vaneOffForMode = false; }
+        vTaskDelay(50 / portTICK_PERIOD_MS);   // short yield, no busy-wait
+    }
 }

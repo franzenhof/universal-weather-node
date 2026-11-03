@@ -7,10 +7,13 @@
 #include <DallasTemperature.h>   // DEVICE_DISCONNECTED_C
 #include <esp_timer.h>
 #include "payload.h"
+#include "board_io.h"
+#include "uv_calibration.h"
 
 CayenneLPP lpp(200);
 uint8_t    binBuf[BIN_MAX_SIZE];
 size_t     binLen = 0;
+char       lastPayloadDropped[128] = "";
 
 // ============================================================================
 // MEASUREMENTS FOR THIS CYCLE (shared by both wire formats)
@@ -54,6 +57,29 @@ static Measurements currentMeasurements()
         m.hasDs18b20[i] = (i < bus1Count) && bus1Temps[i] != DEVICE_DISCONNECTED_C;
         m.ds18b20[i]    = temperatureForOutput(bus1Temps[i], gCfg);
     }
+    if (ioAnyEnabled()) {
+        m.hasIoStatus  = true;               m.ioStatus = ioStatusByte();
+        m.hasAuxAin    = gCfg.auxAinEn;      m.auxAinV = gIo.auxAinV;
+        m.hasAuxPulses = gCfg.auxPulseEn && !gCfg.wind2Mode;  m.auxPulses = gIo.auxPulsesCycle;  m.auxPulsesTotal = gIo.auxPulsesTotal;
+        m.hasAuxAin    = m.hasAuxAin && gCfg.wind2Mode != 2;
+        m.hasWind2     = gCfg.wind2Mode != 0;  m.hasWind2Dir = gCfg.wind2Mode == 2;
+        m.wind2DirDeg  = gIo.wind2DirDeg;
+        m.wind2Speed   = windSpeedForOutput(gIo.wind2SpeedMs, gCfg);
+        m.wind2Gust    = windSpeedForOutput(gIo.wind2GustMs,  gCfg);
+        m.hasOutputs   = gCfg.heaterMode || gCfg.fanMode;
+        m.heaterDuty   = gIo.heaterDuty;     m.fanDuty = gIo.fanDuty;
+        m.hasFanRpm    = gCfg.tachoEn;       m.fanRpm = gIo.fanRpm;
+        m.hasVe        = gCfg.veDirectEn && gIo.veValid;
+        m.veBattV = gIo.ve.battV;  m.veBattA = gIo.ve.battA;  m.vePvV = gIo.ve.pvV;  m.vePvW = gIo.ve.pvW;
+        m.veYieldKwh = gIo.ve.yieldTodayKwh;  m.veSocPct = gIo.ve.socPct;  m.veLoadA = gIo.ve.loadA;
+        m.veChargeState = gIo.ve.chargeState; m.veError = gIo.ve.error;
+    }
+    m.hasUv = ioV2() && gCfg.uvEn && isfinite(gIo.uvSensorVolts) &&
+              gIo.uvSensorVolts >= 0.0f && gIo.uvSensorVolts <= 5.5f;
+    if (m.hasUv) {
+        m.uvSensorVolts = gIo.uvSensorVolts;
+        if (gIo.uvIndexCalibrated && isfinite(gIo.uvIndex)) m.uvIndex = gIo.uvIndex;
+    }
     m.debug = gCfg.debugMode;
     m.dbgCycle    = loopCount;
     m.dbgSendFail = (uint8_t)min(sendFailCount, 255);
@@ -84,9 +110,8 @@ static void lppAnalog(uint8_t ch, float v) { lpp.addAnalogInput(ch, lppPrep(v, 1
 static void lppTemp  (uint8_t ch, float v) { lpp.addTemperature(ch, lppPrep(v, 10.0f, -3276.8f, 3276.7f)); }
 static void lppUInt  (uint8_t ch, float v) { lpp.addGenericSensor(ch, lppPrep(v, 1.0f, 0.0f, 4294967295.0f)); }
 
-void buildLppPacket()
+static void encodeLpp(const Measurements& m)
 {
-    const Measurements m = currentMeasurements();
     lpp.reset();
     if (m.hasWind) {
         lpp.addDirection(1, m.windDirDeg);
@@ -116,6 +141,35 @@ void buildLppPacket()
     for (int i = 0; i < 3; i++)
         if (m.hasDs18b20[i]) lppTemp(2 + i, m.ds18b20[i]);
 
+    // PCB v2.0 I/O block
+    if (m.hasIoStatus)  lpp.addDigitalInput(3, m.ioStatus);
+    if (m.hasAuxAin)    lppAnalog(5, m.auxAinV);
+    if (m.hasAuxPulses) { lppUInt(10, (float)m.auxPulses); lppUInt(11, (float)m.auxPulsesTotal); }
+    if (m.hasWind2) {
+        if (m.hasWind2Dir) lpp.addDirection(2, m.wind2DirDeg);
+        lppAnalog(6, m.wind2Speed);
+        lppAnalog(7, m.wind2Gust);
+    }
+    if (m.hasUv) {
+        lpp.addVoltage(12, lppPrep(m.uvSensorVolts, 100.0f, 0.0f, 655.35f));
+        if (isfinite(m.uvIndex) && m.uvIndex >= 0.0f)
+            lppAnalog(13, fminf(m.uvIndex, UV_INDEX_REPORT_MAX));
+        lpp.addDigitalInput(14, (uint8_t)(0x01 | (isfinite(m.uvIndex) ? 0x02 : 0x00)));
+    }
+    if (m.hasOutputs)   { lpp.addDigitalOutput(20, m.heaterDuty); lpp.addDigitalOutput(21, m.fanDuty); }
+    if (m.hasFanRpm)    lppUInt(22, m.fanRpm);
+    if (m.hasVe) {
+        if (!isnan(m.veBattV))    lpp.addVoltage(30, lppPrep(m.veBattV, 100.0f, 0.0f, 655.35f));
+        if (!isnan(m.veBattA))    lppAnalog(30, m.veBattA);
+        if (!isnan(m.veLoadA))    lppAnalog(31, m.veLoadA);
+        if (!isnan(m.vePvV))      lpp.addVoltage(31, lppPrep(m.vePvV, 100.0f, 0.0f, 655.35f));
+        if (!isnan(m.vePvW))      lpp.addPower(30, lppPrep(m.vePvW, 1.0f, 0.0f, 65535.0f));
+        if (!isnan(m.veYieldKwh)) lpp.addEnergy(30, lppPrep(m.veYieldKwh, 1000.0f, 0.0f, 4294967.0f));
+        if (!isnan(m.veSocPct))   lpp.addPercentage(30, (uint32_t)lroundf(constrain(m.veSocPct, 0.0f, 100.0f)));
+        if (m.veChargeState >= 0) lpp.addDigitalInput(30, (uint8_t)min(m.veChargeState, 255));
+        if (m.veError >= 0)       lpp.addDigitalInput(31, (uint8_t)min(m.veError, 255));
+    }
+
     if (m.debug) {
         // Keep debug channels high so production channels stay stable and compact.
         lpp.addDigitalInput(200, m.dbgCycle);
@@ -127,16 +181,38 @@ void buildLppPacket()
 
     if (lpp.getError() != LPP_ERROR_OK)
         dbgSerial.printf("LPP encoding error %d - payload truncated\n", lpp.getError());
-    // EU868: DR0-DR2 = max 51 bytes, DR3 = 115, DR4-DR5 = 222
-    if (lpp.getSize() > 51)
-        dbgSerial.printf("Info: LPP packet %d bytes (> 51, needs DR3 or faster on EU868)\n", lpp.getSize());
+}
+
+static void noteDropped(const char* format, size_t len, size_t limit)
+{
+    if (lastPayloadDropped[0])
+        dbgSerial.printf("Payload (%s): %u bytes, limit %u at the current data rate - left out: %s\n",
+                         format, (unsigned)len, (unsigned)limit, lastPayloadDropped);
+    else
+        dbgSerial.printf("Payload (%s): %u bytes (limit %u)\n", format, (unsigned)len, (unsigned)limit);
+}
+
+void buildLppPacket(size_t limit)
+{
+    Measurements m = currentMeasurements();
+    lastPayloadDropped[0] = '\0';
+    size_t used = 0;
+    encodeLpp(m);
+    while (lpp.getSize() > limit) {
+        const char* g = dropNextGroup(m);
+        if (!g) break;
+        int n = snprintf(lastPayloadDropped + used, sizeof(lastPayloadDropped) - used, "%s%s", used ? ", " : "", g);
+        if (n > 0) used = min(used + (size_t)n, sizeof(lastPayloadDropped) - 1);
+        encodeLpp(m);
+    }
+    noteDropped("CayenneLPP", lpp.getSize(), limit);
 }
 
 // ============================================================================
 // COMPACT BINARY (FPort 3) - layout and encoder: payload.h / payload_binary.cpp
 // ============================================================================
-void buildBinaryPacket()
+void buildBinaryPacket(size_t limit)
 {
-    binLen = encodeBinary(currentMeasurements(), binBuf);
-    dbgSerial.printf("Info: binary packet %d bytes (payloadFormat=1)\n", (int)binLen);
+    binLen = encodeBinaryFitted(currentMeasurements(), binBuf, limit, lastPayloadDropped, sizeof(lastPayloadDropped));
+    noteDropped("binary", binLen, limit);
 }

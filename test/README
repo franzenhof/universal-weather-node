@@ -9,9 +9,27 @@ Host-side project tests (no hardware required, run from the project root):
 - node test/payload_roundtrip.test.js
     Compiles src/payload_binary.cpp together with test/payload_roundtrip.cpp
     for the host (c++/g++/clang++, CXX overrides; skipped if none is found),
-    encodes known measurement sets (metric, imperial, minimal, out of range)
+    encodes known measurement sets (metric, imperial, minimal, out of range,
+    PCB v2.0 I/O block incl. VE.Direct)
     and checks that decoder.js returns the same values - and clamps instead
     of wrapping.
+
+- node test/vedirect.test.js
+    Compiles src/vedirect.cpp with test/vedirect_parser.cpp for the host and
+    feeds it Victron VE.Direct text-protocol streams: MPPT and BMV blocks,
+    corrupt checksums, interleaved HEX messages, a mid-stream start and
+    "---" values.
+
+- node test/firmware_runtime.test.js
+    Compiles the real sensors, board I/O, parameter, JSON and LoRa transport
+    modules with deterministic hardware fakes. Exercises stuck/recovered
+    1-Wire conversions, output/PWM shutdown, battery hysteresis and missing
+    VE.Direct/PV data, standalone wind 2, energy-setting save/read-back,
+    bounded radio/join retries, node cleanup, timer rollover and JSON >1024
+    bytes. Requires a C++11 compiler and the ArduinoJson dependency restored
+    by the normal PlatformIO build. Does not flash or simulate physical timing.
+
+Run all scripts together: node --test test/*.test.js
 
 These are plain Node.js scripts, not PlatformIO unit tests; `pio test` is
 not used in this project.

@@ -32,7 +32,7 @@ float    cpuTemperature = 0.0f;
 // RTC_NOINIT_ATTR, not RTC_DATA_ATTR: the bootloader re-initializes
 // RTC_DATA_ATTR on every boot except a deep-sleep wake - and this node never
 // deep-sleeps, so the accumulator would reset on every ESP.restart() (e.g.
-// after 10 failed uplinks) or watchdog reset. RTC_NOINIT survives those; it
+// after a manual restart) or watchdog reset. RTC_NOINIT survives those; it
 // holds garbage after power-on, hence the magic word (see
 // restoreRainAccumulator()).
 RTC_NOINIT_ATTR float    rainMMSinceStart;
@@ -52,14 +52,14 @@ static void restoreRainAccumulator()
     dbgSerial.printf("Rain since start: %.1f mm (%s)\n", rainMMSinceStart, keep ? "kept across restart" : "reset");
 }
 
+PinSet gPins = { .windSpeed = 3, .rain = 4, .oneWire = 5 };   // set by sensorsInit()
+
 namespace {
 
 TwoWire            Wire2(1);
 Adafruit_BME280    bme;
 OneWire*           oneWireBus1 = nullptr;
 DallasTemperature* sensorsBus1 = nullptr;
-
-PinSet gPins = { .windSpeed = 3, .rain = 4, .oneWire = 5 };   // set by sensorsInit()
 
 bool windPcntConfigured = false;
 bool rainPcntConfigured = false;
@@ -81,7 +81,8 @@ static int32_t pcntDelta(int16_t cur, int16_t last)
 
 PinSet getPins(int pcbVersion)
 {
-    if (pcbVersion == PCB_REV_1_3) return { .windSpeed = 6, .rain = 7, .oneWire = 5 };
+    // PCB v2.0 keeps the Rev 1.3 pins for wind, rain and 1-Wire
+    if (pcbVersion >= PCB_REV_1_3) return { .windSpeed = 6, .rain = 7, .oneWire = 5 };
     return { .windSpeed = 3, .rain = 4, .oneWire = 5 };
 }
 
@@ -173,6 +174,23 @@ void sensorsEarlyInit()
     analogReadResolution(12);
 }
 
+// Probe + configure the BME280. begin() re-reads chip ID and calibration
+// and soft-resets the chip, so this is also the re-init path after the
+// sensor was unplugged/replugged (a power-cycled BME280 comes up with
+// ctrl_hum = skip, which setSampling() restores).
+static bool initBme280()
+{
+    if (!bme.begin(I2C_ADRESS_BME280, &Wire2)) return false;
+    // Forced mode: sensor only measures on request (takeForcedMeasurement) → ~0 µA idle current
+    bme.setSampling(Adafruit_BME280::MODE_FORCED,
+                    Adafruit_BME280::SAMPLING_X1,   // Temperatur
+                    Adafruit_BME280::SAMPLING_X1,   // Luftdruck
+                    Adafruit_BME280::SAMPLING_X1,   // Luftfeuchte
+                    Adafruit_BME280::FILTER_OFF,
+                    Adafruit_BME280::STANDBY_MS_0_5);
+    return true;
+}
+
 void sensorsInit(const PinSet& pins)
 {
     gPins = pins;
@@ -190,18 +208,9 @@ void sensorsInit(const PinSet& pins)
     // BME280
     Wire2.begin(PIN_I2C_SDA_BME280, PIN_I2C_SCL_BME280, I2C_FREQUENCY);
     Wire2.setTimeOut(50);
-    bme280Present = bme.begin(I2C_ADRESS_BME280, &Wire2);
-    if (bme280Present) {
-        // Forced mode: sensor only measures on request (takeForcedMeasurement) → ~0 µA idle current
-        bme.setSampling(Adafruit_BME280::MODE_FORCED,
-                        Adafruit_BME280::SAMPLING_X1,   // Temperatur
-                        Adafruit_BME280::SAMPLING_X1,   // Luftdruck
-                        Adafruit_BME280::SAMPLING_X1,   // Luftfeuchte
-                        Adafruit_BME280::FILTER_OFF,
-                        Adafruit_BME280::STANDBY_MS_0_5);
-    } else {
+    bme280Present = initBme280();
+    if (!bme280Present)
         dbgSerial.println("BME280 not found – check wiring.");
-    }
 
     // 1-Wire (pin configured at runtime). The bus is searched in
     // startOneWireConversion(), once it is powered.
@@ -274,6 +283,10 @@ uint16_t readWindDirection()
     return (uint16_t)(((rawDeg + gCfg.windDirOffsetDeg) % 360 + 360) % 360);
 }
 
+// Pulses seen while the chip was in light sleep (low_power.cpp): the PCNT
+// units are not clocked then, so those edges are counted in software.
+volatile uint32_t sleepPulsesWind = 0, sleepPulsesRain = 0;
+
 float readPulseCounters()
 {
     int16_t       curWind = 0, curRain = 0;
@@ -284,8 +297,9 @@ float readPulseCounters()
 
     if (gCfg.windEn) {
         pcnt_get_counter_value(PCNT_UNIT_WINDSPEED, &curWind);
-        int32_t pulsesWind = pcntDelta(curWind, pulsesLastCountWindspeed);
+        int32_t pulsesWind = pcntDelta(curWind, pulsesLastCountWindspeed) + (int32_t)sleepPulsesWind;
         pulsesLastCountWindspeed = curWind;
+        sleepPulsesWind = 0;
         float pps    = (elapsed > 0) ? (float)pulsesWind / ((float)elapsed / 1000.0f) : 0.0f;
         // gCfg.windMsPerPps: sensor-specific calibration (Davis default: 1.00584,
         // derived from "2.25 mph per Hz"); configurable for other anemometers.
@@ -306,8 +320,9 @@ float readPulseCounters()
 
     if (gCfg.rainEn) {
         pcnt_get_counter_value(PCNT_UNIT_RAIN, &curRain);
-        int32_t pulsesRain = pcntDelta(curRain, pulsesLastCountRain);
+        int32_t pulsesRain = pcntDelta(curRain, pulsesLastCountRain) + (int32_t)sleepPulsesRain;
         pulsesLastCountRain = curRain;
+        sleepPulsesRain = 0;
         // gCfg.rainMmPerTip: sensor-specific calibration (Davis default: 0.2mm/tip);
         // configurable for other tipping-bucket rain gauges.
         subSampleRainMm  = (float)pulsesRain * gCfg.rainMmPerTip;
@@ -321,23 +336,49 @@ float readPulseCounters()
     return subSampleRainMm;
 }
 
-void readBme280()
+bool readBme280()
 {
-    // Forced mode: trigger a single measurement, then wait for completion
-    if (!bme.takeForcedMeasurement()) {
-        dbgSerial.println("BME280: forced measurement failed.");
-        return;
+    // Hot-plug: while absent, re-probe on every sub-sample (a missing device
+    // just NACKs its address, so this costs well under a millisecond).
+    if (!bme280Present) {
+        if (!initBme280()) return false;
+        bme280Present = true;
+        dbgSerial.println("BME280: detected, re-initialized.");
     }
-    bme280TempC    = bme.readTemperature();
-    bme280PressAbs = bme.readPressure() / 100.0f;
+
+    // Forced mode: trigger a single measurement, then wait for completion.
+    // A failed measurement or NAN (channel skipped — the chip was power-cycled
+    // and lost its config) means the sensor is gone or needs a re-init.
+    bool ok = bme.takeForcedMeasurement();
+    float t = ok ? bme.readTemperature()          : NAN;
+    float p = ok ? bme.readPressure() / 100.0f    : NAN;
+    float h = ok ? bme.readHumidity()             : NAN;
+    if (isnan(t) || isnan(p) || isnan(h)) {
+        bme280Present = false;
+        dbgSerial.println("BME280: measurement failed – marked absent, will re-probe.");
+        return false;
+    }
+    bme280TempC    = t;
+    bme280PressAbs = p;
     bme280PressSea = bme.seaLevelForAltitude(gCfg.altitudeM, bme280PressAbs);
-    bme280Humidity = bme.readHumidity();
+    bme280Humidity = h;
 
     dbgSerial.printf("BME280: %.1f °C, %.1f %%rH, %.1f hPa (abs), %.1f hPa (QNH)\n",
                   bme280TempC, bme280Humidity, bme280PressAbs, bme280PressSea);
+    return true;
 }
 
 static bool oneWireHssPowered = false;
+static unsigned long oneWireStartedMs = 0;
+static constexpr unsigned long ONE_WIRE_TIMEOUT_MS = 1000;
+
+static void powerDownOneWire()
+{
+    if (!oneWireHssPowered) return;
+    digitalWrite(PIN_1WIRE_HSS, LOW);
+    pinMode(gPins.oneWire, INPUT);
+    oneWireHssPowered = false;
+}
 
 void startOneWireConversion()
 {
@@ -355,22 +396,29 @@ void startOneWireConversion()
     // probes genuinely hot-pluggable on both revisions.
     sensorsBus1->begin();
     bus1Count = min((int)sensorsBus1->getDeviceCount(), MAX_SENSORS_PER_BUS);
+    for (int i = bus1Count; i < MAX_SENSORS_PER_BUS; i++)
+        bus1Temps[i] = DEVICE_DISCONNECTED_C;
     if (bus1Count > 0) {
         sensorsBus1->setWaitForConversion(false);   // non-blocking: request returns immediately
         sensorsBus1->requestTemperatures();
+        oneWireStartedMs = millis();
     } else {
         dbgSerial.println("1-Wire: no sensor found");
-        if (oneWireHssPowered) {
-            digitalWrite(PIN_1WIRE_HSS, LOW);
-            pinMode(gPins.oneWire, INPUT);
-        }
+        powerDownOneWire();
     }
 }
 
 bool pollOneWireConversion()
 {
     if (bus1Count == 0) return true;   // nothing was requested, see startOneWireConversion()
-    if (!sensorsBus1->isConversionComplete()) return false;
+    if (!sensorsBus1->isConversionComplete()) {
+        if (millis() - oneWireStartedMs < ONE_WIRE_TIMEOUT_MS) return false;
+        dbgSerial.println("1-Wire: conversion timed out after 1000 ms; readings unavailable, retry next cycle.");
+        for (int i = 0; i < bus1Count; i++)
+            bus1Temps[i] = DEVICE_DISCONNECTED_C;
+        powerDownOneWire();
+        return true;
+    }
 
     for (int i = 0; i < bus1Count; i++) {
         bus1Temps[i] = sensorsBus1->getTempCByIndex(i);
@@ -378,10 +426,6 @@ bool pollOneWireConversion()
             dbgSerial.printf("1-Wire sensor %d: %.1f °C\n", i, bus1Temps[i]);
     }
 
-    if (oneWireHssPowered) {
-        digitalWrite(PIN_1WIRE_HSS, LOW);
-        // DQ line high-impedance → pull-up to VCC_1WIRE=0V, no parasitic power
-        pinMode(gPins.oneWire, INPUT);
-    }
+    powerDownOneWire();
     return true;
 }

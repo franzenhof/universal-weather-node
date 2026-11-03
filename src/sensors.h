@@ -8,7 +8,7 @@
 #define PIN_ADC_VOLTBATTERY     1   // LiPo voltage measurement (ADC)
 #define PIN_ADC_WINDDIRECTION   2   // Davis wind direction (potentiometer, ADC)
 #define PIN_ADC_BATCTRL        37   // HIGH enables ADC measurement path (from heltec wifi lora v3 board rev. 3.2)
-#define PIN_1WIRE_HSS          47   // High-side switch VCC_1WIRE (LP0701N3-G via TN2106N3-G, from lorawan-weather-node pcb rev 1.3)
+#define PIN_1WIRE_HSS          47   // High-side switch VCC_1WIRE (LP0701N3-G via TN2106N3-G, from universal-weather-node pcb rev 1.3)
 #define PIN_I2C_SDA_BME280     41
 #define PIN_I2C_SCL_BME280     42
 
@@ -55,6 +55,11 @@
 // ============================================================================
 struct PinSet { int windSpeed, rain, oneWire; };
 PinSet getPins(int pcbVersion);
+extern PinSet gPins;
+
+// Wind / rain pulses counted in software during light sleep (low_power.cpp),
+// added to the PCNT counts by readPulseCounters()
+extern volatile uint32_t sleepPulsesWind, sleepPulsesRain;
 
 // Early ADC pin setup — must run before any possible WiFiManager portal call,
 // including the very first boot, so the wind-direction ADC is already usable
@@ -70,7 +75,7 @@ int      adcAverage(int pin, int samples = 8);
 float    readBatteryVoltage();
 uint16_t readWindDirection();
 float    readPulseCounters();   // updates windSpeedMs/windGustMs/rainMMSinceStart; returns this sub-sample's rain (mm)
-void     readBme280();          // updates bme280TempC/Humidity/PressAbs/PressSea
+bool     readBme280();          // updates bme280TempC/Humidity/PressAbs/PressSea; re-probes/re-inits if absent (hot-plug), false if no valid reading
 // Non-blocking DS18B20 read, split across two calls so loop() (button, WiFi/
 // MQTT poll, watchdog) stays responsive during the ~750 ms conversion time
 // instead of blocking on it. Call startOneWireConversion() once to kick off

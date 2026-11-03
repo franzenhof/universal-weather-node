@@ -1,6 +1,8 @@
 #include "history.h"
 #include "globals.h"
 #include "units.h"
+#include "board_io.h"
+#include "uv_calibration.h"
 #include <Arduino.h>
 #include <DallasTemperature.h>
 #include <esp_timer.h>
@@ -36,6 +38,8 @@ struct HistorySample {
     uint8_t  humidityX2;        // average over the bucket
     uint16_t pressureQnhX10;    // average over the bucket
     uint16_t batteryVoltX100;   // average over the bucket
+    uint16_t uvVoltsX1000;      // average over the bucket
+    uint16_t uvIndexX100;       // average over the bucket; 0xFFFF if uncalibrated
     int16_t  ds18b20X10[3];     // average over the bucket, per probe slot
 };
 
@@ -43,6 +47,7 @@ constexpr uint8_t VALID_WIND   = 1 << 0;
 constexpr uint8_t VALID_RAIN   = 1 << 1;
 constexpr uint8_t VALID_BME280 = 1 << 2;
 constexpr uint8_t VALID_LIPO   = 1 << 3;
+constexpr uint8_t VALID_UV     = 1 << 4;
 
 // Defensive clamps before scaling to their fixed-width int fields, same
 // rationale as clampLppAnalog() in lora_payload.cpp — cheap insurance
@@ -69,6 +74,8 @@ struct OpenBucket {
     uint16_t windDirLast = 0;
     float    rainRateSum = 0, rainAmountSum = 0;
     float    tempSum = 0, humiditySum = 0, pressureSum = 0, batterySum = 0;
+    float    uvVoltsSum = 0, uvIndexSum = 0;
+    uint16_t uvCount = 0, uvIndexCount = 0;
     float    ds18b20Sum[3] = {0, 0, 0};
     uint16_t ds18b20Count[3] = {0, 0, 0};
 };
@@ -116,6 +123,14 @@ void mergeIntoBucket(OpenBucket& b, unsigned long nowSec)
         b.batterySum += batteryVolt;
         b.lipoCount++;
     }
+    if (ioV2() && gCfg.uvEn && isfinite(gIo.uvSensorVolts)) {
+        b.uvVoltsSum += gIo.uvSensorVolts;
+        b.uvCount++;
+        if (gIo.uvIndexCalibrated && isfinite(gIo.uvIndex)) {
+            b.uvIndexSum += gIo.uvIndex;
+            b.uvIndexCount++;
+        }
+    }
     for (int i = 0; i < 3 && i < bus1Count; i++) {
         if (bus1Temps[i] != DEVICE_DISCONNECTED_C) {
             b.ds18b20Sum[i] += bus1Temps[i];
@@ -134,7 +149,7 @@ void mergeIntoBucket(OpenBucket& b, unsigned long nowSec)
 bool sampleFromBucket(const OpenBucket& b, unsigned long endSec, HistorySample& out)
 {
     bool anyDs18b20 = b.ds18b20Count[0] || b.ds18b20Count[1] || b.ds18b20Count[2];
-    if (!(b.windCount || b.rainCount || b.bmeCount || b.lipoCount || anyDs18b20)) return false;
+    if (!(b.windCount || b.rainCount || b.bmeCount || b.lipoCount || b.uvCount || anyDs18b20)) return false;
 
     out = HistorySample{};
     out.bucketEndSec = endSec;
@@ -163,6 +178,13 @@ bool sampleFromBucket(const OpenBucket& b, unsigned long endSec, HistorySample& 
     if (b.lipoCount) {
         out.validMask       |= VALID_LIPO;
         out.batteryVoltX100  = (uint16_t)roundf(b.batterySum / b.lipoCount * 100.0f);
+    }
+    if (b.uvCount) {
+        out.validMask |= VALID_UV;
+        out.uvVoltsX1000 = (uint16_t)constrain(lroundf(b.uvVoltsSum / b.uvCount * 1000.0f), 0L, 5500L);
+        out.uvIndexX100 = b.uvIndexCount
+            ? (uint16_t)constrain(lroundf(fminf(b.uvIndexSum / b.uvIndexCount, UV_INDEX_REPORT_MAX) * 100.0f), 0L, 32767L)
+            : 0xFFFF;
     }
     return true;
 }
@@ -203,6 +225,8 @@ void serializeTier(JsonDocument& doc, unsigned long nowSec, const HistorySample*
     JsonArray humidityPct = doc["humidityPct"].to<JsonArray>();
     JsonArray pressureQnh = doc["pressureQnh"].to<JsonArray>();
     JsonArray batteryVolt = doc["batteryVolt"].to<JsonArray>();
+    JsonArray uvSensorVolts = doc["uvSensorVolts"].to<JsonArray>();
+    JsonArray uvIndex = doc["uvIndex"].to<JsonArray>();
     JsonArray ds18b20_0   = doc["ds18b20_0"].to<JsonArray>();
     JsonArray ds18b20_1   = doc["ds18b20_1"].to<JsonArray>();
     JsonArray ds18b20_2   = doc["ds18b20_2"].to<JsonArray>();
@@ -241,6 +265,14 @@ void serializeTier(JsonDocument& doc, unsigned long nowSec, const HistorySample*
         } else {
             batteryVolt.add(nullptr);
         }
+        if (s.validMask & VALID_UV) {
+            uvSensorVolts.add(s.uvVoltsX1000 / 1000.0f);
+            if (s.uvIndexX100 != 0xFFFF) uvIndex.add(s.uvIndexX100 / 100.0f);
+            else uvIndex.add(nullptr);
+        } else {
+            uvSensorVolts.add(nullptr);
+            uvIndex.add(nullptr);
+        }
         for (int i = 0; i < 3; i++) {
             if (s.ds18b20X10[i] == DS18B20_INVALID_X10) ds18b20Arrays[i].add(nullptr);
             else ds18b20Arrays[i].add(temperatureForOutput(s.ds18b20X10[i] / 10.0f, gCfg));
@@ -265,6 +297,8 @@ void serializeTier(JsonDocument& doc, unsigned long nowSec, const HistorySample*
     doc["rainUnit"]     = rainUnitLabel(gCfg);
     doc["tempUnit"]     = temperatureUnitLabel(gCfg);
     doc["pressureUnit"] = pressureUnitLabel(gCfg);
+    doc["uvSensorVoltsUnit"] = "V";
+    doc["uvIndexUnit"] = "index";
 }
 
 } // namespace

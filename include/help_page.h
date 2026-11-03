@@ -8,8 +8,9 @@
 // Scoped to exactly the Markdown subset actually used in this project's
 // README.md: headings, bold/italic, inline code, code fences, tables,
 // blockquotes, hr, ordered/unordered lists, links, paragraphs. No nested
-// lists, no raw HTML passthrough (the only raw-HTML block in the source,
-// the picture gallery, is stripped at build time — see tools/version.py).
+// lists, no raw HTML passthrough (raw-HTML blocks in the source — picture
+// galleries, badges — sit between <!-- help:skip --> markers and are
+// stripped at build time, see tools/version.py).
 static const char HELP_PAGE_HTML[] PROGMEM = R"HELPPAGE(
 <!doctype html>
 <html>

@@ -1,6 +1,7 @@
 #include "portal.h"
 #include "globals.h"
 #include "sensors.h"
+#include "board_io.h"
 #include "generated_version.h"
 #include "decoder_js.h"
 #include "readme_md.h"
@@ -79,8 +80,10 @@ Config runConfigPortal(const Config& cur)
 
     char b_dev[17], b_join[17], b_key[33], b_region[8], b_pcb[4], b_alt[8], b_uplink[8], b_sample[4], b_windoff[6], b_windunit[2], b_debug[2], b_cpu[4], b_payfmt[2], b_unitsys[2];
     char b_rainmmtip[12], b_windmspp[12], b_winddirtyp[2];
-    char b_loraen[2];
+    char b_loraen[2], b_lowpower[2], b_vanesave[2];
     itoa(cur.loraEn,          b_loraen,  10);
+    itoa(cur.lowPowerEn,      b_lowpower, 10);
+    itoa(cur.vanePowerSave,   b_vanesave, 10);
     uint64ToHex(cur.devEui, b_dev, sizeof(b_dev));
     uint64ToHex(cur.joinEui, b_join, sizeof(b_join));
     bytesToHex(cur.appKey, 16, b_key, sizeof(b_key));
@@ -98,6 +101,36 @@ Config runConfigPortal(const Config& cur)
     dtostrf(cur.rainMmPerTip,  1, 4, b_rainmmtip);
     dtostrf(cur.windMsPerPps,  1, 4, b_windmspp);
     itoa(cur.windDirSensorType, b_winddirtyp, 10);
+
+    // PCB v2.0 I/O block fields
+    char b_wind2[2], b_wind2off[6];
+    itoa(cur.wind2Mode,         b_wind2,    10);
+    itoa(cur.wind2DirOffsetDeg, b_wind2off, 10);
+    char b_auxainen[2], b_auxainscale[12], b_auxpulseen[2], b_heatmode[2], b_heatduty[4], b_heatbelow[8], b_heatminduty[4], b_heatfull[8];
+    char b_fanmode[2], b_fanduty[4], b_fanabove[8], b_fanminpv[6], b_tachoen[2], b_tachoppr[2], b_vedirecten[2], b_outminbatt[6];
+    itoa(cur.auxAinEn,      b_auxainen,   10);
+    dtostrf(cur.auxAinScale, 1, 3, b_auxainscale);
+    itoa(cur.auxPulseEn,    b_auxpulseen, 10);
+    itoa(cur.heaterMode,    b_heatmode,   10);
+    itoa(cur.heaterDutyPct, b_heatduty,   10);
+    dtostrf(cur.heaterOnBelowDc / 10.0f, 1, 1, b_heatbelow);
+    itoa(cur.heaterMinDutyPct, b_heatminduty, 10);
+    dtostrf(cur.heaterFullBelowDc / 10.0f, 1, 1, b_heatfull);
+    itoa(cur.fanMode,       b_fanmode,    10);
+    itoa(cur.fanDutyPct,    b_fanduty,    10);
+    dtostrf(cur.fanOnAboveDc / 10.0f, 1, 1, b_fanabove);
+    itoa(cur.fanMinPvW,     b_fanminpv,   10);
+    itoa(cur.tachoEn,       b_tachoen,    10);
+    itoa(cur.tachoPpr,      b_tachoppr,   10);
+    itoa(cur.veDirectEn,    b_vedirecten, 10);
+    dtostrf(cur.outMinBattDv / 10.0f, 1, 1, b_outminbatt);
+    char b_uven[2], b_uvscale[12], b_uvindexen[2], b_uvcal[2], b_uvslope[12], b_uvoffset[12];
+    itoa(cur.uvEn, b_uven, 10);
+    dtostrf(cur.uvAinScale, 1, 5, b_uvscale);
+    itoa(cur.uvIndexEn, b_uvindexen, 10);
+    itoa(cur.uvCalibrated, b_uvcal, 10);
+    dtostrf(cur.uvIndexSlope, 1, 3, b_uvslope);
+    dtostrf(cur.uvIndexOffset, 1, 3, b_uvoffset);
 
     // Parallel WiFi + MQTT transport fields
     char b_wifien[2], b_mqtten[2], b_mqttctrlen[2], b_mqttport[8], b_mqtttls[2], b_webapien[2];
@@ -134,11 +167,13 @@ Config runConfigPortal(const Config& cur)
 
     WiFiManagerParameter p_lora_section("<div style='margin:0.5rem 0 0.5rem 0;'><strong>LoRaWAN</strong></div>");
     WiFiManagerParameter p_loraen("loraen", "LoRaWAN transport enabled (0=No, 1=Yes)", b_loraen, 2);
+    WiFiManagerParameter p_lowpower("lowpower", "Low-power mode: light sleep between samples (LoRa only, WiFi off; 0=No, 1=Yes)", b_lowpower, 2);
+    WiFiManagerParameter p_vanesave("vanesave", "Low-power mode: switch the wind-vane supply off between readings (PCB v2.0; 0=No, 1=Yes)", b_vanesave, 2);
     WiFiManagerParameter p_dev    ("dev",      "DevEUI (16 hex chars)",                        b_dev,     17);
     WiFiManagerParameter p_join   ("join",     "JoinEUI (16 hex chars)",                       b_join,    17);
     WiFiManagerParameter p_key    ("key",      "AppKey (32 hex chars)",                        b_key,     33);
     WiFiManagerParameter p_region ("region",   "LoRaWAN region (EU868, US915, AU915, AS923, IN865, KR920, CN470, RU864)", b_region, 8);
-    WiFiManagerParameter p_pcb    ("pcbver",   "PCB revision (12=Rev1.2, 13=Rev1.3)",          b_pcb,     3);
+    WiFiManagerParameter p_pcb    ("pcbver",   "PCB revision (12=Rev1.2, 13=Rev1.3, 20=v2.0; v2.0 is detected automatically)", b_pcb, 3);
     WiFiManagerParameter p_alt    ("altitude", "Altitude above sea level in m (0-4000)",       b_alt,     6);
     WiFiManagerParameter p_uplink ("uplinksec","Uplink interval in s (5-3600 typical)",         b_uplink, 7);
     WiFiManagerParameter p_sample ("samplesec","Sample interval in s (1 to uplink interval)",  b_sample, 4);
@@ -167,13 +202,46 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_lipo   ("lipoen",   "LiPo measurement enabled (0=No, 1=Yes)",       cur.lipoEn ? "1" : "0", 2);
     WiFiManagerParameter p_debug  ("debugmode","Debug mode (0=No, 1=Yes, sends extra telemetry)", b_debug, 2);
     WiFiManagerParameter p_cpu    ("cpufreq",  "CPU frequency in MHz (80 or 240)",             b_cpu,     4);
-    WiFiManagerParameter p_payfmt ("payfmt",   "LoRaWAN payload format (0=CayenneLPP, 1=compact binary, ~50% smaller)", b_payfmt, 2);
-    WiFiManagerParameter p_section("<div style='margin:0.5rem 0 0.75rem 0;'><h3>LoRa-Weather-Node Parameter</h3><p style='margin:0 0 0.35rem 0;'>Firmware version: " FIRMWARE_VERSION "</p><p style='margin:0;'>Device settings are shown here on a separate page.</p></div>");
+    WiFiManagerParameter p_payfmt ("payfmt",   "LoRaWAN payload format: 1 = compact binary (FPort 3, recommended), 0 = CayenneLPP (FPort 1, about twice the size). "
+                                               "At slow data rates (SF10-SF12: max. 51 bytes) the node leaves out the least important values "
+                                               "(debug, AUX, outputs, Victron, LiPo, DS18B20, then BME280, rain, wind) until the uplink fits - "
+                                               "binary usually sends everything, CayenneLPP often has to drop some. Both need the matching decoder (Payload decoder button).",
+                                   b_payfmt, 2);
+    // PCB v2.0 I/O block, all off by default; ignored on Rev 1.2/1.3.
+    WiFiManagerParameter p_io_section(gIo.hwIdDetected
+        ? "<div style='margin:0.5rem 0 0.5rem 0;'><strong>PCB v2.0 Inputs / Outputs</strong> (board detected as v2.0)</div>"
+        : "<div style='margin:0.5rem 0 0.5rem 0;'><strong>PCB v2.0 Inputs / Outputs</strong> (only used on PCB v2.0)</div>");
+    WiFiManagerParameter p_auxainen  ("auxainen",   "AUX analog input GPIO4 (0=off, 1=on)",                    b_auxainen,   2);
+    WiFiManagerParameter p_auxainscale("auxainscale","AUX analog scale (1 = direct, 1.66667 with R25 15k for 0-5 V)", b_auxainscale, 11);
+    WiFiManagerParameter p_auxpulseen("auxpulseen", "AUX pulse counter GPIO48 (0=off, 1=on)",                  b_auxpulseen, 2);
+    WiFiManagerParameter p_wind2     ("wind2",      "2nd wind sensor on AUX (0=off, 1=speed at PULSE, 2=speed + direction at AIN)", b_wind2, 2);
+    WiFiManagerParameter p_wind2off  ("wind2off",   "2nd wind vane offset in degrees (-180 to 180)",          b_wind2off,   5);
+    WiFiManagerParameter p_heatmode  ("heatmode",   "Heater J12 (0=off, 1=on, 2=auto below threshold)",        b_heatmode,   2);
+    WiFiManagerParameter p_heatduty  ("heatduty",   "Heater power in % (1-100, PWM; auto: at full-power temperature)", b_heatduty, 4);
+    WiFiManagerParameter p_heatbelow ("heatbelow",  "Heater auto: on below °C (off 1 K above)",                b_heatbelow,  7);
+    WiFiManagerParameter p_heatminduty("heatminduty","Heater auto: power in % at the switch-on temperature",   b_heatminduty, 4);
+    WiFiManagerParameter p_heatfull  ("heatfull",   "Heater auto: full power at and below °C",                 b_heatfull,   7);
+    WiFiManagerParameter p_fanmode   ("fanmode",    "Fan J13 (0=off, 1=on, 2=auto above threshold)",           b_fanmode,    2);
+    WiFiManagerParameter p_fanduty   ("fanduty",    "Fan speed in % (1-100, PWM)",                             b_fanduty,    4);
+    WiFiManagerParameter p_fanabove  ("fanabove",   "Fan auto: on from °C (off 1 K below)",                    b_fanabove,   7);
+    WiFiManagerParameter p_fanminpv  ("fanminpv",   "Fan auto: minimum PV W (0=ignore; missing VE.Direct data=off)", b_fanminpv,   5);
+    WiFiManagerParameter p_tachoen   ("tachoen",    "Fan tacho GPIO40 (0=off, 1=on)",                          b_tachoen,    2);
+    WiFiManagerParameter p_tachoppr  ("tachoppr",   "Tacho pulses per revolution (PC fans: 2)",                b_tachoppr,   2);
+    WiFiManagerParameter p_vedirecten("vedirecten", "Victron VE.Direct (0=off, 1=on)",                         b_vedirecten, 2);
+    WiFiManagerParameter p_outminbatt("outminbatt", "Heater/fan minimum battery V (0=no limit; missing VE.Direct data=off)",  b_outminbatt, 5);
+    WiFiManagerParameter p_uven("uven", "UV sensor on GPIO3 (0=off, 1=on; PCB v2.0 only)", b_uven, 2);
+    WiFiManagerParameter p_uvscale("uvscale", "UV divider scale (terminal V per ADC V: 1.10989 for JP10 1-2 / 0-3.3 V, 1.66534 for JP10 2-3 / 0-5 V)", b_uvscale, 11);
+    WiFiManagerParameter p_uvindexen("uvindexen", "Publish calculated UV index (0=off, 1=on)", b_uvindexen, 2);
+    WiFiManagerParameter p_uvcal("uvcal", "UV calibration explicitly verified (0=no, 1=yes)", b_uvcal, 2);
+    WiFiManagerParameter p_uvslope("uvslope", "UV index calibration slope (index per volt, 0.001-30)", b_uvslope, 11);
+    WiFiManagerParameter p_uvoffset("uvoffset", "UV index calibration offset (-10 to +10)", b_uvoffset, 11);
+
+    WiFiManagerParameter p_section("<div style='margin:0.5rem 0 0.75rem 0;'><h3>Universal-Weather-Node Parameter</h3><p style='margin:0 0 0.35rem 0;'>Firmware version: " FIRMWARE_VERSION "</p><p style='margin:0;'>Device settings are shown here on a separate page.</p></div>");
 
     // Parallel WiFi + MQTT transport, fully optional alongside LoRaWAN. WiFi
     // STA credentials/static-IP are configured via WiFiManager's own "wifi"
     // menu, not here.
-    WiFiManagerParameter p_net_section("<div style='margin:1rem 0 0.75rem 0;'><h3>WiFi + MQTT Parameter</h3><p style='margin:0;'>WiFi network credentials and static IP (optional, default DHCP) are configured separately via the \"Configure WiFi\" menu.</p></div>");
+    WiFiManagerParameter p_net_section("<div style='margin:1rem 0 0.75rem 0;'><h3>WiFi + MQTT Parameter</h3><p style='margin:0;'>WiFi network credentials and static IP (optional, default DHCP) are configured separately via the \"Configure WiFi\" menu.</p><p style='margin:0.35rem 0 0 0;'>Weather network uploads (AWEKAS, Weather Underground, ...) and time zone are set on the node's web settings page (http://&lt;node-ip&gt;/api/settings) once WiFi is up.</p></div>");
     WiFiManagerParameter p_wifien    ("wifien",     "WiFi enabled (0=No, 1=Yes) - master switch for MQTT/Web API", b_wifien, 2);
     WiFiManagerParameter p_devname   ("devname",    "Device name (WiFi hostname, MQTT client id, default topic prefix)", cur.deviceName, 33);
     WiFiManagerParameter p_webapien  ("webapien",   "Web REST API + settings page enabled (0=No, 1=Yes)", b_webapien, 2);
@@ -191,7 +259,7 @@ Config runConfigPortal(const Config& cur)
     WiFiManager wm;
     const char* menu[] = { "wifi", "info", "custom", "sep", "exit" };
     wm.setMenu(menu, 5);
-    wm.setCustomMenuHTML("<div style='margin:0.75rem 0 1rem 0;'><div style='font-size:0.85rem;opacity:0.75;margin:0 0 0.25rem 0;'>Firmware version: " FIRMWARE_VERSION "</div><form action='/param' method='get'><button>LoRa-Weather-Node Parameter</button></form><br/><form action='/decoder' method='get'><button>Payload decoder (JS)</button></form><br/><form action='/help' method='get'><button>Help / Documentation</button></form><br/><form action='/calibrate' method='get'><button>Calibrate Wind Direction</button></form><br/><form action='/update' method='get'><button>Firmwareupdate</button></form></div>");
+    wm.setCustomMenuHTML("<div style='margin:0.75rem 0 1rem 0;'><div style='font-size:0.85rem;opacity:0.75;margin:0 0 0.25rem 0;'>Firmware version: " FIRMWARE_VERSION "</div><form action='/param' method='get'><button>Universal-Weather-Node Parameter</button></form><br/><form action='/decoder' method='get'><button>Payload decoder (JS)</button></form><br/><form action='/help' method='get'><button>Help / Documentation</button></form><br/><form action='/calibrate' method='get'><button>Calibrate Wind Direction</button></form><br/><form action='/update' method='get'><button>Firmwareupdate</button></form></div>");
 
     // Static IP (optional, default DHCP): shown as WiFiManager's own built-in
     // IP/Gateway/Subnet/DNS fields on the "Configure WiFi" page (not a custom
@@ -288,7 +356,69 @@ Config runConfigPortal(const Config& cur)
         if (strlen(p_key.getValue())  == 32) hexToBytes(p_key.getValue(), c.appKey, 16);
         normalizeRegionInput(p_region.getValue(), c.region, sizeof(c.region));
         int pcb = atoi(p_pcb.getValue());
-        c.pcbVersion       = (pcb == PCB_REV_1_2) ? PCB_REV_1_2 : PCB_REV_1_3;
+        c.pcbVersion       = (pcb == PCB_REV_1_2 || pcb == PCB_REV_2_0) ? pcb : PCB_REV_1_3;
+        if (gIo.hwIdDetected) c.pcbVersion = PCB_REV_2_0;   // the ID divider wins
+
+        // PCB v2.0 I/O block - out-of-range input keeps the previous value.
+        auto intIn = [](WiFiManagerParameter& p, int lo, int hi, int keep) {
+            const char* v = p.getValue();
+            if (!v[0]) return keep;
+            int n = atoi(v);
+            return (n < lo || n > hi) ? keep : n;
+        };
+        auto dIn = [](WiFiManagerParameter& p, float lo, float hi, int keep) {   // °C / V -> x10
+            const char* v = p.getValue();
+            if (!v[0]) return keep;
+            float f = atof(v);
+            return (f < lo || f > hi) ? keep : (int)lroundf(f * 10.0f);
+        };
+        c.auxAinEn        = atoi(p_auxainen.getValue())   == 1 ? 1 : 0;
+        float scale = atof(p_auxainscale.getValue());
+        if (scale > 0.0f && scale <= 20.0f) c.auxAinScale = scale;
+        c.auxPulseEn      = atoi(p_auxpulseen.getValue()) == 1 ? 1 : 0;
+        c.wind2Mode       = constrain(atoi(p_wind2.getValue()), 0, 2);
+        c.wind2DirOffsetDeg = constrain(atoi(p_wind2off.getValue()), -180, 180);
+        if (c.wind2Mode >= 1) c.auxPulseEn = 0;   // the 2nd wind sensor uses the AUX inputs
+        if (c.wind2Mode == 2) c.auxAinEn = 0;
+        c.heaterMode      = intIn(p_heatmode, 0, 2, 0);
+        c.heaterDutyPct   = intIn(p_heatduty, 1, 100, c.heaterDutyPct);
+        c.heaterOnBelowDc = dIn(p_heatbelow, -40.0f, 40.0f, c.heaterOnBelowDc);
+        c.heaterMinDutyPct = intIn(p_heatminduty, 1, 100, c.heaterMinDutyPct);
+        c.heaterFullBelowDc = dIn(p_heatfull, -40.0f, 40.0f, c.heaterFullBelowDc);
+        c.fanMode         = intIn(p_fanmode, 0, 2, 0);
+        c.fanDutyPct      = intIn(p_fanduty, 1, 100, c.fanDutyPct);
+        c.fanOnAboveDc    = dIn(p_fanabove, -40.0f, 60.0f, c.fanOnAboveDc);
+        c.fanMinPvW       = intIn(p_fanminpv, 0, 5000, c.fanMinPvW);
+        c.tachoEn         = atoi(p_tachoen.getValue())    == 1 ? 1 : 0;
+        c.tachoPpr        = intIn(p_tachoppr, 1, 8, c.tachoPpr);
+        c.veDirectEn      = atoi(p_vedirecten.getValue()) == 1 ? 1 : 0;
+        c.outMinBattDv    = dIn(p_outminbatt, 0.0f, 60.0f, c.outMinBattDv);
+        auto uvFloat = [](WiFiManagerParameter& p, float keep, float lo, float hi, const char* label) -> float {
+            const char* text = p.getValue();
+            char* end = nullptr;
+            float value = strtof(text, &end);
+            if (!text[0] || *end != '\0' || !isfinite(value) || value < lo || value > hi) {
+                dbgSerial.printf("Config portal: invalid %s; keeping previous setting.\n", label);
+                return keep;
+            }
+            return value;
+        };
+        auto uvBool = [](WiFiManagerParameter& p, int keep, const char* label) -> int {
+            const char* value = p.getValue();
+            if (!strcmp(value, "0") || !strcmp(value, "1")) return value[0] == '1';
+            dbgSerial.printf("Config portal: invalid %s; keeping previous setting.\n", label);
+            return keep;
+        };
+        c.uvEn = uvBool(p_uven, c.uvEn, "UV sensor enable");
+        if (c.uvEn && c.pcbVersion < PCB_REV_2_0) {
+            c.uvEn = 0;
+            dbgSerial.println("Config portal: UV sensor rejected on Rev 1.x; PCB v2.0 required.");
+        }
+        c.uvAinScale = uvFloat(p_uvscale, c.uvAinScale, 1.0f, 5.0f, "UV divider scale");
+        c.uvIndexEn = uvBool(p_uvindexen, c.uvIndexEn, "UV index enable");
+        c.uvCalibrated = uvBool(p_uvcal, c.uvCalibrated, "UV calibration flag");
+        c.uvIndexSlope = uvFloat(p_uvslope, c.uvIndexSlope, 0.001f, 30.0f, "UV index slope");
+        c.uvIndexOffset = uvFloat(p_uvoffset, c.uvIndexOffset, -10.0f, 10.0f, "UV index offset");
         // >= 0, not > 0: 0 m (sea level) is a valid altitude and must not be
         // silently rejected in favor of the previously stored value.
         if (atoi(p_alt.getValue()) >= 0) c.altitudeM = atoi(p_alt.getValue());
@@ -322,6 +452,8 @@ Config runConfigPortal(const Config& cur)
 
         // Parallel WiFi + MQTT transport
         c.loraEn     = atoi(p_loraen.getValue()) ? 1 : 0;
+        c.lowPowerEn = atoi(p_lowpower.getValue()) ? 1 : 0;
+        c.vanePowerSave = atoi(p_vanesave.getValue()) ? 1 : 0;
         c.wifiEn     = atoi(p_wifien.getValue()) ? 1 : 0;
         strlcpy(c.deviceName, p_devname.getValue(), sizeof(c.deviceName));
         // Static IP fields only come from the separate "Configure WiFi" page
@@ -373,7 +505,7 @@ Config runConfigPortal(const Config& cur)
         strlcpy(capturedCaCert, v.c_str(), sizeof(capturedCaCert));
         capturedCaCertSet = true;
 
-        // Persist immediately. The "LoRa-Weather-Node Parameter" page
+        // Persist immediately. The "Universal-Weather-Node Parameter" page
         // (/param) is a separate form from "Configure WiFi", and
         // startConfigPortal() only returns once THAT one is submitted — a
         // user who only needs to change parameters (the common case) would
@@ -411,6 +543,8 @@ Config runConfigPortal(const Config& cur)
     wm.addParameter(&p_section);
     wm.addParameter(&p_lora_section);
     wm.addParameter(&p_loraen);
+    wm.addParameter(&p_lowpower);
+    wm.addParameter(&p_vanesave);
     wm.addParameter(&p_dev);    wm.addParameter(&p_join);   wm.addParameter(&p_key); wm.addParameter(&p_region);
     wm.addParameter(&p_payfmt);
     wm.addParameter(&p_units_section);
@@ -423,6 +557,18 @@ Config runConfigPortal(const Config& cur)
     wm.addParameter(&p_sample);
     wm.addParameter(&p_winden);
     wm.addParameter(&p_rainen); wm.addParameter(&p_lipo);   wm.addParameter(&p_debug); wm.addParameter(&p_cpu);
+
+    wm.addParameter(&p_io_section);
+    wm.addParameter(&p_auxainen);  wm.addParameter(&p_auxainscale); wm.addParameter(&p_auxpulseen);
+    wm.addParameter(&p_wind2);     wm.addParameter(&p_wind2off);
+    wm.addParameter(&p_heatmode);  wm.addParameter(&p_heatduty);    wm.addParameter(&p_heatbelow);
+    wm.addParameter(&p_heatminduty); wm.addParameter(&p_heatfull);
+    wm.addParameter(&p_fanmode);   wm.addParameter(&p_fanduty);     wm.addParameter(&p_fanabove);
+    wm.addParameter(&p_fanminpv);  wm.addParameter(&p_tachoen);     wm.addParameter(&p_tachoppr);
+    wm.addParameter(&p_vedirecten); wm.addParameter(&p_outminbatt);
+    wm.addParameter(&p_uven); wm.addParameter(&p_uvscale);
+    wm.addParameter(&p_uvindexen); wm.addParameter(&p_uvcal);
+    wm.addParameter(&p_uvslope); wm.addParameter(&p_uvoffset);
 
     wm.addParameter(&p_net_section);
     wm.addParameter(&p_wifien);   wm.addParameter(&p_devname);

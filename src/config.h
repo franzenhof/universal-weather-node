@@ -21,6 +21,10 @@ enum MqttTlsMode {
 // polarity in configureWindPcnt()/configureRainPcnt()).
 constexpr int PCB_REV_1_2 = 12;
 constexpr int PCB_REV_1_3 = 13;
+// v2.0 (KiCad/SMD): same pins as Rev 1.3 plus the I/O block (board_io.cpp).
+// Detected at boot via the revision ID divider on GPIO20, so the stored value
+// only matters as a manual override when the ID can't be read.
+constexpr int PCB_REV_2_0 = 20;
 
 // ============================================================================
 // CONFIGURATION (persistent via NVS / Preferences)
@@ -56,7 +60,7 @@ struct Config {
     volatile int lipoEn            = 0;   // 1 = LiPo measurement enabled (saves 4 LPP bytes when 0)
     volatile int debugMode         = 0;   // 1 = include debug telemetry in payload
     volatile int cpuFreqMhz        = 80;  // 80 or 240 MHz; below 80 not allowed (PCNT-APB)
-    volatile int payloadFormat     = 0;   // 0 = CayenneLPP (FPort 1), 1 = compact binary (FPort 3, ~50% smaller)
+    volatile int payloadFormat     = 1;   // 1 = compact binary (FPort 3, default), 0 = CayenneLPP (FPort 1, ~2x larger)
     volatile int unitSystem        = 0;   // 0 = Metric (°C, mm, hPa, wind per windUnitMs), 1 = Imperial (°F, in, inHg, mph)
 
     // ------------------------------------------------------------------
@@ -78,6 +82,8 @@ struct Config {
     // Parallel WiFi + MQTT transport (all independent, default disabled)
     // ------------------------------------------------------------------
     int      loraEn            = 1;   // 1 = LoRaWAN transport enabled
+    volatile int lowPowerEn    = 0;   // 1 = light sleep between sub-samples (LoRa-only operation, see low_power.cpp)
+    volatile int vanePowerSave = 1;   // 1 = low-power mode also switches the wind-vane supply off between readings (PCB v2.0)
     int      wifiEn            = 0;   // 1 = WiFi STA enabled (master switch for mqttEn/webApiEn)
     int      mqttEn            = 0;   // 1 = MQTT publish/control enabled (requires wifiEn)
     int      webApiEn          = 0;   // 1 = REST API + settings page enabled (requires wifiEn)
@@ -96,6 +102,63 @@ struct Config {
     int      mqttTlsMode       = 0;   // MqttTlsMode (see above)
     char     mqttCaCert[2048]  = "";  // PEM root CA, only used when mqttTlsMode == MQTT_TLS_VERIFY
     char     webAdminPass[33]  = "";  // gates write access to the web settings page
+
+    // ------------------------------------------------------------------
+    // Wall clock (NTP) + direct weather-network uploads (all need wifiEn)
+    // ------------------------------------------------------------------
+    // POSIX TZ string (see time_sync.cpp). Default: Central Europe with DST.
+    char     timeZone[48]      = "CET-1CEST,M3.5.0,M10.5.0/3";
+    char     ntpServer[65]     = "pool.ntp.org";
+    // Station position, decimal degrees as text ("47.1234") so an unset
+    // value stays distinguishable from a real 0.0. Only sent to AWEKAS.
+    char     latitude[12]      = "";
+    char     longitude[12]     = "";
+    // Each network is enabled by a non-empty station ID/user (same rule as
+    // weather-data-bridge's env vars), interval in seconds per network.
+    char     awekasUser[33]    = "";
+    char     awekasPass[33]    = "";
+    int      awekasIntervalSec = 300;
+    char     wuStationId[33]   = "";
+    char     wuStationKey[33]  = "";
+    int      wuIntervalSec     = 300;
+    char     wcloudId[33]      = "";
+    char     wcloudKey[33]     = "";
+    int      wcloudIntervalSec = 600;
+    char     wnetproId[33]     = "";
+    char     wnetproKey[33]    = "";
+    int      wnetproIntervalSec = 60;
+
+    // ------------------------------------------------------------------
+    // PCB v2.0 I/O block (board_io.cpp) - all off by default, ignored on
+    // Rev 1.2/1.3. Written by applyParam() like the fields above (volatile).
+    // Temperatures in 0.1 °C, independent of unitSystem.
+    // ------------------------------------------------------------------
+    volatile int   auxAinEn       = 0;     // 1 = AUX analog input (GPIO4)
+    volatile float auxAinScale    = 1.0f;  // V at terminal per V at pin (R25 15k fitted: 1.66667)
+    volatile int   auxPulseEn     = 0;     // 1 = AUX pulse counter (GPIO48)
+    volatile int   wind2Mode      = 0;     // 2nd anemometer on AUX: 0 = off, 1 = speed (PULSE),
+                                           // 2 = speed + direction (PULSE + AIN); replaces the AUX functions
+    volatile int   wind2DirOffsetDeg = 0;  // north alignment of the 2nd vane (-180..180)
+    volatile int   heaterMode     = 0;     // 0 = off, 1 = on, 2 = auto (below heaterOnBelowDc)
+    volatile int   heaterDutyPct  = 100;   // PWM duty when on (mode 1) / at heaterFullBelowDc and colder (auto)
+    volatile int   heaterOnBelowDc = 40;   // auto: on below 4.0 °C, off 1 K above
+    volatile int   heaterMinDutyPct = 10;  // auto: PWM duty at heaterOnBelowDc, rising linearly to
+    volatile int   heaterFullBelowDc = -100; // heaterDutyPct at -10.0 °C
+    volatile int   fanMode        = 0;     // 0 = off, 1 = on, 2 = auto (above fanOnAboveDc)
+    volatile int   fanDutyPct     = 100;   // PWM duty while on (1-100 %)
+    volatile int   fanOnAboveDc   = 150;   // auto: on from 15.0 °C, off 1 K below
+    volatile int   fanMinPvW      = 0;     // auto: requires valid VE.Direct PV >= limit; 0 = ignore
+    volatile int   tachoEn        = 0;     // 1 = fan tacho (GPIO40)
+    volatile int   tachoPpr       = 2;     // tacho pulses per revolution (PC fans: 2)
+    volatile int   veDirectEn     = 0;     // 1 = Victron VE.Direct (GPIO33 RX / GPIO34 TX)
+    volatile int   outMinBattDv   = 0;     // heater/fan locked out below this battery voltage
+                                           // or without valid VE.Direct (0.1 V); 0 = no limit
+    volatile int   uvEn           = 0;     // 1 = UV sensor analog voltage on GPIO3 (PCB v2.0 only)
+    volatile float uvAinScale     = 1.10989f; // terminal V per ADC V; JP10 1-2: 1.10989, 2-3: 1.66534
+    volatile int   uvIndexEn      = 0;     // 1 = publish calculated UV index; requires explicit calibration flag
+    volatile int   uvCalibrated   = 0;     // explicit user confirmation that slope/offset are calibrated
+    volatile float uvIndexSlope  = 1.0f;  // UV index per terminal volt
+    volatile float uvIndexOffset = 0.0f;  // UV index offset
 };
 
 Config loadConfig();

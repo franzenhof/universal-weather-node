@@ -83,7 +83,15 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outlin
 .chart{background:var(--panel);border:1px solid var(--border);border-radius:10px;
        padding:0.75rem 0.75rem 0.5rem;margin-bottom:0.9rem;}
 .chart h4{margin:0 0 0.4rem;font-size:0.85rem;color:var(--dim);text-transform:uppercase;letter-spacing:0.04em;}
-canvas.trend{width:100%;height:170px;display:block;}
+canvas.trend{width:100%;height:170px;display:block;cursor:crosshair;touch-action:pan-y;}
+.chart{position:relative;}
+.tip{position:absolute;display:none;pointer-events:none;z-index:2;background:var(--panel);
+     border:1px solid var(--border);border-radius:8px;padding:0.45rem 0.6rem;font-size:0.78rem;
+     box-shadow:0 6px 18px rgba(0,0,0,0.18);white-space:nowrap;}
+.tip .when{color:var(--dim);margin-bottom:0.3rem;}
+.tip .row{display:flex;align-items:center;gap:0.4rem;line-height:1.5;}
+.tip .sw{width:0.6rem;height:0.6rem;border-radius:50%;flex:none;}
+.tip b{font-family:ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;margin-left:auto;padding-left:0.9rem;}
 </style>
 </head>
 <body>
@@ -144,13 +152,14 @@ var I18N = {
         refreshOff:'Off',
         unitsMetric:'Units: Metric', unitsImperial:'Units: Imperial',
         temperature:'Temperature', humidity:'Humidity', pressure:'Pressure', pressureQnh:'Pressure (QNH)',
+        uvVoltage:'UV sensor voltage', uvIndex:'UV index',
         wind:'Wind', windChart:'Wind speed / gust', rainRate:'Rain rate', rainAmount:'Rain amount', battery:'Battery',
         ds18b20:'Ext. temp', ds18b20Chart:'External temperature sensors',
         probe0:'Sensor 1', probe1:'Sensor 2', probe2:'Sensor 3',
         gust:'Gust', speed:'Speed', min:'Min', max:'Max', records:'Records (min · avg · max)',
         noData:'No data yet', noDataShort:'no data', from:'from',
         failedLoad:'Failed to load history: ',
-        dirs:['N','E','S','W'] },
+        direction:'Direction', dirs:['N','E','S','W'] },
   de: { navStatus:'Status', navLog:'Protokoll', navSettings:'Einstellungen', navHelp:'Hilfe / Dokumentation',
         heading:'Messverlauf', buffered:'Verlauf gespeichert', loading:'Lädt...',
         noHistory:'Noch keine Daten — nach dem nächsten Messzyklus wieder vorbeischauen.',
@@ -159,13 +168,14 @@ var I18N = {
         refreshOff:'Aus',
         unitsMetric:'Einheiten: Metrisch', unitsImperial:'Einheiten: Imperial',
         temperature:'Temperatur', humidity:'Luftfeuchte', pressure:'Luftdruck', pressureQnh:'Luftdruck (QNH)',
+        uvVoltage:'UV-Sensorspannung', uvIndex:'UV-Index',
         wind:'Wind', windChart:'Windgeschwindigkeit / Böen', rainRate:'Regenrate', rainAmount:'Niederschlag', battery:'Batterie',
         ds18b20:'Außentemp.', ds18b20Chart:'Externe Temperatursensoren',
         probe0:'Sensor 1', probe1:'Sensor 2', probe2:'Sensor 3',
         gust:'Böe', speed:'Geschwindigkeit', min:'Min', max:'Max', records:'Rekorde (Min · Ø · Max)',
         noData:'Noch keine Daten', noDataShort:'keine Daten', from:'aus',
         failedLoad:'Verlauf konnte nicht geladen werden: ',
-        dirs:['N','O','S','W'] },
+        direction:'Richtung', dirs:['N','O','S','W'] },
   fr: { navStatus:'État', navLog:'Journal', navSettings:'Paramètres', navHelp:'Aide / Documentation',
         heading:'Historique des mesures', buffered:"d'historique en mémoire", loading:'Chargement...',
         noHistory:'Pas encore de données — revenez après le prochain cycle de mesure.',
@@ -174,13 +184,14 @@ var I18N = {
         refreshOff:'Désactivé',
         unitsMetric:'Unités : Métrique', unitsImperial:'Unités : Impérial',
         temperature:'Température', humidity:'Humidité', pressure:'Pression', pressureQnh:'Pression (QNH)',
+        uvVoltage:'Tension du capteur UV', uvIndex:'Indice UV',
         wind:'Vent', windChart:'Vitesse du vent / rafales', rainRate:'Intensité de pluie', rainAmount:'Quantité de pluie', battery:'Batterie',
         ds18b20:'Temp. ext.', ds18b20Chart:'Sondes de température externes',
         probe0:'Capteur 1', probe1:'Capteur 2', probe2:'Capteur 3',
         gust:'Rafale', speed:'Vitesse', min:'Min', max:'Max', records:'Records (min · moy · max)',
         noData:'Pas encore de données', noDataShort:'aucune donnée', from:'de',
         failedLoad:"Échec du chargement de l'historique : ",
-        dirs:['N','E','S','O'] },
+        direction:'Direction', dirs:['N','E','S','O'] },
   es: { navStatus:'Estado', navLog:'Registro', navSettings:'Ajustes', navHelp:'Ayuda / Documentación',
         heading:'Historial de mediciones', buffered:'de historial almacenado', loading:'Cargando...',
         noHistory:'Aún no hay datos — vuelve después del próximo ciclo de medición.',
@@ -189,13 +200,14 @@ var I18N = {
         refreshOff:'Desactivado',
         unitsMetric:'Unidades: Métrico', unitsImperial:'Unidades: Imperial',
         temperature:'Temperatura', humidity:'Humedad', pressure:'Presión', pressureQnh:'Presión (QNH)',
+        uvVoltage:'Voltaje del sensor UV', uvIndex:'Índice UV',
         wind:'Viento', windChart:'Velocidad del viento / rachas', rainRate:'Intensidad de lluvia', rainAmount:'Cantidad de lluvia', battery:'Batería',
         ds18b20:'Temp. ext.', ds18b20Chart:'Sensores de temperatura externos',
         probe0:'Sensor 1', probe1:'Sensor 2', probe2:'Sensor 3',
         gust:'Racha', speed:'Velocidad', min:'Mín', max:'Máx', records:'Récords (mín · media · máx)',
         noData:'Aún no hay datos', noDataShort:'sin datos', from:'desde',
         failedLoad:'No se pudo cargar el historial: ',
-        dirs:['N','E','S','O'] },
+        direction:'Dirección', dirs:['N','E','S','O'] },
   pt: { navStatus:'Estado', navLog:'Registro', navSettings:'Configurações', navHelp:'Ajuda / Documentação',
         heading:'Histórico de medições', buffered:'de histórico armazenado', loading:'Carregando...',
         noHistory:'Ainda sem dados — volte após o próximo ciclo de medição.',
@@ -204,13 +216,14 @@ var I18N = {
         refreshOff:'Desativado',
         unitsMetric:'Unidades: Métrico', unitsImperial:'Unidades: Imperial',
         temperature:'Temperatura', humidity:'Umidade', pressure:'Pressão', pressureQnh:'Pressão (QNH)',
+        uvVoltage:'Tensão do sensor UV', uvIndex:'Índice UV',
         wind:'Vento', windChart:'Velocidade do vento / rajadas', rainRate:'Intensidade de chuva', rainAmount:'Quantidade de chuva', battery:'Bateria',
         ds18b20:'Temp. ext.', ds18b20Chart:'Sensores de temperatura externos',
         probe0:'Sensor 1', probe1:'Sensor 2', probe2:'Sensor 3',
         gust:'Rajada', speed:'Velocidade', min:'Mín', max:'Máx', records:'Registros (mín · média · máx)',
         noData:'Ainda sem dados', noDataShort:'sem dados', from:'de',
         failedLoad:'Falha ao carregar histórico: ',
-        dirs:['N','E','S','O'] }
+        direction:'Direção', dirs:['N','E','S','O'] }
 };
 var SUPPORTED_LANGS = ['en', 'de', 'fr', 'es', 'pt'];
 var LANG_NAMES = { en:'English', de:'Deutsch', fr:'Français', es:'Español', pt:'Português' };
@@ -507,9 +520,7 @@ CARDS.forEach(function (c) {
 
 function drawSpark(canvas, values, color) {
   var w = canvas.clientWidth || 160, h = 34;
-  canvas.width = w; canvas.height = h;
-  var ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, w, h);
+  var ctx = setupHiDpi(canvas, w, h);
   var vals = values.filter(function (v) { return v !== null && v !== undefined; });
   if (vals.length < 2) return;
   var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
@@ -610,28 +621,41 @@ function buildRecords(data) {
 // --- Full trend charts: gridlines, area fill (single-series), legend
 // (multi-series), several relative-time x-axis ticks. ---
 var CHARTS = [
-  { id: 'temp',     titleKey: 'temperature', series: [{ key: 'temp', color: '#e2694f' }], unitKey: 'tempUnit' },
-  { id: 'humidity', titleKey: 'humidity',    series: [{ key: 'humidityPct', color: '#4aa8e0' }], unit: '%' },
+  { id: 'temp',     titleKey: 'temperature', series: [{ key: 'temp', color: '#e2694f' }], unitKey: 'tempUnit', isTemp: true },
+  { id: 'humidity', titleKey: 'humidity',    series: [{ key: 'humidityPct', color: '#4aa8e0' }], unit: '%', decimals: 0 },
   { id: 'pressure', titleKey: 'pressureQnh', series: [{ key: 'pressureQnh', color: '#59b370' }], unitKey: 'pressureUnit' },
   { id: 'wind',     titleKey: 'windChart',   series: [{ key: 'windSpeed', color: '#4a90d9', labelKey: 'speed' }, { key: 'windGust', color: '#a468c9', labelKey: 'gust' }], unitKey: 'windUnit', minZero: true },
   { id: 'rain',     titleKey: 'rainRate',    series: [{ key: 'rainRate', color: '#3f7fc1' }], unitKey: 'rainRateUnit', minZero: true },
   { id: 'rainMm',   titleKey: 'rainAmount',  series: [{ key: 'rainMm', color: '#2f6690' }], unitKey: 'rainUnit', minZero: true },
-  { id: 'battery',  titleKey: 'battery',     series: [{ key: 'batteryVolt', color: '#e0a63e' }], unit: 'V' },
+  { id: 'battery',  titleKey: 'battery',     series: [{ key: 'batteryVolt', color: '#e0a63e' }], unit: 'V', decimals: 2 },
+  { id: 'uvVoltage', titleKey: 'uvVoltage', series: [{ key: 'uvSensorVolts', color: '#7b61a8' }], unit: 'V', decimals: 3, minZero: true },
+  { id: 'uvIndex', titleKey: 'uvIndex', series: [{ key: 'uvIndex', color: '#d9822b' }], unit: 'UV', decimals: 1, minZero: true },
   { id: 'ds18b20',  titleKey: 'ds18b20Chart',
     series: [{ key: 'ds18b20_0', color: '#c96fa8', labelKey: 'probe0' },
              { key: 'ds18b20_1', color: '#7a5fc4', labelKey: 'probe1' },
              { key: 'ds18b20_2', color: '#3f9b8c', labelKey: 'probe2' }],
-    unitKey: 'tempUnit' }
+    unitKey: 'tempUnit', isTemp: true }
 ];
-var chartsEl = document.getElementById('charts'), canvases = {}, chartTitleEls = {}, chartContainerEls = {};
+var chartsEl = document.getElementById('charts'), canvases = {}, chartTitleEls = {}, chartContainerEls = {}, tipEls = {};
 CHARTS.forEach(function (c) {
   var div = document.createElement('div');
   div.className = 'chart';
-  div.innerHTML = '<h4></h4><canvas class="trend"></canvas>';
+  div.innerHTML = '<h4></h4><canvas class="trend"></canvas><div class="tip"></div>';
   chartsEl.appendChild(div);
-  canvases[c.id] = div.querySelector('canvas');
+  var canvas = div.querySelector('canvas');
+  canvases[c.id] = canvas;
   chartTitleEls[c.id] = div.querySelector('h4');
   chartContainerEls[c.id] = div;
+  tipEls[c.id] = div.querySelector('.tip');
+  canvas.addEventListener('pointermove', function (e) { setHover(chartIndexAt(canvas, e.clientX), c.id); });
+  canvas.addEventListener('pointerdown', function (e) { setHover(chartIndexAt(canvas, e.clientX), c.id); });
+  // Mouse: leaving the chart ends the hover. Touch: pointerleave also fires
+  // right after lifting the finger, so the tooltip instead stays until the
+  // next tap outside a chart (see the document listener below).
+  canvas.addEventListener('pointerleave', function (e) { if (e.pointerType !== 'touch') setHover(null, null); });
+});
+document.addEventListener('pointerdown', function (e) {
+  if (!(e.target.classList && e.target.classList.contains('trend'))) setHover(null, null);
 });
 
 // Card labels and chart headings are built once above but their text
@@ -643,11 +667,26 @@ function translateDynamicTitles() {
 }
 translateDynamicTitles();
 
-function drawChart(canvas, ageSec, series, unit, anchorMs, minZero) {
-  var w = canvas.clientWidth || 900, h = 170;
-  canvas.width = w; canvas.height = h;
+// Sizes the canvas backing store to the device pixel ratio and scales the
+// context to match, so drawing code keeps working in CSS pixels while lines
+// and text stay sharp on HiDPI/retina screens instead of being upscaled.
+function setupHiDpi(canvas, w, h) {
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
   var ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  return ctx;
+}
+function withAlpha(hex, a) {
+  var v = parseInt(hex.slice(1), 16);
+  return 'rgba(' + (v >> 16) + ',' + ((v >> 8) & 255) + ',' + (v & 255) + ',' + a + ')';
+}
+
+function drawChart(canvas, ageSec, series, anchorMs, minZero) {
+  var w = canvas.clientWidth || 900, h = 170;
+  var ctx = setupHiDpi(canvas, w, h);
+  canvas._geo = null;
   var pad = { l: 48, r: 10, t: 8, b: 20 };
   var plotW = w - pad.l - pad.r, plotH = h - pad.t - pad.b;
   var grid = cssVar('--border'), dim = cssVar('--dim');
@@ -698,10 +737,12 @@ function drawChart(canvas, ageSec, series, unit, anchorMs, minZero) {
       if (!started) { ctx.moveTo(x, y); firstX = x; started = true; } else ctx.lineTo(x, y);
       lastX = x;
     }
-    ctx.strokeStyle = s.color; ctx.lineWidth = 1.75; ctx.stroke();
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.75; ctx.lineJoin = 'round'; ctx.stroke();
     if (series.length === 1) {
       ctx.lineTo(lastX, pad.t + plotH); ctx.lineTo(firstX, pad.t + plotH); ctx.closePath();
-      ctx.globalAlpha = 0.12; ctx.fillStyle = s.color; ctx.fill(); ctx.globalAlpha = 1;
+      var grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + plotH);
+      grad.addColorStop(0, withAlpha(s.color, 0.28)); grad.addColorStop(1, withAlpha(s.color, 0.02));
+      ctx.fillStyle = grad; ctx.fill();
     }
   });
 
@@ -714,6 +755,81 @@ function drawChart(canvas, ageSec, series, unit, anchorMs, minZero) {
       ctx.fillStyle = dim; ctx.fillText(t(s.labelKey) || s.key, lx + 8, ly + 12 * i + 7);
     });
   }
+
+  // Geometry for the hover handlers (chartIndexAt/updateTooltip), then the
+  // shared hover crosshair: dashed vertical line plus one dot per series.
+  canvas._geo = { n: n, xAt: xAt, padL: pad.l, plotW: plotW, top: pad.t };
+  if (hoverIdx !== null && hoverIdx < n) {
+    var hx = xAt(hoverIdx), panel = cssVar('--panel');
+    ctx.strokeStyle = dim; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(hx, pad.t); ctx.lineTo(hx, pad.t + plotH); ctx.stroke();
+    ctx.setLineDash([]);
+    series.forEach(function (s) {
+      var v = s.data[hoverIdx];
+      if (v === null || v === undefined) return;
+      ctx.beginPath(); ctx.arc(hx, yAt(v), 4, 0, 2 * Math.PI);
+      ctx.fillStyle = s.color; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = panel; ctx.stroke();
+    });
+  }
+}
+
+// --- Hover crosshair + tooltip, synchronized across all trend charts: they
+// share one time axis (same ageSec array), so the same index is the same
+// moment in every chart — the crosshair shows in all of them, the tooltip
+// only in the one under the pointer. Pointer events cover mouse and touch;
+// redraws are coalesced to one per animation frame. ---
+var hoverIdx = null, hoverChartId = null, hoverFrame = 0, chartState = {};
+function chartIndexAt(canvas, clientX) {
+  var g = canvas._geo;
+  if (!g || g.n < 1) return null;
+  var x = clientX - canvas.getBoundingClientRect().left;
+  var i = g.n <= 1 ? 0 : Math.round((x - g.padL) / g.plotW * (g.n - 1));
+  return Math.max(0, Math.min(g.n - 1, i));
+}
+function setHover(idx, chartId) {
+  if (idx === hoverIdx && chartId === hoverChartId) return;
+  hoverIdx = idx; hoverChartId = chartId;
+  if (hoverFrame) return;
+  hoverFrame = requestAnimationFrame(function () { hoverFrame = 0; redrawCharts(); });
+}
+function drawChartFor(id) {
+  var st = chartState[id];
+  if (st) drawChart(canvases[id], st.ageSec, st.series, st.anchorMs, st.minZero);
+}
+function redrawCharts() {
+  CHARTS.forEach(function (c) { drawChartFor(c.id); });
+  updateTooltip();
+}
+function tooltipTime(sec, anchorMs) {
+  var d = new Date(anchorMs - sec * 1000), locale = LOCALES[lang] || 'en-US';
+  return d.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' +
+         d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) + ' &middot; ' + agoLabel(sec);
+}
+function tipRow(color, label, value) {
+  return '<div class="row"><span class="sw" style="background:' + color + '"></span>' + label + '<b>' + value + '</b></div>';
+}
+function updateTooltip() {
+  CHARTS.forEach(function (c) {
+    var tip = tipEls[c.id], st = chartState[c.id], canvas = canvases[c.id], g = canvas._geo;
+    if (hoverIdx === null || c.id !== hoverChartId || !st || !g || hoverIdx >= g.n) { tip.style.display = 'none'; return; }
+    var html = '<div class="when">' + tooltipTime(st.ageSec[hoverIdx], st.anchorMs) + '</div>';
+    st.series.forEach(function (s) {
+      var v = s.data[hoverIdx];
+      html += tipRow(s.color, s.labelKey ? t(s.labelKey) : t(c.titleKey),
+                     v === null || v === undefined ? '--' : v.toFixed(st.decimals) + ' ' + st.unit);
+    });
+    var dir = st.dir ? st.dir[hoverIdx] : null;
+    if (dir !== null && dir !== undefined) html += tipRow(cssVar('--accent'), t('direction'), Math.round(dir) + '&deg;');
+    tip.innerHTML = html;
+    tip.style.display = 'block';
+    // Right of the crosshair, flipped to its left near the right edge.
+    var x = canvas.offsetLeft + g.xAt(hoverIdx), container = chartContainerEls[c.id];
+    var left = x + 14;
+    if (left + tip.offsetWidth > container.clientWidth - 4) left = x - 14 - tip.offsetWidth;
+    tip.style.left = Math.max(4, left) + 'px';
+    tip.style.top = (canvas.offsetTop + g.top + 4) + 'px';
+  });
 }
 
 var lastHist = null, lastCurrent = null;
@@ -790,11 +906,17 @@ function render(rawHist, rawCurrent) {
     // A multi-series chart (wind, ds18b20) keeps whichever series actually
     // have data (e.g. only 1 of 3 DS18B20 probes wired up) and only hides
     // the whole panel once every one of its series is empty.
-    if (!series.length) { container.style.display = 'none'; return; }
+    if (!series.length) { container.style.display = 'none'; delete chartState[c.id]; return; }
     container.style.display = '';
     var unit = c.unit || data[c.unitKey] || '';
-    drawChart(canvases[c.id], data.ageSec || [], series, unit, nowMs, c.minZero);
+    // Inches (rain in / in/h, pressure inHg) need 2 decimals to say anything.
+    var decimals = unit.indexOf('in') === 0 ? 2 : (c.decimals === undefined ? 1 : c.decimals);
+    chartState[c.id] = { ageSec: data.ageSec || [], series: series, anchorMs: nowMs, minZero: c.minZero,
+                         unit: (c.isTemp ? '°' : '') + unit, decimals: decimals,
+                         dir: c.id === 'wind' ? data.windDirDeg : null };
+    drawChartFor(c.id);
   });
+  updateTooltip();
 }
 
 // The device only advances its sensor readings and appends a new history

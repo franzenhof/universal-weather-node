@@ -1,0 +1,28 @@
+#pragma once
+#include <Arduino.h>
+constexpr int RADIOLIB_ERR_NONE=0;
+extern int hostRadioResult,hostRadioBegins,hostJoinCalls,hostNodes,hostSleeps;
+extern bool hostProvisionOk,hostJoinOk;
+extern int hostSessionSaves;
+struct SX1262 {
+    int begin() { ++hostRadioBegins; return hostRadioResult; }
+    void sleep() { ++hostSleeps; }
+};
+extern SX1262 radio;
+struct LoRaWANNode {
+    bool active;
+    LoRaWANNode():active(hostJoinOk) { ++hostNodes; }
+    ~LoRaWANNode() { --hostNodes; }
+    bool isActivated() { return active; }
+    void clearSession() { active=false; }
+};
+struct HostPersistence {
+    bool provision(const char*,int,uint64_t,uint64_t,const uint8_t*,const uint8_t*) { return hostProvisionOk; }
+    LoRaWANNode* manage(SX1262*) { ++hostJoinCalls; return new LoRaWANNode; }
+    bool saveSession(LoRaWANNode* node) {
+        if (node->isActivated()) return false;
+        ++hostSessionSaves;
+        return true;
+    }
+};
+extern HostPersistence persist;

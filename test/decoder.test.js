@@ -62,6 +62,79 @@ function testLppDebugChannels() {
   eq(Decode(1, legacy).debug_free_heap_kib, 121.6, 'LPP legacy analog heap');
 }
 
+function testLppIoBlock() {
+  const bytes = [
+    3, 0, 0x03,                        // io status: heater + fan on
+    5, 2, 0x01, 0xF4,                  // ch5 AUX analog 5.00 V
+    10, 100, 0x00, 0x00, 0x00, 0x07,   // ch10 AUX pulses 7
+    11, 100, 0x00, 0x01, 0x00, 0x00,   // ch11 AUX total 65536
+    20, 1, 0x32,                       // ch20 heater 50 %
+    21, 1, 0x64,                       // ch21 fan 100 %
+    22, 100, 0x00, 0x00, 0x0B, 0xB8,   // ch22 fan 3000 rpm
+    1, 116, 0x01, 0x8F,                // ch1 voltage: LiPo 3.99 V
+    30, 116, 0x05, 0x2D,               // ch30 voltage: Victron battery 13.25 V
+    30, 2, 0xFE, 0x0C,                 // ch30 analog: battery -5.00 A
+    31, 116, 0x0E, 0xD8,               // ch31 voltage: PV 38.00 V
+    30, 128, 0x00, 0x2A,               // ch30 power: PV 42 W
+    30, 131, 0x00, 0x00, 0x00, 0x7B,   // ch30 energy: 0.123 kWh
+    30, 120, 0x57,                     // ch30 percentage: SOC 87 %
+    30, 0, 0x05,                       // ch30 digital in: CS float
+    31, 0, 0x00,                       // ch31 digital in: no error
+    2, 132, 0x00, 0x5A,                // ch2 direction: wind 2 at 90 deg
+    6, 2, 0x01, 0xC8,                  // ch6 analog: wind 2 speed 4.56
+    7, 2, 0x03, 0xDB                   // ch7 analog: wind 2 gust 9.87
+  ];
+  const d = Decode(1, bytes);
+  eq(d.io_status.heater_on, true, 'LPP io heater on');
+  eq(d.io_status.fan_stalled, false, 'LPP io fan stalled');
+  eq(d.aux_analog_v, 5, 'LPP AUX analog');
+  eq(d.aux_pulses, 7, 'LPP AUX pulses');
+  eq(d.wind2_direction_deg, 90, 'LPP wind 2 direction');
+  eq(d.wind2_speed_avg, 4.56, 'LPP wind 2 speed');
+  eq(d.wind2_gust, 9.87, 'LPP wind 2 gust');
+  eq(d.aux_pulses_total, 65536, 'LPP AUX total');
+  eq(d.heater_duty_pct, 50, 'LPP heater duty');
+  eq(d.fan_duty_pct, 100, 'LPP fan duty');
+  eq(d.fan_rpm, 3000, 'LPP fan rpm');
+  eq(d.battery_v, 3.99, 'LPP LiPo voltage stays on ch1');
+  eq(d.victron_battery_v, 13.25, 'LPP Victron battery V');
+  eq(d.victron_battery_a, -5, 'LPP Victron battery A');
+  eq(d.victron_pv_v, 38, 'LPP Victron PV V');
+  eq(d.victron_pv_w, 42, 'LPP Victron PV W');
+  eq(d.victron_yield_today_kwh, 0.123, 'LPP Victron yield');
+  eq(d.victron_soc_pct, 87, 'LPP Victron SOC');
+  eq(d.victron_charge_state_text, 'float', 'LPP Victron CS');
+  eq(d.victron_error, 0, 'LPP Victron error');
+}
+
+function testUvLppChannels() {
+  const d = Decode(1, [
+    12, 116, 0x01, 0xF4,  // 5.00 V
+    13, 2, 0x04, 0xD2,   // index 12.34
+    14, 0, 0x03          // enabled and calibrated
+  ]);
+  eq(d.uv_sensor_voltage_v, 5, 'LPP UV voltage');
+  eq(d.uv_sensor_voltage_unit, 'V', 'LPP UV voltage unit');
+  eq(d.uv_index, 12.34, 'LPP UV index');
+  eq(d.uv_index_unit, 'index', 'LPP UV index unit');
+  eq(d.uv_sensor_enabled, true, 'LPP UV enabled flag');
+  eq(d.uv_index_calibrated, true, 'LPP UV calibrated flag');
+}
+
+function testBinaryUvExtensionAndTruncation() {
+  const bytes = [3, 0, 0, 0, 0x80, 0x13, 0x87, 0x09, 0xF6, 0x03];
+  const d = Decode(3, bytes);
+  eq(d.proto_version, 3, 'binary v3 parsed');
+  eq(d.uv_sensor_voltage_v, 4.999, 'binary UV voltage');
+  eq(d.uv_sensor_voltage_unit, 'V', 'binary UV voltage unit');
+  eq(d.uv_index, 25.5, 'binary UV index');
+  eq(d.uv_index_unit, 'index', 'binary UV index unit');
+  eq(d.uv_index_calibrated, true, 'binary UV calibration flag');
+  const truncated = Decode(3, bytes.slice(0, -1));
+  assert.ok(typeof truncated.error === 'string' && truncated.error.indexOf('truncated binary UV') !== -1,
+    'truncated UV extension rejected');
+}
+
 function testBinaryVersion1StillDecoded() {
   const bytes = [
     0x01,
@@ -84,6 +157,9 @@ function testBinaryUnknownVersion() {
 testLppMetric();
 testLppImperialResolution();
 testLppDebugChannels();
+testLppIoBlock();
+testUvLppChannels();
+testBinaryUvExtensionAndTruncation();
 testBinaryVersion1StillDecoded();
 testBinaryUnknownVersion();
 console.log('All decoder tests passed.');
