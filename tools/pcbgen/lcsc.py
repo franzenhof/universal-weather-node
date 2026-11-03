@@ -73,7 +73,7 @@ LCSC = {
     "100nF 100V": ("C344180", "CCTC TCC0805X7R104K101DT", False),
     "LMR36520": ("C2879422", "TI LMR36520ADDAR", False),
     "NCE60P50K": ("C130104", "NCE Power NCE60P50K", False),
-    "MMBT3904": ("C108429", "Nexperia MMBT3904", False),
+    "MMBT3904": ("C20526", "Jiangsu Changjing MMBT3904(RANGE:100-300)", True),
     "PTC 1.1A 60V": ("C315903", "Littelfuse 2920L110/60MR", False),
     "FUSE5A32": ("C310964", "AEM F1206FA5000V032TM (5 A, 32 VDC)", False),
     "FUSE4A250": ("C19712551", "SETsafe SCT6125T4A250V (4 A, 250 V)", False),

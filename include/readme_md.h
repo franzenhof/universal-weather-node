@@ -190,6 +190,16 @@ DRC: **0 errors, 0 unconnected items, 0 schematic-parity issues**; nine known te
 
 **Before paying:** follow the [assembly and bring-up checklist](pcb/v2.0/CHECKLIST.md). Check parts availability, polarity/rotation in the manufacturer's preview, the quote and how the 21 THT components will be assembled. DNP means **do not populate**; fit optional parts only as instructed. The Heltec module and jumper shunts are separate from the SMD placement file. Pricing has not been re-quoted.
 
+**JLCPCB rotations updated on 2026-11-03:** the regular CPL now includes
+the corrections checked step by step against the supplied JLCPCB previews:
+U1-U5 and Q3 +270 degrees, article-matched SOT-23 transistors/diodes +180.
+Q8 now uses C20526 (Jiangsu Changjing MMBT3904). The production folder contains
+only one BOM and one corrected CPL; temporary raw positions are not order files
+and are removed by the export.
+Recheck the final manufacturer's preview, especially if any selected article
+changes; this visual check does not qualify the hardware or approve the order
+on your behalf.
+
 The [3D-print files and assembly guide](3dprint/README.md) include separate cases for
 Rev 1.2/1.3 and a new [v2.0 indoor prototype enclosure](3dprint/v20/) for the
 100 × 100 mm PCB. The v2.0 case has a display window, exterior PRG button,

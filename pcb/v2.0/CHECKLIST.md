@@ -21,6 +21,32 @@ KiCad rotations are not a guarantee of JLCPCB library orientation: complete the
 assembly preview checks below before paying. Availability, price and actual
 hardware performance have not been qualified.
 
+**Ordering update, 2026-11-03:** Q8 now uses Jiangsu Changjing
+MMBT3904(RANGE:100-300), **C20526**, instead of the unavailable Nexperia C108429.
+It remains a 40 V / 200 mA NPN in SOT-23 with pins 1=base, 2=emitter,
+3=collector; board geometry and circuit are unchanged. JLCPCB lists C20526 as
+a Basic part; confirm stock in the actual order.
+
+**JLCPCB orientation conversion checked on 2026-11-03:** corrections were
+reviewed in five successive preview steps, ending with the supplied capture
+at 21:39:32 UTC. Q3's purple marker was confirmed by the user as library pin 1;
+the final image puts it upper right, with source/gate at top and drain below.
+U1-U5 and the SOT-23 pin-1 marks match the PCB; visible two-terminal diode
+cathode bands and C6's plus mark also agree. Q4/Q7 retain tab at top and gate
+at lower left. No coordinates or PCB copper were changed.
+
+| File | Use |
+|------|-----|
+| [JLCPCB CPL](production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | Corrected order positions: 125 top-side SMD parts |
+| [JLCPCB BOM](production/universal-weather-node-v2.0-bom-jlcpcb.csv) | Current part selection including Q8/C20526 |
+
+Offsets: U1-U5/Q3 **+270 degrees**, Q1/Q2/Q5/Q6/Q8/Q9 and the selected
+BAT54S/PESD5V0S2BT SOT-23 diodes **+180 degrees**. C6, Q4/Q7 and
+two-terminal diodes require no offset for the selected models.
+Recheck the manufacturer's final order preview and any substitutions before
+paying. These visual checks do not verify actual stock, the order's complete
+part selection, soldering quality or real hardware performance.
+
 ## A. JLCPCB assembly preview (before paying)
 
 The back silkscreen contains a standalone 0.8 mm operating reference: power/USB

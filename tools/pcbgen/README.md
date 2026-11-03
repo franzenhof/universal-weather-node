@@ -18,6 +18,7 @@ circuit or layout change (or edit the board directly in KiCad for small changes)
 | `checknet.py`, `domaincheck.py`, `drc.py` | checks: netlist vs. design, isolation, DRC summary |
 | `build2.sh` | full flow: schematic → ERC → netlist → placement → parallel Freerouting attempts → best board |
 | `export.sh` | Gerber/drill ZIP, JLCPCB BOM/CPL, schematic PDF, renders, final DRC |
+| `jlcpcb_cpl.py` | Corrected JLCPCB CPL from temporary raw positions, with article/angle guards |
 
 Requirements: KiCad 10 (`kicad-cli` and its bundled Python with `pcbnew`), Java and
 [Freerouting](https://github.com/freerouting/freerouting) 2.5 (`FREEROUTING_JAR=/path/freerouting-2.5.0.jar`).
@@ -45,6 +46,52 @@ electrical copper, footprints or the schematic.
 The 5 V source is selected manually with JP8: 1–2 for the VIN buck, 2–3 for
 external 5 V, or no shunt for USB-only operation. Never connect USB while an
 external source is powering the board. There is no automatic source isolation.
+
+## JLCPCB orientation review
+
+`export.sh` uses temporary raw KiCad positions under `tools/pcbgen/out/`,
+generates the corrected `*-cpl-jlcpcb.csv` and removes the temporary files.
+Only one order BOM and one corrected CPL are published. Rotation rules and
+check statuses live in the helper, not additional order-like CSV files.
+
+The numeric SOIC +270 and SOT-23 +180 rules were initially researched in
+[Fabrication-Toolkit](https://github.com/bennymeg/Fabrication-Toolkit/blob/7f627b6be76081b962161b9eb9fe3a326a18c915/plugins/transformations.csv).
+The helper is independently implemented; it does not copy toolkit source.
+Successive supplied JLCPCB previews were then checked against PCB pads:
+
+- U1-U5 and Q3: +270 degrees. U2/U3, U5 and Q3 offsets were determined from
+  their selected library pin-1 marks, not a blanket package rule.
+- SOT-23 parts C15127, C20917, C37130, C20526, C8592 and C49338: +180 degrees.
+- C6: no offset; plus already agrees with the PCB, unlike the generic
+  electrolytic rule.
+- Q4/Q7 and the two-terminal diodes: no offset; tab/gate and cathode bands
+  agree in the final preview.
+
+For Q3, the user confirmed the purple dot as library pin 1 and the
+1-3 source / 4 gate / 5-8 drain mapping. The final supplied preview at
+21:39:32 UTC shows pin 1 upper right, gate upper left and drain below.
+All positions, sides and references remain unchanged.
+
+```bash
+python3 -B tools/pcbgen/jlcpcb_cpl.py \
+  /path/to/temporary-raw-cpl.csv \
+  pcb/v2.0/production/universal-weather-node-v2.0-bom-jlcpcb.csv \
+  pcb/v2.0/production/universal-weather-node-v2.0-cpl-jlcpcb.csv
+node --test test/pcb_cpl.test.js
+```
+
+The helper refuses changed corrected IC/Q3 parts, footprints or source angles,
+duplicate references, missing corrected parts, bottom-side placements and
+overlapping input/output paths. These guards prevent accidental double correction.
+If the board or article selection changes, reassess the final preview instead of
+bypassing the guards. A preview-matched status records this design's supplied
+images, not proof that future orders or library models are unchanged.
+
+Final order check (top view, sensor terminals at bottom): U1 pin 1 upper left,
+U4 pin 1 lower right, U2 pin 1 lower left, U3 pin 1 lower right, U5/Q3 pin 1
+upper right. Recheck all remaining pin-1 and polarity marks before paying.
+Visual checks do not
+qualify the hardware or authorize payment/production on the user's behalf.
 
 VIN uses Q7 with a 12 V gate-source clamp; D1 is the **bidirectional SMBJ30CA**
 (C83847), upstream of Q7. External 5 V uses F2, **bidirectional SMBJ5.0CA**

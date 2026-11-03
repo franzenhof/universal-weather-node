@@ -9136,13 +9136,13 @@
         (font
           (size 1.27 1.27))
         (hide yes)))
-    (property "LCSC" "C108429"
+    (property "LCSC" "C20526"
       (at 500.38 223.52 0)
       (effects
         (font
           (size 1.27 1.27))
         (hide yes)))
-    (property "MPN" "Nexperia MMBT3904"
+    (property "MPN" "Jiangsu Changjing MMBT3904(RANGE:100-300)"
       (at 500.38 223.52 0)
       (effects
         (font

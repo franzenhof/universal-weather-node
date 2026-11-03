@@ -19441,7 +19441,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C108429"
+		(property "LCSC" "C20526"
 			(at 0 0 90)
 			(layer "F.SilkS")
 			(hide yes)
@@ -19453,7 +19453,7 @@
 				)
 			)
 		)
-		(property "MPN" "Nexperia MMBT3904"
+		(property "MPN" "Jiangsu Changjing MMBT3904(RANGE:100-300)"
 			(at 0 0 90)
 			(layer "F.SilkS")
 			(hide yes)

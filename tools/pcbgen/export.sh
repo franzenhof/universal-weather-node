@@ -16,7 +16,7 @@ $K pcb export gerbers --layers F.Cu,B.Cu,F.Paste,B.Paste,F.SilkS,B.SilkS,F.Mask,
 $K pcb export drill --format excellon --drill-origin absolute --excellon-units mm -o production/gerber/ $N.kicad_pcb >/dev/null 2>&1
 rm -f production/$N-v2.0-gerber.zip; (cd production/gerber && zip -q -r ../$N-v2.0-gerber.zip .); rm -r production/gerber
 $K pcb export pos --format csv --units mm --side front --exclude-dnp -o "$WORK/export-pos-$N.csv" $N.kicad_pcb >/dev/null 2>&1
-$PY - "$WORK/export-pos-$N.csv" $N 2>/dev/null <<'PYEOF'
+$PY - "$WORK/export-pos-$N.csv" $N "$WORK/export-raw-$N.csv" <<'PYEOF'
 import csv, sys, re, pcbnew
 rows=list(csv.DictReader(open(sys.argv[1]))); N=sys.argv[2]
 b=pcbnew.LoadBoard(N+'.kicad_pcb'); info={}; smd=set()
@@ -26,7 +26,7 @@ for f in b.GetFootprints():
     info[r]=(f.GetValue(), str(f.GetFPID().GetUniStringLibId()), f.GetFieldText('LCSC') if f.HasField('LCSC') else '', f.GetFieldText('MPN') if f.HasField('MPN') else '')
     pads=list(f.Pads())
     if pads and all(p.GetAttribute()==pcbnew.PAD_ATTRIB_SMD for p in pads): smd.add(r)
-with open(f'production/{N}-v2.0-cpl-jlcpcb.csv','w',newline='') as fh:
+with open(sys.argv[3],'w',newline='') as fh:
     w=csv.writer(fh); w.writerow(['Designator','Mid X','Mid Y','Layer','Rotation']); n=0
     for r in rows:
         if r['Ref'] not in smd: continue
@@ -41,6 +41,11 @@ with open(f'production/{N}-v2.0-bom-jlcpcb.csv','w',newline='') as fh:
 print('CPL SMD placements', n, 'BOM lines', len(groups), 'THT/DNP excluded from CPL', len(info)-len(smd),
       'missing LCSC', [r for r,v in info.items() if not v[2]])
 PYEOF
+$PY -B "$HERE/jlcpcb_cpl.py" \
+    "$WORK/export-raw-$N.csv" \
+    "production/$N-v2.0-bom-jlcpcb.csv" \
+    "production/$N-v2.0-cpl-jlcpcb.csv"
+rm -f "$WORK/export-raw-$N.csv"
 rm -f "$WORK/export-pos-$N.csv"
 $PY $HERE/models3d.py $N.kicad_pcb 2>/dev/null | grep '^3D models' || true
 $K sch export pdf -o $N-v2.0-schematic.pdf $N.kicad_sch >/dev/null 2>&1
