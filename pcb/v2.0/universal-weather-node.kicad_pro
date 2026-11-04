@@ -381,18 +381,6 @@
       },
       {
         "netclass": "Power",
-        "pattern": "/5V_IN"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "/5V_IN_F"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "/5V_PROT"
-      },
-      {
-        "netclass": "Power",
         "pattern": "/+5V"
       },
       {
@@ -486,18 +474,6 @@
       {
         "netclass": "Power",
         "pattern": "BUCK_SW"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "5V_IN"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "5V_IN_F"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "5V_PROT"
       },
       {
         "netclass": "Power",

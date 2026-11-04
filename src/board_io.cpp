@@ -25,7 +25,7 @@ constexpr uint32_t HW_ID_V2_MAX_MV = 2000;
 
 constexpr int     LEDC_CH_HEATER = 6;      // channels 0-5 left to the Heltec library/display
 constexpr int     LEDC_CH_FAN    = 7;
-constexpr int     PWM_FREQ_HZ    = 100;    // slow: the fan's high-side P-FET has a 47k gate pull-up
+constexpr int     PWM_FREQ_HZ    = 100;    // slow: the fan's high-side P-FET has a resistive gate pull-up
 constexpr int     PWM_BITS       = 8;
 constexpr int16_t PCNT_H_LIM     = 32767;
 constexpr unsigned long VE_TIMEOUT_MS = 10000;

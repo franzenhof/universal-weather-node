@@ -25,7 +25,7 @@ raw = [dict(row, Rotation=f"{angles[row['Designator']]:.6f}") for row in final]
 with (base / "universal-weather-node-v2.0-bom-jlcpcb.csv").open() as f:
     bom = list(csv.DictReader(f))
 candidate, review = module.build(raw, bom)
-assert len(candidate) == len(review) == len(raw) == 125
+assert len(candidate) == len(review) == len(raw) == 122
 by_ref = {r["Designator"]: r for r in candidate}
 assert by_ref["U1"]["Rotation"] == "270.000000"
 assert by_ref["U4"]["Rotation"] == "90.000000"
@@ -47,6 +47,10 @@ assert next(r for r in review if r["Designator"] == "Q3")["Status"] == "PREVIEW_
 with (base / "universal-weather-node-v2.0-cpl-jlcpcb.csv").open() as f:
     assert list(csv.DictReader(f)) == candidate
 assert all(r["Status"] != "MANUAL_CHECK" for r in review)
+assert by_ref["Q4"]["Rotation"] == "270.000000"
+assert "U6" not in by_ref and "Q9" not in by_ref and "D4" not in by_ref
+assert next(r for r in review if r["Designator"] == "Q4")["Candidate Offset"] == 180
+assert next(r for r in review if r["Designator"] == "Q4")["Status"] == "PREVIEW_MATCHED_SOT223"
 assert next(r for r in review if r["Designator"] == "C6")["Candidate Offset"] == 0
 def must_fail(positions, parts):
     try:
@@ -58,9 +62,16 @@ must_fail(raw + [raw[0]], bom)
 must_fail(candidate, bom)
 must_fail([dict(r, Layer="Bottom") for r in raw], bom)
 must_fail([r for r in raw if r["Designator"] != "U1"], bom)
+must_fail([r for r in raw if r["Designator"] != "Q4"], bom)
+must_fail([dict(r, Rotation="0.000000") if r["Designator"] == "Q4" else r for r in raw], bom)
+must_fail([dict(r, Rotation="270.000000") if r["Designator"] == "Q4" else r for r in raw], bom)
 changed = [dict(r) for r in bom]
 next(r for r in changed if r["Designator"] == "U1")["LCSC Part #"] = "replacement"
 must_fail(raw, changed)
-print("PASS 125 placements, IC/SC-70/DFN and article-matched SOT-23 offsets, unchanged XY, Elko unchanged, invalid-input guards")
+for ref in ("Q4",):
+    changed = [dict(r) for r in bom]
+    next(r for r in changed if r["Designator"] == ref)["LCSC Part #"] = "replacement"
+    must_fail(raw, changed)
+print("PASS 122 placements, Q4 +180 preview matched, removed external 5V parts, unchanged XY, identity/angle guards")
 `], {cwd: path.join(__dirname, '..'), stdio: 'inherit'});
 });

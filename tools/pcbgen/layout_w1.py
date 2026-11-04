@@ -1,7 +1,7 @@
 """Weather node v2.0 layout: 100 x 100 mm, 4 x M3 (92 x 92 mm corner pattern).
 
 Board-local mm, origin top-left, y down. Heltec module at the left edge (USB-C
-flush with the edge) below the top-left hole; 19 screw-terminal poles along the
+flush with the edge) below the top-left hole; 18 screw-terminal poles along the
 primary bottom edge: POWER | HEATER | FAN | AUX | 1-WIRE | I2C; the four-pole UV
 terminal is on the lower-right edge. Along the right edge the Davis RJ11 jacks,
 each with its screw terminal right below it (RAIN, WIND), and the UV terminal
@@ -19,8 +19,8 @@ TPIN = H - 5.0
 HOLES = [(4.0, 4.0), (W - 4.0, 4.0), (4.0, H - 4.0), (W - 4.0, H - 4.0)]
 PITCH = 3.5
 GAPT = 6.0                                    # gap between neighbouring terminals (room for the titles)
-J3_X = 10.0                                   # POWER: VIN | 5V | GND
-J12_X = J3_X + 2 * PITCH + GAPT               # HEATER: +V | HEAT-  (3 A path right next to VIN)
+J3_X = 10.0                                   # POWER: VIN | GND
+J12_X = J3_X + 2 * PITCH + GAPT               # retain reviewed heater position; extra gap after 2-pin power
 J13_X = J12_X + PITCH + GAPT                  # FAN: FAN+ | GND | TACH
 J11_X = J13_X + 2 * PITCH + GAPT              # AUX: 3V3 | AIN | PULSE | GND
 J10_X = J11_X + 3 * PITCH + GAPT              # 1-WIRE: GND | 3V3 | DQ
@@ -61,6 +61,11 @@ FIXED["JP1"] = (63.09, 73.20, 90)
 FIXED["JP11"] = (63.09, 78.28, 90)
 FIXED["JP8"] = (23.5, 37.6, 0)
 FIXED["D32"] = (88.75, 82.0, 180)
+# Retain the checked fan footprint angles.
+FIXED.update({
+    "Q4": (38.32, 70.21, 90), "R33": (43.4, 72.5, 90),
+    "JP12": (28.5, 38.5, 90), "R61": (25.5, 59.0, 0),
+})
 # isolated VE.Direct domain at the left edge below the module (terminal J14 + JST-PH J15)
 VIC_X1, VIC_Y0, VIC_Y1 = 18.0, 35.9, 58.0      # domain: x 0..VIC_X1, y VIC_Y0..VIC_Y1
 MOAT_W = 1.5
@@ -77,9 +82,9 @@ ZONES = [   # order = placement priority; ANCHORS below pull critical pads toget
     ("UV", 57.0, 95.0, 61.0, 70.0, ["D32", "R51", "R52", "R53", "R54", "R55", "JP10", "D30", "C27"]),
     ("C", 0.6, MOD[2], C_TOP, C_BOT, [
         "D22", "Q3", "R30", "R31",                                  # heater: freewheel, low-side switch
-        "F7", "D1", "Q7", "D31", "R45", "F1", "F2", "Q9", "R56", "D4",   # common input protection
+        "F7", "D1", "Q7", "D31", "R45", "F1",
         "U1", "C1", "C2", "C3", "C26", "L1", "C4", "C5", "R46", "R47", "R48",
-        "JP8", "C7", "TP2", "TP3", "TP1",                           # 5 V source selector, test points
+        "JP8", "C7", "TP2", "TP3", "TP1",                           # buck disconnect, test points
         "R1", "R2", "C10"]),                                        # HW revision ID at J1.17 (GPIO20)
     ("CLOW", 70.0, 88.0, 47.0, 64.0, ["C6"]),                      # bulk 5 V output capacitor
     ("I2C2", MOD[2] + 1.3, RJ_L - 0.3, 37.0, C_BOT, [
@@ -89,7 +94,7 @@ ZONES = [   # order = placement priority; ANCHORS below pull critical pads toget
         "R23", "D15", "R22"]),                                      # 1-Wire conditioning near J10
     ("IO", J13_X - 3.0, RJ_L - 0.3, C_TOP - 6.0, C_BOT, [
         "U5", "R39", "D26", "R32", "Q4", "R33", "Q5", "R37", "D23", # heater gate driver and fan
-        "JP9", "F6", "R49", "R50", "Q8", "R34", "R35", "D25", "C20", "R36",
+        "JP9", "F6", "R49", "R50", "Q8", "R34", "R35", "D25", "C20", "R36", "R61", "JP12",
         "R24", "R25", "D18", "C17",                                 # AUX analog
         "R26", "R27", "D19", "R28", "C18", "U3", "C19", "R29",      # AUX pulse
         ]),
@@ -111,8 +116,7 @@ ANCHORS = [
     ("C3", "1", "U1", "7"), ("C3", "2", "U1", "8"), ("C26", "1", "U1", "6"),
     ("L1", "1", "U1", "8"), ("C4", "1", "L1", "2"), ("C5", "1", "L1", "2"),
     ("R46", "1", "L1", "2"), ("R47", "1", "U1", "5"), ("R48", "1", "R47", "2"),
-    ("F2", "1", "J3", "2"), ("D4", "1", "F2", "2"), ("Q9", "3", "D4", "1"),
-    ("R56", "1", "Q9", "1"),
+    ("R61", "2", "JP12", "1"), ("JP12", "2", "R49", "1"),
     ("C7", "1", "J1", "2"),
     ("TP2", "1", "C1", "1"), ("TP3", "1", "C7", "1"), ("TP1", "1", "C2", "2"),
     ("R1", "2", "J1", "17"), ("R2", "1", "J1", "17"), ("C10", "1", "J1", "17"),
@@ -171,14 +175,14 @@ BRAND = (("Universal Weather Node v2.0", 1.6), ("franzenhof.com", 1.6))
 # (by pin number; BACK_LABELS_V for the terminals at the left/right edge)
 BACK_LABELS_V = {"J14": ["GND", "TX", "RX", "V+"], "J7": ["GND", "RAIN"], "J5": ["GND", "SPD", "DIR", "3V3"],
                  "J17": ["GND", "SIG", "3V3", "5V"]}
-BACK_LABELS = {"J12": ["+V", "HEAT-"], "J13": ["FAN+", "GND", "TACH"], "J3": ["VIN", "5V", "GND"], "J11": ["3V3", "AIN", "PULSE", "GND"], "J10": ["GND", "3V3", "DQ"],
+BACK_LABELS = {"J12": ["+V", "HEAT-"], "J13": ["FAN+", "GND", "TACH"], "J3": ["VIN", "GND"], "J11": ["3V3", "AIN", "PULSE", "GND"], "J10": ["GND", "3V3", "DQ"],
                "J9": ["3V3", "SDA", "SCL", "GND"]}
 BACK_TITLES = {"J12": "HEATER", "J13": "FAN", "J3": "POWER", "J11": "AUX", "J10": "1-WIRE", "J9": "I2C", "J7": "RAIN", "J5": "WIND", "J14": "VE.DIRECT", "J17": "UV"}
 BACK_DOCUMENTATION = True
 BACK_TEXTS = (("Universal Weather Node v2.0", 26.0, 17.0, 2.0), ("franzenhof.com", 26.0, 21.5, 1.6), ("CERN-OHL-P v2", 26.0, 25.0, 1.2),
-              ("JP8: 1-2 VIN BUCK / 2-3 EXT 5V\nUSB ONLY: REMOVE JP8 SHUNT\nNEVER USB + EXTERNAL POWER\nCHANGE JUMPERS ONLY UNPOWERED", 31.0, 40.0, 0.9))
+              ("JP8 FITTED: VIN BUCK\nREMOVE BEFORE USB\nUSB ONLY: DISCONNECT VIN\nCHANGE JUMPERS ONLY UNPOWERED", 31.0, 40.0, 0.9))
 
-POWER_NETS = ["GND", "FAN", "FAN_SW", "FAN_SUPPLY", "VIN_IN", "VIN_F", "+VLOAD", "VIN_BUCK", "+5V_BUCK", "BUCK_SW", "BUCK_BST", "BUCK_VCC", "5V_IN", "5V_IN_F", "5V_PROT", "+5V", "3V3_HELTEC"]
+POWER_NETS = ["GND", "FAN", "FAN_SW", "FAN_SUPPLY", "VIN_IN", "VIN_F", "+VLOAD", "VIN_BUCK", "+5V_BUCK", "BUCK_SW", "BUCK_BST", "BUCK_VCC", "+5V", "3V3_HELTEC"]
 MEDIUM_NETS, MEDIUM_W = ["+3V3", "OW_SW", "OW_VCC"], 0.4      # sensor supplies (<= 250 mA, PTC-limited)
 HEAVY_NETS, HEAVY_W = ["VIN_IN", "VIN_F", "+VLOAD", "HEAT", "HEAT_D"], 1.5   # conservative width; temperature rise is not validated
 POWER_W = 0.6
@@ -189,7 +193,7 @@ EDGE = 0.5
 GAP = 0.55
 GND_VIAS = [
     # surge current of every TVS / ESD diode / crowbar goes straight into the ground plane
-    ("D1", "2"), ("R56", "2"), ("D4", "2"), ("D5", "2"), ("D6", "2"), ("D7", "2"), ("D20", "2"), ("D14", "2"), ("D28", "3"),
+    ("D1", "2"), ("D5", "2"), ("D6", "2"), ("D7", "2"), ("D20", "2"), ("D14", "2"), ("D28", "3"),
     ("D16", "3"), ("D17", "3"), ("D27", "3"), ("D32", "3"), ("C22", "2"), ("C21", "2"), ("D24", "2"), ("D23", "2"), ("Q3", "3"), ("Q5", "2"), ("Q8", "2"), ("C20", "2"),
     # every decoupling / filter capacitor gets its own ground via (placed before routing)
     ("C1", "2"), ("C4", "2"), ("C5", "2"), ("C26", "2"),
@@ -203,7 +207,6 @@ TVS_X = TERM_RX - 10.5         # right-edge TVS column, left of the terminal tit
 RA = TPIN - 9.6                # row A pad y (above the terminal label strip)
 FIXED_PADS = [
     ("F7", "1", J3_X - 0.5, RA, "2", "up"),                       # J3.1 VIN -> master fuse
-    ("F2", "1", J3_X + PITCH + 5.0, RA - 3.4, "2", "up"),         # J3.2 5V -> PTC, moved clear of J3 labels
     ("D17", "1", J11_X + PITCH - 0.5, RA + 0.9, "3", "up"),       # J11.2/3 AIN / PULSE ESD
     ("D14", "1", J10_X + PITCH - 1.2, RA + 1.0, "2", "up"),       # clear of separate SCL pull-up header
     ("D16", "1", J10_X + 2 * PITCH - 0.8, RA + 0.9, "3", "up"),   # J10.3 1-Wire DQ ESD
@@ -262,14 +265,14 @@ SOLID_GND = ("J1", "J2", "J15", "J4", "J6", "J7", "J5", "J16", "TP1", "TP5")
 # extra silkscreen notes placed on the nearest free spot (top side, else bottom side)
 NOTES = [
          ("J16", "J16 EXPANSION", 0, 0, 0.8), ("JP1", "JP1/JP11 I2C PULL-UP 4k7\nSDA / SCL; fit for long cables", 0, 0, 0.8),
-         ("JP8", "JP8: 1-2 VIN\n2-3 5V IN\nNO USB + EXT", 0, 0, 0.8),
+         ("JP8", "JP8: VIN BUCK\nREMOVE BEFORE USB", 0, 0, 0.8),
          ("JP2", "JP2 VANE PULL-UP\nfit: reed-switch vane\nopen: Davis pot", 0, 0, 0.8), ("R25", "R25 15k:\nAIN 0-5V x1.667", 0, 0, 0.8),
          ("JP9", "FAN SUPPLY\n1-2: 5V (default)\n2-3: VIN", 0, 0, 0.8),
          ("JP10", "UV RANGE\n1-2: 3.3V\n2-3: 5V", 0, 0, 0.8)]
 # function written right next to the reference designator of each field terminal
 TERM_FUNC = {"J12": "HEATER", "J13": "FAN", "J3": "POWER IN", "J11": "AUX IN", "J10": "1-WIRE", "J9": "I2C BME280"}
 # pin functions printed on the top side right above each terminal (left -> right)
-TOP_PIN_LABELS = {"J12": ["+V", "HEAT-"], "J13": ["FAN+", "GND", "TACH"], "J3": ["VIN", "5V", "GND"], "J11": ["3V3", "AIN", "PULSE", "GND"], "J10": ["GND", "3V3", "DQ"],
+TOP_PIN_LABELS = {"J12": ["+V", "HEAT-"], "J13": ["FAN+", "GND", "TACH"], "J3": ["VIN", "GND"], "J11": ["3V3", "AIN", "PULSE", "GND"], "J10": ["GND", "3V3", "DQ"],
                   "J9": ["3V3", "SDA", "SCL", "GND"]}
 # notes with a reserved area (written before placement): (text, x, y, size, angle)
 BRAND_X = (MOD[2] + RJ_L) / 2

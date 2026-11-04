@@ -43,9 +43,15 @@ run `backdoc.py <board.kicad_pcb>` with KiCad Python; it replaces the previous
 summary blocks and fails without saving if every block cannot fit. Re-run DRC
 and inspect the bottom render after any layout change. It does not modify
 electrical copper, footprints or the schematic.
-The 5 V source is selected manually with JP8: 1–2 for the VIN buck, 2–3 for
-external 5 V, or no shunt for USB-only operation. Never connect USB while an
-external source is powering the board. There is no automatic source isolation.
+J3 is now a two-pin VIN/GND terminal (6–29.2 V); the external 5 V branch is
+removed. JP8 is a two-pin buck disconnect: fit for VIN operation, **remove
+before USB** and disconnect VIN. There is no automatic source isolation.
+USB powers logic and sensors; a 5 V fan shares the Heltec/USB current budget.
+Heater and VIN-mode fan loads require VIN.
+The [USB-C/VIN function matrix](../../README.md#functions-by-power-source-v20)
+lists supported interfaces, jumper settings, firmware-update modes and shared
+current limits. The [bring-up checklist](../../pcb/v2.0/CHECKLIST.md#b-bring-up-of-the-first-prototypes)
+includes the corresponding prototype checks for both power modes.
 
 ## JLCPCB orientation review
 
@@ -64,8 +70,18 @@ Successive supplied JLCPCB previews were then checked against PCB pads:
 - SOT-23 parts C15127, C20917, C37130, C20526, C8592 and C49338: +180 degrees.
 - C6: no offset; plus already agrees with the PCB, unlike the generic
   electrolytic rule.
-- Q4/Q7 and the two-terminal diodes: no offset; tab/gate and cathode bands
+- The former Q4, Q7 and the two-terminal diodes: no offset; tab/gate and cathode bands
   agree in the final preview.
+
+The 2026-11-04 changes replace Q4 with DMP6023LE (C154901, SOT-223).
+This article is **not** covered by the old preview. The supplied
+2026-11-04 preview (19:26:57 UTC) showed Q4 pin 1
+upper right instead of lower left: the CPL now applies **+180 degrees**
+(raw 90 -> CPL 270) with identity/angle guards. The subsequent 19:31:57 UTC
+preview confirmed gate lower left, source lower right and drain tab top
+(`PREVIEW_MATCHED_SOT223`). U6 was subsequently removed together with the
+external 5 V input; do not reuse the earlier manufacturing files.
+Check all pads in the final order; preview status is not hardware or assembly approval.
 
 For Q3, the user confirmed the purple dot as library pin 1 and the
 1-3 source / 4 gate / 5-8 drain mapping. The final supplied preview at
@@ -94,13 +110,15 @@ Visual checks do not
 qualify the hardware or authorize payment/production on the user's behalf.
 
 VIN uses Q7 with a 12 V gate-source clamp; D1 is the **bidirectional SMBJ30CA**
-(C83847), upstream of Q7. External 5 V uses F2, **bidirectional SMBJ5.0CA**
-D4 (C83323), then Q9 AO3401A with R56 10k gate pull-down. Q9 pin 3 is the
-raw fused input, pin 2 is `5V_PROT` to JP8 pin 3, pin 1 is `5V_GATE`.
-The former crowbar D3 is removed. Do not substitute unidirectional TVS parts:
-they would recreate the reverse-polarity short circuit. Bidirectional D1/D4
-have no polarity; ignore the standard SMB footprint's cathode silk bar.
-Neither single-MOSFET circuit provides reverse-current isolation between
+(C83847), upstream of Q7. F2/D4/Q9/R56/U6/R57–R60/C28–C30 and their
+external-5V nets are removed from the schematic, PCB and production files.
+Q4 now uses DMP6023LE with R32=100k and R33=2.2k/1206. R61=10k and JP12
+provide an optional +5V tacho pull-up; fit JP12 for open collector, remove it
+for an externally pulled-up or push-pull signal.
+The former crowbar D3 is removed. Do not substitute a unidirectional D1:
+it would recreate the reverse-polarity short circuit. Bidirectional D1
+has no polarity; ignore the standard SMB footprint's cathode silk bar.
+The single-MOSFET VIN circuit does not provide reverse-current isolation between
 simultaneously powered sources. Rewire only with all rails discharged.
 
 Hand touch-ups after the design review (repeat them after a rebuild; verify against the

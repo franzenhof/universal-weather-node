@@ -22,6 +22,9 @@ DFN_CANDIDATES = {
 }
 CANDIDATES = {**SOIC_CANDIDATES, **SOT6_CANDIDATES, **SC70_CANDIDATES, **DFN_CANDIDATES}
 SOT23_PARTS = {"C15127", "C20917", "C37130", "C20526", "C8592", "C49338"}
+NEW_PARTS = {
+    "Q4": ("C154901", "Package_TO_SOT_SMD:SOT-223-3_TabPin2", 90),
+}
 CPL_FIELDS = ["Designator", "Mid X", "Mid Y", "Layer", "Rotation"]
 REVIEW_FIELDS = ["Designator", "LCSC Part #", "Footprint", "KiCad Rotation",
                  "Candidate Offset", "Candidate Rotation", "Status", "Check"]
@@ -62,6 +65,15 @@ def build(raw_rows, bom_rows):
                      "U5": "Pin 1 upper right; three leads top, two bottom",
                      "Q3": "Pin 1/source upper right; pin 4/gate upper left; drain pins 5-8 bottom"}[ref]
             check += "; board top view with sensor terminals at bottom"
+        elif ref in NEW_PARTS:
+            lcsc, footprint, raw_angle = NEW_PARTS[ref]
+            if (part["LCSC Part #"], part["Footprint"], angle % 360) != (lcsc, footprint, raw_angle):
+                raise ValueError(f"{ref}: new part/footprint/angle changed; reassess placement")
+            offset = 180
+            status = "PREVIEW_MATCHED_SOT223"
+            check = ("2026-11-04 19:31:57 UTC preview confirms +180 degrees: "
+                     "gate/pin 1 lower left, source/pin 3 lower right, drain tab top; "
+                     "board top view with sensor terminals at bottom")
         elif (part["Footprint"] == "Package_TO_SOT_SMD:SOT-23"
               and part["LCSC Part #"] in SOT23_PARTS):
             offset = 180
@@ -71,19 +83,22 @@ def build(raw_rows, bom_rows):
                 ref.startswith("C") and part["Footprint"].startswith("Capacitor_SMD:C_")):
             status = "NONPOLAR_CHECK"
             check = "Both terminals must align; 180 degrees is electrically equivalent"
-        elif ref in ("D1", "D4"):
+        elif ref == "D1":
             status = "BIDIRECTIONAL_TVS"
             check = "No polarity; verify CA suffix and package alignment"
         elif ref in ("D5", "D6", "D7", "D14", "D20", "D29", "D22", "D23",
                      "D24", "D26", "D31"):
             status = "PREVIEW_MATCHED_POLARITY"
             check = "Cathode band matches PCB pad 1; retain article and verify final order"
-        elif ref in ("Q4", "Q7"):
+        elif ref == "Q7":
             status = "PREVIEW_MATCHED_TO252"
             check = "Tab top, gate/pin 1 lower left; verify source/drain against final order"
         elif ref == "C6":
             status = "PREVIEW_MATCHED_POLARITY"
             check = "Plus bottom, minus top; do not apply generic electrolytic offset"
+        elif ref == "JP12":
+            status = "THT_MANUAL"
+            check = "Through-hole header; fit shunt for open-collector PC fan tacho"
         elif ref.startswith("F") or ref == "L1":
             status = "NONPOLAR_CHECK"
             check = "No electrical polarity; verify selected package and terminal alignment"
@@ -95,7 +110,7 @@ def build(raw_rows, bom_rows):
             ref, part["LCSC Part #"], part["Footprint"], row["Rotation"],
             offset, placement["Rotation"], status, check,
         ])))
-    missing = CANDIDATES.keys() - seen
+    missing = (CANDIDATES.keys() | NEW_PARTS.keys()) - seen
     if missing:
         raise ValueError(f"Missing corrected placements: {sorted(missing)}")
     return placements, review
@@ -124,9 +139,11 @@ def main():
         bom = list(csv.DictReader(stream))
     placements, _ = build(raw, bom)
     write_csv(args.candidate_cpl, CPL_FIELDS, placements)
-    print(f"PREVIEW-MATCHED: {len(placements)} placements, five ICs and Q3 +270 degrees, "
+    print(f"CPL: {len(placements)} placements, five previously reviewed ICs and Q3 +270 degrees, "
           "article-matched SOT-23 parts +180 degrees; "
-          "recheck final order and any substitutions. Hardware qualification remains open.")
+          "Q4 +180 degrees confirmed in the 2026-11-04 19:31:57 UTC preview; "
+          "External 5V input and U6 removed. Check the final order preview. "
+          "Hardware qualification remains open.")
 
 
 if __name__ == "__main__":

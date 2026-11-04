@@ -9,14 +9,14 @@ BLOCKS = (
      "NOT left-to-right order in this view.\n"
      "Pin 1: square pad / connector marking."),
     ("POWER", "POWER / JP8 - ONE SOURCE ONLY\n"
-     "J3: 1 VIN 6-29.2V | 2 EXT 5V | 3 GND\n"
-     "JP8 1-2: VIN buck -> 5V rail\n"
-     "JP8 2-3: external regulated 5V\n"
-     "USB only: remove JP8; disconnect J3\n"
-     "NEVER USB + VIN or external 5V!\n"
+     "J3: 1 VIN 6-29.2V | 2 GND\n"
+     "JP8 fitted: VIN buck -> 5V rail\n"
+     "JP8: REMOVE BEFORE USB\n"
+     "USB only: remove shunt; disconnect VIN\n"
+     "No external 5V terminal input.\n"
      "No auto-mux / no reverse-current isolation.\n"
      "Power OFF + discharge before rewiring.\n"
-     "Fit ONE shunt; never bridge all 3 pins."),
+     "USB does not power VIN / heater loads."),
     ("OUTPUTS", "HEATER / FAN - CHECK LOAD RATINGS\n"
      "J12: 1 +V = protected VIN | 2 HEAT-\n"
      "Heater <=3A; low-side PWM (GPIO38).\n"
@@ -26,7 +26,8 @@ BLOCKS = (
      "JP9 1-2: 5V, <=0.5A (default)\n"
      "JP9 2-3: protected VIN, <=1A\n"
      "Use a fan rated for selected voltage.\n"
-     "Combined 5V loads share source budget."),
+     "Combined 5V loads share source budget.\n"
+     "JP12 fit: OC tacho; off: ext. pull-up."),
     ("UV", "UV / J17 / JP10 - GPIO3 ADC1\n"
      "J17: 1 GND | 2 SIGNAL | 3 3V3 | 4 5V\n"
      "Power sensor from ONE supply pin only.\n"
@@ -93,10 +94,10 @@ BLOCKS = (
      "Enable/configure optional I/O in FW.\n"
      "No powered sensor signals with MCU OFF."),
     ("LIMITS", "PROTECTION / MECHANICAL LIMITS\n"
-     "VIN + EXT 5V: MOSFET reverse protection.\n"
-     "TVS/diodes: transients, NOT DC overvoltage\n"
-     "disconnect, lightning or surge approval.\n"
-     "D1/D4 MUST be bidirectional CA parts.\n"
+     "VIN: Q7 MOSFET reverse protection.\n"
+     "USB current shares Heltec power path.\n"
+     "NOT a lightning / surge approval.\n"
+     "D1 MUST be bidirectional SMBJ30CA.\n"
      "F7 6.3A main / F5 4A heater fuse.\n"
      "Fuse rating is NOT allowed load current!\n"
      "Thermal test; NO continuous 2A guarantee.\n"
@@ -139,7 +140,9 @@ def apply(board):
         if drawing.GetLayer() != pcbnew.B_SilkS or not hasattr(drawing, "GetText"):
             continue
         text = drawing.GetText()
-        if text in replaced_texts:
+        if text in replaced_texts or text.startswith(("POWER / JP8 - ONE SOURCE ONLY\n",
+                                                     "PROTECTION / MECHANICAL LIMITS\n",
+                                                     "HEATER / FAN - CHECK LOAD RATINGS\n")):
             retained.append(drawing)
             board.Remove(drawing)
     obstacles = []

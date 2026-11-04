@@ -16,10 +16,10 @@ RAILS = {"GND": "GND", "GND_VICTRON": "GND", "+3V3": "+3V3", "3V3_HELTEC": "+3V3
          "+VLOAD": "VCC", "VDD_VICTRON": "VCC"}
 DOWN_RAILS = ["GND", "GND_VICTRON"]
 PWR_FLAGS = ["GND", "GND_VICTRON", "+3V3", "3V3_HELTEC", "+5V", "+5V_BUCK", "+VLOAD", "VDD_VICTRON",
-             "VIN_BUCK", "5V_IN_F"]
+             "VIN_BUCK"]
 LABEL_ONLY_NETS = {"BUCK_FB", "BUCK_VCC", "FB_LOW", "FAN_SUPPLY", "FAN_G", "FAN_SW",
                    "UV_SIGNAL", "UV_ADC", "UV_3V3_RANGE", "UV_5V_RANGE", "UV_5V_B", "UV_5V_C",
-                   "5V_IN_F", "5V_PROT", "5V_GATE"}
+                   "TACH", "TACH_PU"}
 FLAG_AT = (66, 56)
 # connectors: every signal pin gets its own label (no long wires through the sheet)
 LABEL_PARTS = ["J1", "J2", "J3", "J4", "J5", "J6", "J7", "J9", "J10", "J11", "J12", "J13", "J14", "J15", "J16", "J17"]
@@ -43,18 +43,17 @@ BLOCKS = [
                       "V3 / V3.1 / V3.2 are pin-compatible"),
                (3, 42, "HW revision ID (GPIO20):\nv2.0 = 1M / 1M -> 0.5 x 3V3"),
                (22, 58, "J16 expansion header, TP1-TP5 test pads (not populated)")]),
-    dict(title="Power supply: VIN 6-29.2 V or 5 V, protected / selected with JP8", x=62, y=2, w=106, h=46, parts=[
+    dict(title="Power supply: VIN 6-29.2 V or Heltec USB-C; manual JP8 disconnect", x=62, y=2, w=106, h=46, parts=[
         ("F1", 30, 9, H), ("C1", 32, 13, V), ("C2", 35, 13, V),
         ("U1", 40, 11), ("C3", 45, 10, H), ("L1", 50, 10, H), ("C26", 44, 17, V),
         ("C4", 55, 12, V), ("C5", 60, 12, V),
-        ("F2", 12, 20, H), ("D4", 19, 21.5, DK), ("Q9", 24, 23), ("R56", 21, 28, V),
         ("C6", 36, 22, V), ("C7", 39, 22, V),
         ("JP8", 30, 19),
         ("F3", 12, 34, H), ("C8", 18, 36, V), ("C9", 21, 36, V), ("D5", 24, 35.5, DK)],
         notes=[(66, 8, "LMR36520: 4.2-65 V in, 5 V / 2 A nominal buck"),
-               (44, 28, "5 V: Q9 drain=input, source=protected output.\nD4 is bidirectional; no reverse-polarity crowbar."),
-               (44, 18, "JP8: 1-2 = VIN via buck\n       2-3 = 5 V input\n       open = USB only; never parallel sources"),
-               (76, 39, "Heltec USB-C must be unplugged whenever VIN or external 5 V is connected;\nits VBUS is directly connected to the module 5 V pin."),
+               (44, 28, "J3 has VIN and GND only; no external 5 V input.\nUSB supplies logic/sensors; heater requires VIN."),
+               (44, 18, "JP8 fitted = VIN via buck\nREMOVE BEFORE USB\nopen = USB only; never parallel sources"),
+               (76, 39, "USB mode: remove JP8 and disconnect VIN before connecting USB-C.\nHeltec VBUS connects to the module 5 V pin; no automatic isolation."),
                (30, 32, "3.3 V sensor rail from the Heltec LDO,\nPTC 250 mA + TVS for the external cables")]),
     dict(title="VIN reverse / transient protection", x=235, y=2, w=64, h=32, parts=[
         ("J3", 5, 11, M), ("F7", 14, 9, H), ("D1", 19, 10.5, DK),
@@ -63,6 +62,9 @@ BLOCKS = [
     dict(title="LMR36520 feedback divider", x=235, y=40, w=55, h=24, parts=[
         ("R46", 9, 10, H), ("R47", 16, 12, H), ("R48", 28, 12, H)],
         notes=[(2, 20, "1.0 V FB reference: 47k / (10k + 1.8k) = 4.983 V nominal")]),
+    dict(title="PC fan tacho pull-up", x=235, y=112, w=55, h=23, parts=[
+        ("R61", 12, 8, V), ("JP12", 25, 10)],
+        notes=[(2, 18, "JP12 fitted: 10k to +5V for open collector.\nRemove for externally pulled-up / push-pull tacho.")]),
     dict(title="Victron VE.Direct (isolated)", x=170, y=2, w=62, h=36, parts=[
         ("U4", 30, 16), ("C21", 20, 8, V), ("C22", 40, 10, V), ("D27", 42, 23),
         ("J14", 56, 16), ("J15", 56, 27)],

@@ -38,8 +38,8 @@ P("J2", conn(18), "Heltec V3 header (3V3 side)", SOCK18, j2, None, "MCU",
   "Heltec pins: 1 GND, 2/3 3V3, 7 GPIO42, 8 GPIO41, 9 GPIO40, 10 GPIO39, 11 GPIO38, 13 GPIO2, 14 GPIO3, 15 GPIO4, 16 GPIO5, 17 GPIO6, 18 GPIO7",
   lcsc_key="SOCK18")
 
-P("J3", conn(3), "Power", TB.format(n=3), {"1": "VIN_IN", "2": "5V_IN", "3": "GND"}, None, "Power",
-  "VIN 6-29.2 V LiFePO4 | 5V | GND", lcsc_key="TB3")
+P("J3", conn(2), "Power", TB.format(n=2), {"1": "VIN_IN", "2": "GND"}, None, "Power",
+  "VIN 6-29.2 V LiFePO4 | GND; no external 5 V input", lcsc_key="TB2")
 P("F7", ("Device", "Fuse"), "6.3A 125V", "Fuse:Fuse_Littelfuse-NANO2-451_453", {"1": "VIN_IN", "2": "VIN_F"}, None, "Power",
   "Littelfuse 045106.3MRL SMD main fuse; 125 VDC, not the former 5x20 mm cartridge", lcsc_key="FUSE6A3_125")
 P("D1", ("Device", "D_TVS"), "SMBJ30CA", SMB, {"1": "VIN_F", "2": "GND"}, None, "Power",
@@ -57,7 +57,7 @@ P("F1", ("Device", "Polyfuse"), "PTC 1.1A 60V", "Fuse:Fuse_2920_7451Metric",
 P("U1", ("WeatherNode", "LMR36520"), "LMR36520ADDAR", "Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.514x3.2mm",
   {"1": "GND", "2": "VIN_BUCK", "3": "VIN_BUCK", "4": None, "5": "BUCK_FB",
    "6": "BUCK_VCC", "7": "BUCK_BST", "8": "BUCK_SW", "9": "GND"}, None, "Power",
-  "4.2-65 V in, 5 V rail via JP8 selector, 2 A synchronous buck", lcsc_key="LMR36520")
+  "4.2-65 V in, 5 V rail via JP8 disconnect, 2 A synchronous buck", lcsc_key="LMR36520")
 P("C1", ("Device", "C"), "10uF 100V", C1210, {"1": "VIN_BUCK", "2": "GND"}, None, "Power")
 P("C2", ("Device", "C"), "220nF 100V", C0805, {"1": "VIN_BUCK", "2": "GND"}, None, "Power")
 P("C3", ("Device", "C"), "100nF", C0805, {"1": "BUCK_BST", "2": "BUCK_SW"}, None, "Power", "bootstrap")
@@ -69,18 +69,10 @@ P("C5", ("Device", "C"), "22uF 25V", C0805, {"1": "+5V_BUCK", "2": "GND"}, None,
 P("R46", ("Device", "R"), "47k", R0805, {"1": "+5V_BUCK", "2": "BUCK_FB"}, None, "Power", "LMR36520 feedback top")
 P("R47", ("Device", "R"), "10k", R0805, {"1": "BUCK_FB", "2": "FB_LOW"}, None, "Power", "LMR36520 feedback bottom")
 P("R48", ("Device", "R"), "1.8k", R0805, {"1": "FB_LOW", "2": "GND"}, None, "Power", "series with R47; total feedback bottom 11.8k")
-P("F2", ("Device", "Polyfuse"), "PTC 1.1A 60V", "Fuse:Fuse_2920_7451Metric",
-  {"1": "5V_IN", "2": "5V_IN_F"}, None, "Power", "5 V input branch protection")
-P("D4", ("Device", "D_TVS"), "SMBJ5.0CA", SMB, {"1": "5V_IN_F", "2": "GND"}, None, "Power",
-  "bidirectional 5 V standoff TVS, 9.2 V max clamp; before Q9, no reverse-polarity crowbar")
-P("Q9", ("Transistor_FET", "AO3401A"), "AO3401A", SOT23,
-  {"1": "5V_GATE", "2": "5V_PROT", "3": "5V_IN_F"}, None, "Power",
-  "5 V reverse-polarity switch: drain=input, source=protected output; D4 limits input transients")
-P("R56", ("Device", "R"), "10k", R0805, {"1": "5V_GATE", "2": "GND"}, None, "Power",
-  "Q9 gate pull-down; AO3401A VGS rating +/-12 V, D4 maximum specified clamp 9.2 V")
-P("JP8", conn(3), "5V source", "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical",
-  {"1": "+5V_BUCK", "2": "+5V", "3": "5V_PROT"}, None, "Power",
-  "1-2 buck, 2-3 external 5 V, open USB only; one source at a time", lcsc_key="HDR3")
+P("JP8", conn(2), "VIN buck enable", HDR.format(n=2),
+  {"1": "+5V_BUCK", "2": "+5V"}, None, "Power",
+  "fitted: VIN buck powers 5 V rail; REMOVE BEFORE USB; no automatic source isolation",
+  lcsc_key="HDR2")
 P("C6", ("Device", "C_Polarized"), "100uF", CP63, {"1": "+5V", "2": "GND"}, None, "Power")
 P("C7", ("Device", "C"), "100nF", C0805, {"1": "+5V", "2": "GND"}, None, "Power")
 # 3.3 V sensor rail from the Heltec LDO, current-limited for the external cables
@@ -235,15 +227,18 @@ P("J13", conn(3), "Fan", TB.format(n=3), {"1": "FAN", "2": "GND", "3": "TACH"}, 
   "bottom edge: FAN+ | GND | TACH; 0.5 A at 5 V or 1 A at VIN", lcsc_key="TB3")
 P("JP9", conn(3), "Fan supply", HDR.format(n=3), {"1": "+5V", "2": "FAN_SUPPLY", "3": "+VLOAD"}, None, "Outputs",
   "shunt 1-2 = 5 V (default, max 0.5 A); 2-3 = VIN (max 1 A)", lcsc_key="HDR3")
-P("Q4", ("Transistor_FET", "Q_PMOS_GDS"), "NCE60P50K", "Package_TO_SOT_SMD:TO-252-3_TabPin2",
+P("Q4", ("Transistor_FET", "Q_PMOS_GDS"), "DMP6023LE", "Package_TO_SOT_SMD:SOT-223-3_TabPin2",
   {"1": "FAN_G", "2": "FAN_SW", "3": "FAN_SUPPLY"}, None, "Outputs",
-  "60 V P-MOSFET fan high-side switch; drain at fan, source at selected 5 V/VIN", lcsc_key="NCE60P50K")
-P("R32", ("Device", "R"), "47k", R0805, {"1": "FAN_SUPPLY", "2": "FAN_G"}, None, "Outputs", "keeps Q4 off")
+  "60 V P-MOSFET fan switch; 35 mOhm max at VGS=-4.5 V; SOT-223, G/D/S=1/2/3", lcsc_key="DMP6023LE")
+P("R32", ("Device", "R"), "100k", R0805, {"1": "FAN_SUPPLY", "2": "FAN_G"}, None, "Outputs", "keeps Q4 off; with R33, VGS is 97.85% of supply below the zener clamp")
 P("D26", ("Device", "D_Zener"), "BZT52C12", "Diode_SMD:D_SOD-123", {"1": "FAN_SUPPLY", "2": "FAN_G"}, None, "Outputs", "gate-source clamp 12 V")
-P("R33", ("Device", "R"), "4.7k", R0805, {"1": "FAN_G", "2": "FAN_DRV"}, None, "Outputs", "gate drive")
+P("R33", ("Device", "R"), "2.2k", R1206, {"1": "FAN_G", "2": "FAN_DRV"}, None, "Outputs", "gate drive; about 0.14 W at 29.2 V, 0.25 W 1206", lcsc_key="2k2R1206")
 P("Q5", ("Transistor_FET", "AO3400A"), "AO3422", SOT23, {"1": "FAN_PWM", "2": "GND", "3": "FAN_DRV"}, None, "Outputs",
   "fan driver 55 V, GPIO39 HIGH = on (PWM capable)", lcsc_key="AO3422")
 P("R37", ("Device", "R"), "100k", R0805, {"1": "FAN_PWM", "2": "GND"}, None, "Outputs", "keeps the fan off at reset")
+P("R61", ("Device", "R"), "10k", R0805, {"1": "+5V", "2": "TACH_PU"}, None, "Outputs", "PC fan open-collector tacho pull-up, enabled by JP12")
+P("JP12", conn(2), "Tacho pull-up", HDR.format(n=2), {"1": "TACH_PU", "2": "TACH"}, None, "Outputs",
+  "fit for open-collector PC fan; remove for externally pulled-up or push-pull tacho", lcsc_key="HDR2")
 P("F6", ("Device", "Polyfuse"), "PTC 1.5A 60V", "Fuse:Fuse_2920_7451Metric", {"1": "FAN_SW", "2": "FAN"}, None, "Outputs", "fan output, max 1 A; 60 V withstands the TVS clamp", lcsc_key="PTC1.5A60")
 P("D23", ("Diode", "SS34"), "B360A", "Diode_SMD:D_SMA", {"1": "FAN", "2": "GND"}, None, "Outputs",
   "fan freewheel: 3 A / 60 V; reverse rating exceeds 48.4 V input TVS clamp", lcsc_key="B360A")

@@ -15,7 +15,7 @@ The transports can be enabled independently. Web serving and weather-network upl
 
 **Current status:** [1.3.0-beta.2](firmware/universal-weather-node-1.3.0-beta.2.bin) is the latest prepared firmware. PCB v2.0 fabrication files are ready for **prototypes**, not a hardware-qualified production run. Builds and host tests pass; physical v2.0 qualification and beta field tests on Rev 1.2/1.3 remain open. The photos below show older Rev 1.2 hardware; the v2.0 images are renders.
 
-> **PCB v2.0 power safety:** use **one power source at a time**. JP8 is a manual selector, not a power mux. Before connecting USB-C, disconnect VIN and external 5 V and remove the JP8 shunt. Never select PCB revision `20` on a Rev 1.2/1.3 board.
+> **PCB v2.0 power safety:** use **one power source at a time**. JP8 is a two-pin manual buck disconnect, not a power mux. Before connecting USB-C, disconnect VIN and remove the JP8 shunt. J3 has VIN and GND only; there is no external 5 V input. Never select PCB revision `20` on a Rev 1.2/1.3 board.
 
 ## Contents
 
@@ -85,7 +85,7 @@ The node runs continuously (no deep sleep). It samples the sensors every few sec
 | Wi-Fi + Home Assistant | Wi-Fi + MQTT; web API optional | Wi-Fi credentials, MQTT broker and Home Assistant MQTT integration |
 | Both transports | LoRaWAN + the desired Wi-Fi services | Both sets of settings above |
 
-For permanent external power on v2.0, disconnect USB first, then fit JP8 for your chosen supply as described under [Custom PCB](#custom-pcb).
+For permanent VIN power on v2.0, disconnect USB first, then fit JP8 as described under [Custom PCB](#custom-pcb).
 
 ---
 
@@ -117,20 +117,20 @@ For permanent external power on v2.0, disconnect USB first, then fit JP8 for you
 
 Rev 1.2/1.3's BME280 RJ45 jack is replaced by J9 on v2.0; an existing cable can be wired to J9 or an enclosure-mounted RJ45 keystone. Both sides label connector pins. The back additionally carries a standalone operating reference; see [Connectors](#connectors) for numbered pinouts.
 
-**Power** (manual selection with JP8):
+**Power** (manual buck disconnect with JP8):
 
 | Input | Range | Protection | Selection |
 |-------|-------|------------|-----------|
 | **VIN** (J3) | 6–29.2 V, including an 8s LiFePO4 battery at full charge | Common fused P-channel reverse-polarity protection (Q7), bidirectional TVS SMBJ30CA, separately fused LMR36520 buck (5 V / 2 A nominal) | JP8 pins 1–2 |
-| **5V** (J3) | 5 V supply | PTC 1.1 A, bidirectional TVS SMBJ5.0CA, series P-channel MOSFET Q9 (AO3401A) | JP8 pins 2–3 |
-| **USB-C** (Heltec) | bench test / flashing | USB VBUS connects directly to the module 5 V rail | JP8 open; VIN and external 5 V disconnected |
+| **USB-C** (Heltec) | Regulated USB 5 V; measurement / bench test / flashing | USB VBUS connects to the module 5 V rail; source/cable/Heltec-path limits apply | JP8 removed; VIN disconnected |
 
-JP8 manually selects the buck or external 5 V input. Fit only one shunt and
-disconnect power before moving it; never bridge all three pins. There is no
-automatic source isolation. Use one supply source at a time. **Do not connect
-USB-C while either external source is present:** on the unchanged Heltec module,
-USB VBUS is directly connected to its 5 V pin. Disconnect VIN and J3 5 V and remove
-the JP8 shunt before USB programming. The 3.3 V sensor rail comes from the Heltec
+J3 is a two-pin terminal: **1 VIN, 2 GND**. The external 5 V branch
+(F2/D4/Q9/R56/U6/R57–R60/C28–C30) has been removed. JP8 is now a two-pin
+disconnect: fitted for VIN operation, **REMOVE BEFORE USB**. Disconnect power
+and discharge the rails before changing it. There is no automatic source
+isolation. On the unchanged Heltec module, USB VBUS connects to its 5 V pin.
+Disconnect VIN and remove the JP8 shunt before USB programming.
+The 3.3 V sensor rail comes from the Heltec
 LDO through a 250 mA PTC and a TVS (SMLVT3V3).
 
 The 5 V rail is shared by the Heltec, sensors and the optional 5 V fan; the buck's
@@ -139,18 +139,64 @@ fan capacity. The design target is a fan up to 0.5 A at 5 V. Thermal performance
 be checked on a prototype in the intended enclosure. The reverse-polarity
 MOSFET includes a gate-source clamp; it is not an active overvoltage disconnect.
 
-Both external inputs use a series MOSFET with drain at the input and source at
-the protected output. D1 and D4 are **bidirectional** TVS devices, so a reversed
+VIN uses a series MOSFET with drain at the input and source at
+the protected output. D1 is a **bidirectional** TVS device, so a reversed
 input within its normal voltage magnitude does not forward-bias a TVS and force
-the fuse/PTC to trip. The former 5 V crowbar diode D3 is removed. This is
+the fuse to trip. This is
 reverse-polarity protection, not reverse-current isolation or a power mux:
-disconnect all power and discharge the rails before changing wiring. The 5 V
-input remains a regulated 5 V input; a TVS is not protection against sustained
-12/24 V miswiring. Prototype reverse-polarity tests are still required.
+disconnect all power and discharge the rails before changing wiring.
+Prototype reverse-polarity tests are still required.
+
+USB powers the Heltec, 3.3 V sensor rail, UV and other measurement interfaces.
+A 5 V fan is possible with JP9 pins 1–2, subject to the **combined USB and
+Heltec-path current budget**, not a guaranteed additional 0.5 A. The 250 mA
+sensor PTC is not a guarantee of available Heltec regulator current.
+USB does not power the VIN rail: the heater and a VIN-mode fan require VIN.
+VE.Direct's isolated side still needs power from the Victron device.
+
+### Functions by power source (v2.0)
+
+The table assumes a fitted Heltec, enabled/configured firmware features and
+correctly rated sensors/loads. It describes the circuit, not completed hardware
+qualification. Use **one power source at a time**.
+
+| Function / connector | USB-C 5 V only | VIN 6–29.2 V only |
+|----------------------|---------------|------------------|
+| JP8 / source setup | **Remove JP8**, disconnect VIN | **Fit JP8 pins 1–2**, unplug USB-C |
+| ESP32, display, Wi-Fi, LoRaWAN, dashboard | Yes | Yes, powered through the 5 V buck |
+| Davis wind / direction (J4/J5) and rain (J6/J7) | Yes | Yes |
+| BME280 / 3.3 V I²C sensors (J9) | Yes, within sensor supply budget | Yes, within sensor supply budget |
+| DS18B20 / powered 3-wire 1-Wire (J10) | Yes, within sensor supply budget | Yes, within sensor supply budget |
+| AUX analog / pulse inputs (J11) | Yes; 3.3 V sensor supply available, observe input limits | Same |
+| UV sensor (J17) | Yes; 3.3 V **or** 5 V supply available; set JP10 for signal range | Same |
+| 5 V fan (J13), JP9 pins 1–2 | Possible within combined USB/cable/Heltec-path budget; **not a guaranteed extra 0.5 A** | Design target up to 0.5 A; shares buck capacity with Heltec/sensors |
+| VIN-voltage fan (J13), JP9 pins 2–3 | **No load power** | Yes, design target up to 1 A; fan must tolerate actual VIN, including battery full-charge voltage |
+| Heater (J12) | **No load power**, even though control electronics are powered | Yes, design target up to 3 A; heater voltage is protected VIN, **not regulated 5/12/24 V** |
+| Fan tacho input (J13) | Input electronics work; a board-powered fan needs the 5 V selection above | Input electronics work with either fan-supply selection |
+| Isolated VE.Direct (J14/J15) | Yes **if the Victron device powers the isolated side** | Same; VIN does not power the isolated side |
+| Optional expansion header (J16, DNP) | 3.3 V / 5 V and signals available if fitted, within shared budget | Same |
+| Firmware flashing / updates | USB flashing and OTA available | OTA available; for USB flashing, power off, disconnect VIN and remove JP8 first |
+
+The 3.3 V sensor rail is supplied by the **Heltec regulator in both modes**:
+F3 is a nominal 250 mA PTC, and the 1-Wire branch has a nominal 100 mA PTC.
+These are protection ratings, not guaranteed available currents; regulator
+headroom and temperature derating still apply. The VIN buck's nominal 2 A is
+shared, not an independently available output allowance. Combined-load,
+fan-startup, USB-inrush and thermal tests remain required.
+Heater and VIN-fan ratings must be checked against the actual supply voltage
+and combined VIN load; a 12 V load must not be used directly on a 29.2 V battery.
+
+The fan switch Q4 is DMP6023LE (60 V, SOT-223), with guaranteed maximum 35 mΩ
+at −4.5 V gate drive. R32=100k and R33=2.2k/1206 improve gate-drive margin;
+verify at least 4.65 V at FAN_SUPPLY under the intended 5 V load and inspect
+100 Hz PWM edges/temperature. Fit **JP12** for the R61 10k pull-up to +5V
+needed by open-collector PC fan tachometers. Remove JP12 for an externally
+pulled-up or push-pull tacho, especially at 12/24 V, to avoid backfeeding +5V.
+J13 retains its original pinout; this adds no separate four-wire fan PWM pin.
 
 **Protection and signal conditioning (v2.0)**:
 
-- **TVS diodes** SMLVT3V3 at the wind and rain inputs (one per line, sitting between the RJ11 pin and its screw terminal a few millimetres away, so both connectors are protected equally), the 3.3 V rail and the 1-Wire supply; **PESD5V0S2BT** at the I²C terminal (SDA/SCL), 1-Wire DQ, AUX and VE.Direct data lines, plus the v2.0 UV signal input (D32); bidirectional SMBJ30CA at VIN and SMBJ5.0CA at external 5 V
+- **TVS diodes** SMLVT3V3 at the wind and rain inputs (one per line, sitting between the RJ11 pin and its screw terminal a few millimetres away, so both connectors are protected equally), the 3.3 V rail and the 1-Wire supply; **PESD5V0S2BT** at the I²C terminal (SDA/SCL), 1-Wire DQ, AUX and VE.Direct data lines, plus the v2.0 UV signal input (D32); bidirectional SMBJ30CA at VIN
 - **Series resistors** 330 Ω (wind, rain; 1206, behind the TVS) and 33 Ω (I²C, 1-Wire; 1 W 2512)
 - **BAT54S clamps** (one SOT-23 per signal, replacing the BAT43 pairs) before the GPIO pins
 - **RC low-pass filters** to debounce the reed switches — wind: 330 Ω + 4.7 kΩ + 100 nF (τ ≈ 0.5–0.9 ms, below the ~1.5 ms minimum contact time at full speed); rain: 330 Ω + 10 kΩ + 1 µF (τ ≈ 10–15 ms); wind direction: 10 kΩ + 1 µF
@@ -216,7 +262,7 @@ The following v2.0 pin lists are in **numbered pin order**, not necessarily left
 
 | Terminal | Pins | Function |
 |----------|------|----------|
-| J3 POWER IN | 1 VIN · 2 5V · 3 GND | Supply, see manual JP8 selection above |
+| J3 POWER IN | 1 VIN · 2 GND | 6–29.2 V only; fit JP8 for VIN, remove before USB |
 | J12 HEATER | 1 +V · 2 HEAT- | Load between +V and HEAT-, 3 A design target, runs at VIN voltage; HEAT- is switched, not permanent GND |
 | J13 FAN | 1 FAN+ · 2 GND · 3 TACH | JP9 selects 5 V (0.5 A target) or protected VIN (1 A target); tacho input |
 | J11 AUX IN | 1 3V3 · 2 AIN · 3 PULSE · 4 GND | Analog 0–3.3 V (GPIO4), or 0–5 V with R25 and matching scale; pulse/reed (GPIO48) |
@@ -1231,7 +1277,7 @@ Firmware binary: [`firmware/universal-weather-node-1.3.0-beta.1.bin`](firmware/)
 
 **Low-power mode** (`lowPowerEn`, param 31): light sleep between sub-samples in LoRa-only operation, wind/rain pulses counted while sleeping, SX1262 asleep between uplinks; on PCB v2.0 the wind-vane supply is switched off between readings (`vanePowerSave`, param 32). PCB v2.0: switched vane supply (GPIO19, Q6), UV analog input (GPIO3), R8 populated and activated with jumper JP2, separate I²C pull-up headers JP1 (SDA) and JP11 (SCL), with one empty 2.54 mm grid row between them.
 
-**Hardware v2.0 (new default, `pcb/v2.0/`, KiCad):** SMD redesign for JLCPCB, 100 × 100 mm, M3 holes 92 × 92 mm; protected VIN input 6–29.2 V (P-channel reverse-polarity switch Q7, bidirectional SMBJ30CA TVS), 5 V buck (LMR36520) and external 5 V input (Q9 MOSFET reverse-polarity protection, bidirectional SMBJ5.0CA TVS) manually selected by JP8 (1–2 buck, 2–3 external 5 V, open USB only). Use one source at a time; disconnect VIN and external 5 V and remove the JP8 shunt before connecting USB-C. Original Davis RJ11 jacks with their screw terminals below each (one TVS per line protects both); I²C, 1-Wire, AUX and UV screw terminals; J17 UV input (GPIO3) with a 3.3/5 V range jumper; wind-vane supply switched by GPIO19; heater (low side) and selectable 5 V/VIN fan (high side) outputs with tacho; isolated Victron VE.Direct; hardware revision ID on GPIO20, test pads and expansion header. See the current KiCad schematic and checklist under `pcb/v2.0/` and the refreshed production exports described above. The Fritzing design moved from `pcblayout/` to `pcb/v1.3/`.
+**Hardware v2.0 (new default, `pcb/v2.0/`, KiCad):** SMD redesign for JLCPCB, 100 × 100 mm, M3 holes 92 × 92 mm; protected two-pin VIN input 6–29.2 V (P-channel reverse-polarity switch Q7, bidirectional SMBJ30CA TVS) and 5 V buck (LMR36520). No external 5 V terminal input. Two-pin JP8 connects the buck to the shared 5 V rail; disconnect VIN and remove JP8 before connecting Heltec USB-C. Use one source at a time. Original Davis RJ11 jacks with their screw terminals below each (one TVS per line protects both); I²C, 1-Wire, AUX and UV screw terminals; J17 UV input (GPIO3) with a 3.3/5 V range jumper; wind-vane supply switched by GPIO19; heater (low side) and selectable 5 V/VIN fan (high side) outputs with tacho; isolated Victron VE.Direct; hardware revision ID on GPIO20, test pads and expansion header. See the current KiCad schematic and checklist under `pcb/v2.0/` and the refreshed production exports described above. The Fritzing design moved from `pcblayout/` to `pcb/v1.3/`.
 
 **Firmware for PCB v2.0** (see [Inputs and Outputs](#inputs-and-outputs-pcb-v20)), every function off by default:
 * Board detection through the revision ID on GPIO20; PCB revision `20` (manual override possible).

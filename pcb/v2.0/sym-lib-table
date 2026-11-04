@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "WeatherNode")(type "KiCad")(uri "${KIPRJMOD}/../../tools/pcbgen/WeatherNode.kicad_sym")(options "")(descr "Weather Node power symbols"))
+)
