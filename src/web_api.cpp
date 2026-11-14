@@ -667,7 +667,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
                     "same calibration as the main anemometer, vane 0&ndash;3.3&nbsp;V from AUX 3V3");
         fieldText  (html, "wind2off",    "2nd wind vane offset (&deg;)", String(gCfg.wind2DirOffsetDeg), 4, "&minus;180 to +180", "number");
         fieldSelect(html, "heatmode",    "Heater (J12)", gCfg.heaterMode, OPTS(heatModes));
-        fieldText  (html, "heatduty",    "Heater power (%)", String(gCfg.heaterDutyPct), 3, "1&ndash;100, PWM; auto: power at the full-power temperature", "number");
+        fieldText  (html, "heatduty",    "Heater power (%)", String(gCfg.heaterDutyPct), 3, "1&ndash;100, 10 s heating cycle (0.1 Hz); auto: power at the full-power temperature", "number");
         fieldText  (html, "heatbelow",   "Heater auto: on below (&deg;C)", String(gCfg.heaterOnBelowDc / 10.0f, 1), 6, "off again 1&nbsp;K above", "number");
         fieldText  (html, "heatminduty", "Heater auto: power at that temperature (%)", String(gCfg.heaterMinDutyPct), 3, "rises linearly towards the full-power temperature", "number");
         fieldText  (html, "heatfull",    "Heater auto: full power at (&deg;C)", String(gCfg.heaterFullBelowDc / 10.0f, 1), 6, "and colder", "number");
@@ -683,7 +683,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
         fieldCheck (html, "uven",        "UV sensor (GPIO3)", gCfg.uvEn,
                     "raw sensor voltage is reported whenever enabled; GPIO3 is never driven as an output");
         fieldText  (html, "uvscale",     "UV divider scale", String(gCfg.uvAinScale, 5), 10,
-                    "terminal V per ADC V: 1.10989 for JP10 1-2 (0-3.3 V), 1.66534 for JP10 2-3 (0-5 V)", "number");
+                    "terminal V per ADC V: 1.1 for JP10 1-2 (0-3.3 V), 1.66534 for JP10 2-3 (0-5 V)", "number");
         fieldCheck (html, "uvindexen",   "Publish calculated UV index", gCfg.uvIndexEn);
         fieldText  (html, "uvslope",     "UV index slope (index/V)", String(gCfg.uvIndexSlope, 3), 10,
                     "linear calibration; valid range 0.001-30", "number");

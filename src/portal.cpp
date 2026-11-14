@@ -217,7 +217,7 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_wind2     ("wind2",      "2nd wind sensor on AUX (0=off, 1=speed at PULSE, 2=speed + direction at AIN)", b_wind2, 2);
     WiFiManagerParameter p_wind2off  ("wind2off",   "2nd wind vane offset in degrees (-180 to 180)",          b_wind2off,   5);
     WiFiManagerParameter p_heatmode  ("heatmode",   "Heater J12 (0=off, 1=on, 2=auto below threshold)",        b_heatmode,   2);
-    WiFiManagerParameter p_heatduty  ("heatduty",   "Heater power in % (1-100, PWM; auto: at full-power temperature)", b_heatduty, 4);
+    WiFiManagerParameter p_heatduty  ("heatduty",   "Heater power in % (1-100, 10 s cycle / 0.1 Hz; auto: at full-power temperature)", b_heatduty, 4);
     WiFiManagerParameter p_heatbelow ("heatbelow",  "Heater auto: on below °C (off 1 K above)",                b_heatbelow,  7);
     WiFiManagerParameter p_heatminduty("heatminduty","Heater auto: power in % at the switch-on temperature",   b_heatminduty, 4);
     WiFiManagerParameter p_heatfull  ("heatfull",   "Heater auto: full power at and below °C",                 b_heatfull,   7);
@@ -230,7 +230,7 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_vedirecten("vedirecten", "Victron VE.Direct (0=off, 1=on)",                         b_vedirecten, 2);
     WiFiManagerParameter p_outminbatt("outminbatt", "Heater/fan minimum battery V (0=no limit; missing VE.Direct data=off)",  b_outminbatt, 5);
     WiFiManagerParameter p_uven("uven", "UV sensor on GPIO3 (0=off, 1=on; PCB v2.0 only)", b_uven, 2);
-    WiFiManagerParameter p_uvscale("uvscale", "UV divider scale (terminal V per ADC V: 1.10989 for JP10 1-2 / 0-3.3 V, 1.66534 for JP10 2-3 / 0-5 V)", b_uvscale, 11);
+    WiFiManagerParameter p_uvscale("uvscale", "UV divider scale (terminal V per ADC V: 1.1 for JP10 1-2 / 0-3.3 V, 1.66534 for JP10 2-3 / 0-5 V)", b_uvscale, 11);
     WiFiManagerParameter p_uvindexen("uvindexen", "Publish calculated UV index (0=off, 1=on)", b_uvindexen, 2);
     WiFiManagerParameter p_uvcal("uvcal", "UV calibration explicitly verified (0=no, 1=yes)", b_uvcal, 2);
     WiFiManagerParameter p_uvslope("uvslope", "UV index calibration slope (index per volt, 0.001-30)", b_uvslope, 11);

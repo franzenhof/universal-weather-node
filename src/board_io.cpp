@@ -8,6 +8,8 @@
 #include <driver/gpio.h>
 #include <DallasTemperature.h>   // DEVICE_DISCONNECTED_C
 #include <soc/usb_serial_jtag_reg.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
 
 IoState gIo;
 
@@ -23,10 +25,11 @@ namespace {
 constexpr uint32_t HW_ID_V2_MIN_MV = 1300;
 constexpr uint32_t HW_ID_V2_MAX_MV = 2000;
 
-constexpr int     LEDC_CH_HEATER = 6;      // channels 0-5 left to the Heltec library/display
-constexpr int     LEDC_CH_FAN    = 7;
-constexpr int     PWM_FREQ_HZ    = 100;    // slow: the fan's high-side P-FET has a resistive gate pull-up
+constexpr int     LEDC_CH_FAN    = 7;      // channels 0-5 left to the Heltec library/display
+constexpr int     FAN_PWM_FREQ_HZ = 100;   // the fan's high-side P-FET has a resistive gate pull-up
 constexpr int     PWM_BITS       = 8;
+constexpr int64_t HEATER_PERIOD_US = 10000000;
+constexpr uint64_t HEATER_TICK_US = HEATER_PERIOD_US / 100;
 constexpr int16_t PCNT_H_LIM     = 32767;
 constexpr unsigned long VE_TIMEOUT_MS = 10000;
 constexpr float   HYSTERESIS_C   = 1.0f;
@@ -56,7 +59,12 @@ bool  sampled = false;            // first sub-sample taken (sensor values are r
 bool  fanFullWholeCycle = true;   // fan at 100 % in every sub-sample of this cycle
 int   cycleSamples = 0;
 
-bool heaterPwmAttached = false, fanPwmAttached = false;
+bool fanPwmAttached = false;
+esp_timer_handle_t heaterTimer = nullptr;
+bool heaterTimerRunning = false;
+portMUX_TYPE heaterMux = portMUX_INITIALIZER_UNLOCKED;
+uint8_t heaterOutputDuty = 0;
+int64_t heaterPeriodStartUs = 0;
 bool heaterWant = false, fanWant = false;   // auto-mode state (with hysteresis)
 bool outputsSuspended = false;
 
@@ -111,11 +119,39 @@ void driveOutput(int pin, int ch, int pct, bool& attached)
         digitalWrite(pin, pct >= 100 ? HIGH : LOW);
     } else {
         if (!attached) {
-            ledcSetup(ch, PWM_FREQ_HZ, PWM_BITS);
+            ledcSetup(ch, FAN_PWM_FREQ_HZ, PWM_BITS);
             ledcAttachPin(pin, ch);
             attached = true;
         }
         ledcWrite(ch, (uint32_t)pct * ((1 << PWM_BITS) - 1) / 100);
+    }
+}
+
+// A timer task keeps the heating window running during blocking sensor/LoRa calls.
+void heaterTick(void*)
+{
+    portENTER_CRITICAL(&heaterMux);
+    int64_t phase = (esp_timer_get_time() - heaterPeriodStartUs) % HEATER_PERIOD_US;
+    digitalWrite(PIN_HEATER, phase < HEATER_PERIOD_US * heaterOutputDuty / 100 ? HIGH : LOW);
+    portEXIT_CRITICAL(&heaterMux);
+}
+
+void driveHeater(uint8_t pct)
+{
+    portENTER_CRITICAL(&heaterMux);
+    if (heaterOutputDuty == 0) heaterPeriodStartUs = esp_timer_get_time();
+    heaterOutputDuty = pct;
+    int64_t phase = (esp_timer_get_time() - heaterPeriodStartUs) % HEATER_PERIOD_US;
+    digitalWrite(PIN_HEATER, phase < HEATER_PERIOD_US * pct / 100 ? HIGH : LOW);
+    portEXIT_CRITICAL(&heaterMux);
+
+    bool needsTimer = pct > 0 && pct < 100;
+    if (heaterTimerRunning && !needsTimer) {
+        ESP_ERROR_CHECK(esp_timer_stop(heaterTimer));
+        heaterTimerRunning = false;
+    } else if (!heaterTimerRunning && needsTimer) {
+        ESP_ERROR_CHECK(esp_timer_start_periodic(heaterTimer, HEATER_TICK_US));
+        heaterTimerRunning = true;
     }
 }
 
@@ -190,7 +226,7 @@ void updateOutputs()
     uint8_t fanDuty    = fanOn    ? (uint8_t)constrain((int)gCfg.fanDutyPct,    1, 100) : 0;
 
     if (heaterDuty != gIo.heaterDuty) {
-        driveOutput(PIN_HEATER, LEDC_CH_HEATER, heaterDuty, heaterPwmAttached);
+        driveHeater(heaterDuty);
         dbgSerial.printf("Heater: %u %%\n", heaterDuty);
     }
     if (fanDuty != gIo.fanDuty) {
@@ -265,6 +301,14 @@ void ioInit()
     // pull-downs on the board already hold them off during boot).
     pinMode(PIN_HEATER, OUTPUT);  digitalWrite(PIN_HEATER, LOW);
     pinMode(PIN_FAN,    OUTPUT);  digitalWrite(PIN_FAN,    LOW);
+    if (!heaterTimer) {
+        esp_timer_create_args_t timer = {};
+        timer.callback = heaterTick;
+        timer.dispatch_method = ESP_TIMER_TASK;
+        timer.name = "heater";
+        timer.skip_unhandled_events = true;
+        ESP_ERROR_CHECK(esp_timer_create(&timer, &heaterTimer));
+    }
     // GPIO3 is permanently an ADC input on this revision and must never be
     // driven, even when UV measurement is disabled.
     pinMode(PIN_UV_AIN, INPUT);
@@ -287,7 +331,7 @@ void ioSuspendOutputs()
 {
     if (!ioV2()) return;
     outputsSuspended = true;
-    driveOutput(PIN_HEATER, LEDC_CH_HEATER, 0, heaterPwmAttached);
+    driveHeater(0);
     driveOutput(PIN_FAN, LEDC_CH_FAN, 0, fanPwmAttached);
     gIo.heaterOn = gIo.fanOn = false;
     gIo.heaterDuty = gIo.fanDuty = 0;

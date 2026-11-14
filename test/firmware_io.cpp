@@ -4,6 +4,7 @@
 #include "params.h"
 #include "LoRaWAN_ESP32.h"
 #include "driver/pcnt.h"
+#include <esp_timer.h>
 #include <cassert>
 
 extern Config hostSavedConfig;
@@ -25,10 +26,65 @@ int main()
     gCfg.heaterDutyPct=60;gCfg.fanDutyPct=75;
     ioPoll();
     assert(gIo.heaterDuty==60 && gIo.fanDuty==75);
-    assert(hostAttached[PIN_HEATER] && hostAttached[PIN_FAN]);
+    assert(!hostAttached[PIN_HEATER] && hostAttached[PIN_FAN]);
+    assert(hostPwmFrequencies()[7]==100);
+    assert(hostHeaterTimer().running && hostHeaterTimer().periodUs==100000);
+    assert(hostPins[PIN_HEATER]==HIGH);
+    unsigned long heaterStart=hostNow;
+    hostNow=heaterStart+5999;hostRunTimers();
+    assert(hostPins[PIN_HEATER]==HIGH);
+    hostNow=heaterStart+6000;hostRunTimers();
+    assert(hostPins[PIN_HEATER]==LOW);
+    assert(gIo.heaterOn && gIo.heaterDuty==60); // the off window must not permit light sleep
+    hostNow=heaterStart+9999;hostRunTimers();
+    assert(hostPins[PIN_HEATER]==LOW);
+    hostNow=heaterStart+10000;hostRunTimers();
+    assert(hostPins[PIN_HEATER]==HIGH);
+    // Duty changes retain the period; timer callbacks need no ioPoll().
+    hostNow=heaterStart+12000;hostRunTimers();
+    gCfg.heaterDutyPct=30;ioPoll();
+    hostNow=heaterStart+13000;hostRunTimers();
+    assert(hostPins[PIN_HEATER]==LOW);
+    int onTicks=0;
+    for (int tick=0;tick<100;++tick) {
+        hostNow=heaterStart+20000+tick*100;
+        hostRunTimers();
+        if (hostPins[PIN_HEATER]==HIGH) ++onTicks;
+    }
+    assert(onTicks==30);
+    hostNow=heaterStart+55000;hostRunTimers();
+    assert(hostPins[PIN_HEATER]==LOW);
+    gCfg.heaterDutyPct=100;ioPoll();
+    assert(!hostHeaterTimer().running && hostPins[PIN_HEATER]==HIGH);
+    gCfg.heaterMode=0;ioPoll();
+    assert(!hostHeaterTimer().running && hostPins[PIN_HEATER]==LOW);
+    gCfg.heaterMode=1;gCfg.heaterDutyPct=1;ioPoll();
+    assert(hostPins[PIN_HEATER]==HIGH);
+    hostNow+=100;hostRunTimers();
+    assert(hostPins[PIN_HEATER]==LOW);
+    gCfg.heaterDutyPct=99;ioPoll();
+    heaterStart=hostNow-100;
+    hostNow=heaterStart+9899;hostRunTimers();
+    assert(hostPins[PIN_HEATER]==HIGH);
+    hostNow=heaterStart+9900;hostRunTimers();
+    assert(hostPins[PIN_HEATER]==LOW);
+    gCfg.heaterMode=2;gCfg.heaterDutyPct=100;
+    bme280Present=true;bme280TempC=-3;ioSample();
+    assert(gIo.heaterDuty==55 && hostHeaterTimer().running);
+    bme280TempC=5;ioSample();
+    assert(!gIo.heaterOn && !hostHeaterTimer().running && hostPins[PIN_HEATER]==LOW);
+    bme280TempC=NAN;ioSample();
+    assert(!gIo.heaterOn && hostPins[PIN_HEATER]==LOW);
+    gCfg.heaterMode=1;
+    gCfg.heaterDutyPct=60;ioPoll();
     gCfg.outMinBattDv=124;
     ioPoll();
     assert(gIo.battLockout && !gIo.heaterOn && !gIo.fanOn);
+    assert(!hostHeaterTimer().running && hostPins[PIN_HEATER]==LOW);
+    hostHeaterTimer().args.callback(hostHeaterTimer().args.arg);
+    assert(hostPins[PIN_HEATER]==LOW); // an already dispatched callback cannot re-enable heat
+    hostRunTimers();
+    assert(hostPins[PIN_HEATER]==LOW);
     gCfg.veDirectEn=1;
     ioPoll();
     assert(gIo.battLockout);
@@ -75,6 +131,9 @@ int main()
     assert(!gIo.heaterOn && !gIo.fanOn);
     assert(!hostAttached[PIN_HEATER] && !hostAttached[PIN_FAN]);
     assert(hostPins[PIN_HEATER]==LOW && hostPins[PIN_FAN]==LOW);
+    assert(!hostHeaterTimer().running);
+    hostRunTimers();
+    assert(hostPins[PIN_HEATER]==LOW);
     gCfg.heaterMode=gCfg.fanMode=1;ioPoll();ioSample();
     assert(!gIo.heaterOn && !gIo.fanOn); // latched until restart
 }
