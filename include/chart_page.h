@@ -485,12 +485,11 @@ var CARDS = [
   { key: 'humidityPct',  titleKey: 'humidity',    unit: '%',               color: '#4aa8e0' },
   { key: 'pressureQnh', titleKey: 'pressure',    unitKey: 'pressureUnit', color: '#59b370' },
   { key: 'windSpeed',   titleKey: 'wind',        unitKey: 'windUnit',     color: '#4a90d9', secondaryKey: 'windGust', secondaryLabelKey: 'gust' },
-  // "Live" value comes from /api/data's `rain` (this-cycle amount, not a
-  // rate) via currentKey, but the sparkline/records still track the
-  // history buffer's bucketed `rainMm` — the two fields aren't the same
-  // key, hence currentKey as an override of which field render() reads
-  // from `current` (defaults to `key` for every other card).
-  { key: 'rainMm', currentKey: 'rain', titleKey: 'rainAmount', unitKey: 'rainUnit', color: '#2f6690' },
+  // rangeSum: the big number is the total over the selected range (24h /
+  // 7 days, sum of the history buckets' `rainMm`, each already a per-bucket
+  // sum) rather than /api/data's this-cycle amount, which is 0 or one tip
+  // most of the time; the sub-line names the period.
+  { key: 'rainMm', rangeSum: true, titleKey: 'rainAmount', unitKey: 'rainUnit', color: '#2f6690' },
   { key: 'batteryVolt', titleKey: 'battery',     unit: 'V',               color: '#e0a63e' },
   // DS18B20 probe 0 only — the other two probes (if present) show up in the
   // ds18b20 trend chart's legend but don't get their own card (three
@@ -626,7 +625,7 @@ var CHARTS = [
   { id: 'pressure', titleKey: 'pressureQnh', series: [{ key: 'pressureQnh', color: '#59b370' }], unitKey: 'pressureUnit' },
   { id: 'wind',     titleKey: 'windChart',   series: [{ key: 'windSpeed', color: '#4a90d9', labelKey: 'speed' }, { key: 'windGust', color: '#a468c9', labelKey: 'gust' }], unitKey: 'windUnit', minZero: true },
   { id: 'rain',     titleKey: 'rainRate',    series: [{ key: 'rainRate', color: '#3f7fc1' }], unitKey: 'rainRateUnit', minZero: true },
-  { id: 'rainMm',   titleKey: 'rainAmount',  series: [{ key: 'rainMm', color: '#2f6690' }], unitKey: 'rainUnit', minZero: true },
+  { id: 'rainMm',   titleKey: 'rainAmount',  series: [{ key: 'rainMm', color: '#2f6690' }], unitKey: 'rainUnit', minZero: true, rangeSum: true },
   { id: 'battery',  titleKey: 'battery',     series: [{ key: 'batteryVolt', color: '#e0a63e' }], unit: 'V', decimals: 2 },
   { id: 'uvVoltage', titleKey: 'uvVoltage', series: [{ key: 'uvSensorVolts', color: '#7b61a8' }], unit: 'V', decimals: 3, minZero: true },
   { id: 'uvIndex', titleKey: 'uvIndex', series: [{ key: 'uvIndex', color: '#d9822b' }], unit: 'UV', decimals: 1, minZero: true },
@@ -833,6 +832,21 @@ function updateTooltip() {
 }
 
 var lastHist = null, lastCurrent = null;
+// Total of a bucketed amount series (rainMm: every bucket is already a sum),
+// null when the range holds no valid bucket.
+function rangeSum(arr) {
+  var sum = null;
+  (arr || []).forEach(function (v) { if (v !== null && v !== undefined) sum = (sum || 0) + v; });
+  return sum;
+}
+// Period the sum covers: the selected range ("24h" / "7 days") once the
+// buffer spans (almost) all of it, otherwise the actually buffered span
+// (e.g. "5.2h" after a restart) so a short history isn't read as a full day.
+function rangeSumPeriod(data) {
+  var span = (data.ageSec || []).length ? data.ageSec[0] : 0;
+  var nominal = timeRange === '7d' ? 7 * 86400 : 86400;
+  return span >= 0.95 * nominal ? t(timeRange === '7d' ? 'range7d' : 'range24h') : durationLabel(span);
+}
 // rawHist: /api/history (the selected tier's bucketed arrays — trend/sparklines/
 // records/rose). rawCurrent: /api/data (the latest completed cycle's actual
 // values — cards' big numbers, compass needle/readout). Split so "now" stays
@@ -875,7 +889,7 @@ function render(rawHist, rawCurrent) {
 
   CARDS.forEach(function (c) {
     var arr = data[c.key] || [];
-    var last = current[c.currentKey || c.key];
+    var last = c.rangeSum ? rangeSum(arr) : current[c.currentKey || c.key];
     if (last === undefined) last = null;
     var ref = cardRefs[c.key];
     // Hide entirely rather than show a permanent "--"/flat sparkline for a
@@ -886,7 +900,9 @@ function render(rawHist, rawCurrent) {
     ref.container.style.display = hasData ? '' : 'none';
     if (!hasData) return;
     var unit = (c.isTemp ? '°' : '') + (c.unit || current[c.unitKey] || data[c.unitKey] || '');
-    ref.num.textContent = last === null ? '--' : last.toFixed(c.key === 'batteryVolt' ? 2 : 1);
+    var cardUnit = c.unit || current[c.unitKey] || data[c.unitKey] || '';
+    ref.num.textContent = last === null ? '--' : last.toFixed(c.key === 'batteryVolt' || cardUnit.indexOf('in') === 0 ? 2 : 1);
+    if (c.rangeSum) ref.sub.textContent = last === null ? '' : '\u03a3 ' + rangeSumPeriod(data);
     ref.unit.textContent = last === null ? '' : (' ' + unit);
     if (c.secondaryKey) {
       var sec = current[c.secondaryKey];
@@ -911,6 +927,12 @@ function render(rawHist, rawCurrent) {
     var unit = c.unit || data[c.unitKey] || '';
     // Inches (rain in / in/h, pressure inHg) need 2 decimals to say anything.
     var decimals = unit.indexOf('in') === 0 ? 2 : (c.decimals === undefined ? 1 : c.decimals);
+    var title = t(c.titleKey);
+    if (c.rangeSum) {
+      var total = rangeSum(data[c.series[0].key]);
+      if (total !== null) title += ' \u00b7 \u03a3 ' + total.toFixed(decimals) + ' ' + unit + ' (' + rangeSumPeriod(data) + ')';
+    }
+    chartTitleEls[c.id].textContent = title;
     chartState[c.id] = { ageSec: data.ageSec || [], series: series, anchorMs: nowMs, minZero: c.minZero,
                          unit: (c.isTemp ? '°' : '') + unit, decimals: decimals,
                          dir: c.id === 'wind' ? data.windDirDeg : null };

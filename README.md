@@ -19,7 +19,7 @@ A DIY weather station on a custom PCB around the **Heltec WiFi LoRa 32 V3** (ESP
 
 The transports can be enabled independently. Web serving and weather-network uploads run in background tasks; sensor sampling and LoRaWAN share the main loop, so a radio exchange briefly pauses sampling.
 
-**Current status:** [1.3.0-beta.2](firmware/universal-weather-node-1.3.0-beta.2.bin) is the latest prepared firmware. PCB v2.0 fabrication files are ready for **prototypes**, not a hardware-qualified production run. Builds and host tests pass; physical v2.0 qualification and beta field tests on Rev 1.2/1.3 remain open. The photos below show older Rev 1.2 hardware; the v2.0 images are renders.
+**Current status:** [2.0.0-beta.1](firmware/universal-weather-node-2.0.0-beta.1.bin) is the latest prepared firmware. PCB v2.0 fabrication files are ready for **prototypes**, not a hardware-qualified production run. Builds and host tests pass; physical v2.0 qualification and beta field tests on Rev 1.2/1.3 remain open. The photos below show older Rev 1.2 hardware; the v2.0 images are renders.
 
 > **PCB v2.0 power safety:** use **one power source at a time**. JP8 is a two-pin manual buck disconnect, not a power mux. Before connecting USB-C, disconnect VIN and remove the JP8 shunt. J3 has VIN and GND only; there is no external 5 V input. Never select PCB revision `20` on a Rev 1.2/1.3 board.
 
@@ -314,9 +314,9 @@ minus left); recheck the final order. No hardware release is implied.
 - **Fan tacho** on GPIO40: transistor level conversion for an open-collector signal or an external pull-up, without feeding that voltage back into the 3.3 V rail; filter and Schmitt trigger follow the transistor
 - **Victron VE.Direct** (isolated, ADuM121N): J14 screw terminal and J15 JST-PH; pin 1 = isolated GND, pin 2 = node TX to Victron RX, pin 3 = Victron TX to node RX, pin 4 = Victron-side V+. GPIO33 receives, GPIO34 is the unused transmit direction. The MCU side of U4 runs from the Heltec 3.3 V, independent of the fused sensor rail. Never bridge isolated GND to board GND.
 - **AUX inputs** (terminal J11: `3V3 AIN PULSE GND`): **AIN** on GPIO4 (ADC1, works while Wi-Fi is on; electrical input limit 3.3 V with R25 absent, useful ADC range approximately 0–3.1 V). Populate **R25 = 15 kΩ** for 0–5 V sensors: with R24 = 10 kΩ, 5 V becomes 3.0 V at the ADC; set the input scale to **1.66667**. **PULSE** on GPIO48 is for a reed switch / open collector (4.7 kΩ pull-up, RC 0.47 ms, Schmitt trigger — inverted like rain and wind), e.g. a second rain gauge or an anemometer
-- **UV sensor input** (terminal J17: `GND SIGNAL 3V3 5V`): GPIO3 ADC1 with a connector-side D32 PESD5V0S2BT TVS, a 10 kΩ input resistor, BAT54S rail clamps and range-select divider. JP10 1–2 selects 0–3.3 V (scale 1.10989); 2–3 selects 0–5 V (scale 1.66534). D32 has 5 V standoff, not a 5 V clamp; the resistor/divider and BAT54S remain necessary. The 5 V pin is fed through its own PTC F8 (nominal 100 mA), so a shorted UV cable cannot pull down the shared 5 V rail. Supply the sensor from exactly one voltage pin; the UV index requires separate sensor calibration. This protection does not guarantee survival of sustained overvoltage or prevent backfeeding from an externally powered sensor when the controller is off.
+- **UV sensor input** (terminal J17: `GND SIGNAL 3V3 5V`): GPIO3 ADC1 with a connector-side D32 PESD5V0S2BT TVS, a 10 kΩ input resistor, BAT54S rail clamps and range-select divider. JP10 1–2 selects 0–3.3 V (scale 1.1); 2–3 selects 0–5 V (scale 1.66534). D32 has 5 V standoff, not a 5 V clamp; the resistor/divider and BAT54S remain necessary. The 5 V pin is fed through its own PTC F8 (nominal 100 mA), so a shorted UV cable cannot pull down the shared 5 V rail. Supply the sensor from exactly one voltage pin; the UV index requires separate sensor calibration. This protection does not guarantee survival of sustained overvoltage or prevent backfeeding from an externally powered sensor when the controller is off.
 - **Hardware revision ID**: 1 MΩ / 1 MΩ divider on GPIO20 (≈ 1.65 V on v2.0, pin open on Rev 1.x; 1.65 µA)
-- **Test pads** (GND, VIN, 5V, 3V3) and **expansion header J16** (`GND 3V3 SDA SCL IO19 5V`, 3.3 V logic, unprotected, not populated)
+- **Test pads** TP1–TP5 (GND, VIN, 5V, 3V3), plus bare probe pads **TP6** (bottom, 1.5 mm) on the Heltec 3.3 V rail (3V3_HELTEC, also U4 pin 1) and **TP7** (top, 1.0 mm, next to Q1) on the switched 1-Wire supply OW_SW, for scoping the switch-on dip; the heater gate is probed at R31 pad 1. The bottom silkscreen has **S/N and date fields** for marking prototypes. None of these are BOM/CPL parts. **Expansion header J16** (`GND 3V3 SDA SCL IO19 5V`, 3.3 V logic, unprotected, not populated)
 - **Wind-vane supply switched** by GPIO19 (P-MOSFET Q6, LOW = on; TVS SMLVT3V3 on the switched line): J5 `3V3` and the RJ11 3.3 V pin are only powered around each reading in low-power mode — see [Low-Power Mode](#low-power-mode-lora-only). GPIO3 is the UV analog input.
 - **Wind-vane pull-up R8** (4.7 kΩ) for reed-switch vanes, activated with jumper **JP2** (Rev 1.3: optional footprint R21)
 
@@ -621,6 +621,7 @@ With **Wi-Fi** and the **web API** enabled, open the node's IP address in a brow
 **Dashboard highlights:**
 
 - 🖱️ **Hover over a chart** (or tap/drag on a phone): a crosshair appears in *all* charts at the same moment, with a tooltip showing time, values and wind direction.
+- 🌧️ **Rain totals:** the rain tile and the rain amount chart show the sum over the selected range (Σ 24 h or Σ 7 days); after a restart the actually buffered span is named instead (e.g. Σ 5.2h). The daily total since midnight is on `/status` (*Rain today*).
 - 🌍 5 languages (English, German, French, Spanish, Portuguese), light/dark theme, Metric/Imperial — saved in your browser only, the device settings stay untouched.
 - 🔄 Auto-refresh from 1 s to 1 min, or off.
 - 🙈 Sensors without data (e.g. no BME280 connected) are hidden automatically.
@@ -1312,10 +1313,10 @@ esptool.py --chip esp32s3 write_flash --flash_size 8MB \
 Host-side, no hardware needed: Node.js and a C++11 compiler (`c++`, `g++` or `clang++`). Run a normal PlatformIO build first to restore ArduinoJson for the runtime regressions.
 
 ```bash
-node --test test/*.test.js           # all four test files, including firmware runtime regressions
+node --test test/*.test.js           # all six test files: firmware runtime regressions and PCB v2.0 BOM/CPL checks
 ```
 
-The suite covers decoding/encoder round trips, VE.Direct parsing, and five real-module C++ regression programs with deterministic hardware fakes (sensors, I/O, LoRa transport, telemetry and payloads). See [test/README](test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
+The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 design/BOM/CPL consistency (needs python3), and five real-module C++ regression programs with deterministic hardware fakes (sensors, I/O, LoRa transport, telemetry and payloads). See [test/README](test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
 ### REST API Endpoints
 
 | Endpoint | Method | Auth | Purpose |
@@ -1342,7 +1343,7 @@ chunked response, and MQTT sizes both its serialization buffer and packet buffer
 to the measured payload plus topic/header overhead. Allocation failures are
 logged (HTTP returns 500), rather than publishing truncated JSON.
 
-**History buffer:** two in-RAM ring buffers — 288 × 5 min (24 h) and 168 × 1 h (7 days), about 9 KB in total. Each cycle is merged into the current bucket of both: average for most values, maximum for gust, sum for rain amount. Disabled sensors leave gaps instead of zeros. The still-open bucket is included as the newest point, so charts show data right after boot. The buffer is cleared by a restart; for long-term history use Grafana via MQTT/ChirpStack. The dashboard's "now" values come from `/api/data`, not from the history.
+**History buffer:** two in-RAM ring buffers — 288 × 5 min (24 h) and 168 × 1 h (7 days), about 9 KB in total. Each cycle is merged into the current bucket of both: average for most values, maximum for gust, sum for rain amount. Disabled sensors leave gaps instead of zeros. The still-open bucket is included as the newest point, so charts show data right after boot. The buffer is cleared by a restart; for long-term history use Grafana via MQTT/ChirpStack. The dashboard's "now" values come from `/api/data`, not from the history; the rain tile is the exception and shows the sum of the history's rain amounts over the selected range.
 
 ### Robustness
 
@@ -1436,6 +1437,18 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 ---
 
 ## Changelog
+
+### 2.0.0-beta.1
+
+Firmware binary: [`universal-weather-node-2.0.0-beta.1.bin`](firmware/universal-weather-node-2.0.0-beta.1.bin) (application image for OTA or USB with the existing compatible partition table). First firmware for the PCB v2.0 prototype order; still supports Rev 1.2 and 1.3 (select the revision manually on older boards). Beta: nothing has been tested on v2.0 hardware yet; a release candidate follows after prototype bring-up and a field test.
+
+**Changes since 1.3.0-beta.2:**
+* Heater output J12: 0.1 Hz time-proportional control (10 s cycle, 1 % steps) from an independent timer task instead of 100 Hz PWM; the cycle keeps running during blocking sensor/LoRa calls, duty changes keep the cycle phase, the portal/OTA still latches both outputs off. Fan PWM stays at 100 Hz.
+* Dashboard: the rain tile and the rain amount chart show the total over the selected range (Σ 24 h / Σ 7 days, or the buffered span after a restart) instead of the last cycle's amount.
+* UV input default divider scale 1.1 for JP10 1-2 (0–3.3 V), matching the changed v2.0 divider (R52 100k); 1.66534 for JP10 2-3 is unchanged. Existing saved settings are kept.
+* PCB v2.0 fabrication data finished for prototypes: VIN + USB power with manual disconnect (JP8), fewer extended parts, separate THT list, preview-matched CPL (Q7 centroid), probe pads TP6/TP7 and a bottom S/N field.
+
+**Validation:** PlatformIO build and all six host test files passed (firmware runtime regressions, payload/decoder round trips, VE.Direct, PCB v2.0 design/BOM/CPL checks). This does not replace physical hardware or LoRaWAN field testing.
 
 ### 1.3.0-beta.2
 
