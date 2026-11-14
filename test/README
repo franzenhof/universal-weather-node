@@ -29,6 +29,19 @@ Host-side project tests (no hardware required, run from the project root):
     bytes. Requires a C++11 compiler and the ArduinoJson dependency restored
     by the normal PlatformIO build. Does not flash or simulate physical timing.
 
+- node test/pcb_protection.test.js
+    Checks PCB v2.0 against tools/pcbgen/design.py: VIN/USB disconnect (J3,
+    JP8), fan high-side switch and gate resistor bank, sensor-rail LDO (U7,
+    F3, C35), footprints, nets, fixed positions, silkscreen notes, the SMD BOM
+    (47 lines / 135 references), the THT list (8 lines / 22 references) and
+    the fan PWM stability results. Requires python3.
+
+- node test/pcb_cpl.test.js
+    Rebuilds the JLCPCB CPL with tools/pcbgen/jlcpcb_cpl.py from the board
+    angles and checks it equals the committed CPL: 135 placements, preview-
+    matched rotation offsets, Q7 centroid 1.4 mm towards the leads, all other
+    positions unchanged, plus the article/angle guards. Requires python3.
+
 Run all scripts together: node --test test/*.test.js
 
 These are plain Node.js scripts, not PlatformIO unit tests; `pio test` is

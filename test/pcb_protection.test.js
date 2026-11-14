@@ -51,7 +51,8 @@ for ref in ("J3", "JP8"):
     assert {p[1] for p in find(footprints[ref], "pad")} == {"1", "2"}
 assert parts["J1"]["pins"]["2"] == "+5V"
 assert parts["J2"]["pins"]["2"] == "3V3_HELTEC"
-assert parts["F3"]["pins"] == {"1": "3V3_HELTEC", "2": "+3V3"}
+assert parts["F3"]["pins"] == {"1": "3V3_LDO", "2": "+3V3"}
+assert parts["U7"]["pins"]["1"] == "+5V" and parts["U7"]["pins"]["5"] == "3V3_LDO"
 assert parts["JP9"]["pins"] == {"1": "+5V", "2": "FAN_SUPPLY", "3": "+VLOAD"}
 assert parts["J12"]["pins"]["1"] == "+VLOAD"
 assert parts["R61"]["pins"] == {"1": "+5V", "2": "TACH_PU"}
@@ -80,7 +81,7 @@ assert parts["C34"]["fp"].endswith("C_1210_3225Metric")
 assert parts["C31"]["value"] == "47uF 63V"
 assert parts["C31"]["fp"].endswith("CP_Elec_8x10")
 assert parts["C6"]["value"] == "100uF"
-assert "C35" not in parts and "C35" not in footprints
+assert parts["C35"]["pins"] == {"1": "+5V", "2": "GND"} and parts["C35"]["value"] == "10uF 50V"
 project = json.loads(Path("pcb/v2.0/universal-weather-node.kicad_pro").read_text())
 assert not any(p["pattern"].lstrip("/") in obsolete_nets
                for p in project["net_settings"]["netclass_patterns"])
@@ -131,12 +132,17 @@ base = Path("pcb/v2.0/production")
 bom = list(csv.DictReader((base / "universal-weather-node-v2.0-bom-jlcpcb.csv").open()))
 by_ref = {r.strip(): row for row in bom for r in row["Designator"].split(",")}
 assert len(bom) == 47 and len(by_ref) == 135
+tht = list(csv.DictReader((base / "universal-weather-node-v2.0-tht-lcsc.csv").open()))
+tht_by_ref = {r.strip(): row for row in tht for r in row["Designator"].split(",")}
+assert len(tht) == 8 and len(tht_by_ref) == 22 and not set(tht_by_ref) & set(by_ref)
+assert not removed.intersection(tht_by_ref)
 assert not removed.intersection(by_ref)
 assert by_ref["Q4"]["LCSC Part #"] == "C154901"
 assert by_ref["R32"]["LCSC Part #"] == "C17819"
 assert by_ref["R32"]["MPN"] == "UNI-ROYAL 0805W8F7502T5E (75 kOhm, 1%, 0.125 W, 0805)"
-assert by_ref["J3"]["LCSC Part #"] == "C466970"
-assert by_ref["JP8"]["LCSC Part #"] == "C53055672"
+assert tht_by_ref["J3"]["LCSC Part #"] == "C466970"
+assert tht_by_ref["JP8"]["LCSC Part #"] == "C53055672"
+by_ref = {**by_ref, **tht_by_ref}
 for ref in bank:
     assert by_ref[ref]["LCSC Part #"] == "C17944"
     assert by_ref[ref]["MPN"] == "UNI-ROYAL 1206W4F2001T5E (2 kOhm, 1%, 0.25 W, 1206)"
