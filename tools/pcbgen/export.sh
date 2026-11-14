@@ -32,13 +32,22 @@ with open(sys.argv[3],'w',newline='') as fh:
         if r['Ref'] not in smd: continue
         w.writerow([r['Ref'], r['PosX']+'mm', r['PosY']+'mm', 'Top' if r['Side']=='top' else 'Bottom', r['Rot']]); n+=1
 key=lambda s:(re.match(r'[A-Z]+',s).group(), int(re.search(r'\d+',s).group()))
-groups={}
-for r,v in info.items(): groups.setdefault(v,[]).append(r)
+# JLCPCB assembles the SMD parts only; through-hole parts go to a separate LCSC list for hand soldering
+groups={}; tht={}
+for r,v in info.items():
+    if r in smd: groups.setdefault(v,[]).append(r)
+    else: tht.setdefault(v[1:],[]).append(r)
+order=lambda g: sorted(g.items(), key=lambda kv: key(sorted(kv[1],key=key)[0]))
 with open(f'production/{N}-v2.0-bom-jlcpcb.csv','w',newline='') as fh:
     w=csv.writer(fh, quoting=csv.QUOTE_ALL); w.writerow(["Comment","Designator","Footprint","LCSC Part #","MPN"])
-    for (v,fp,lc,mpn),refs in sorted(groups.items(), key=lambda kv: key(sorted(kv[1],key=key)[0])):
+    for (v,fp,lc,mpn),refs in order(groups):
         w.writerow([v, ",".join(sorted(refs,key=key)), fp, lc, mpn])
-print('CPL SMD placements', n, 'BOM lines', len(groups), 'THT/DNP excluded from CPL', len(info)-len(smd),
+with open(f'production/{N}-v2.0-tht-lcsc.csv','w',newline='') as fh:
+    w=csv.writer(fh, quoting=csv.QUOTE_ALL); w.writerow(["LCSC Part #","MPN","Qty per board","Designator","Use","Footprint"])
+    for (fp,lc,mpn),refs in order(tht):
+        refs=sorted(refs,key=key)
+        w.writerow([lc, mpn, len(refs), ",".join(refs), "; ".join(dict.fromkeys(info[r][0] for r in refs)), fp])
+print('CPL SMD placements', n, 'BOM lines', len(groups), 'THT lines (LCSC list)', len(tht),
       'missing LCSC', [r for r,v in info.items() if not v[2]])
 PYEOF
 $PY -B "$HERE/jlcpcb_cpl.py" \

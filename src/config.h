@@ -154,7 +154,7 @@ struct Config {
     volatile int   outMinBattDv   = 0;     // heater/fan locked out below this battery voltage
                                            // or without valid VE.Direct (0.1 V); 0 = no limit
     volatile int   uvEn           = 0;     // 1 = UV sensor analog voltage on GPIO3 (PCB v2.0 only)
-    volatile float uvAinScale     = 1.10989f; // terminal V per ADC V; JP10 1-2: 1.10989, 2-3: 1.66534
+    volatile float uvAinScale     = 1.1f;     // terminal V per ADC V; JP10 1-2: 1.1, 2-3: 1.66534
     volatile int   uvIndexEn      = 0;     // 1 = publish calculated UV index; requires explicit calibration flag
     volatile int   uvCalibrated   = 0;     // explicit user confirmation that slope/offset are calibrated
     volatile float uvIndexSlope  = 1.0f;  // UV index per terminal volt

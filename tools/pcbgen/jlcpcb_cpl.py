@@ -21,10 +21,13 @@ DFN_CANDIDATES = {
     "Q3": ("C431191", "Package_SO:Vishay_PowerPAK_1212-8_Single", 270),
 }
 CANDIDATES = {**SOIC_CANDIDATES, **SOT6_CANDIDATES, **SC70_CANDIDATES, **DFN_CANDIDATES}
-SOT23_PARTS = {"C15127", "C20917", "C37130", "C20526", "C8592", "C49338"}
+SOT23_PARTS = {"C15127", "C20917", "C37130", "C20526", "C49338", "C7420333"}
+# C7420333 (R+O BAT54S) follows the same +180 degrees rule: 2026-11-06 10:19:27 UTC preview
+SOT23_PENDING = set()
 NEW_PARTS = {
     "Q4": ("C154901", "Package_TO_SOT_SMD:SOT-223-3_TabPin2", 90),
 }
+Q7_LEAD_SHIFT = 1.4
 CPL_FIELDS = ["Designator", "Mid X", "Mid Y", "Layer", "Rotation"]
 REVIEW_FIELDS = ["Designator", "LCSC Part #", "Footprint", "KiCad Rotation",
                  "Candidate Offset", "Candidate Rotation", "Status", "Check"]
@@ -77,8 +80,12 @@ def build(raw_rows, bom_rows):
         elif (part["Footprint"] == "Package_TO_SOT_SMD:SOT-23"
               and part["LCSC Part #"] in SOT23_PARTS):
             offset = 180
-            status = "PREVIEW_MATCHED_SOT23"
-            check = "Pin 1 must match PCB triangle; verify all three leads on pads"
+            if part["LCSC Part #"] in SOT23_PENDING:
+                status = "NEEDS_PREVIEW_SOT23"
+                check = "New BAT54S article (R+O): pin 1 must match PCB triangle; confirm +180 degrees"
+            else:
+                status = "PREVIEW_MATCHED_SOT23"
+                check = "Pin 1 must match PCB triangle; verify all three leads on pads"
         elif ref.startswith("R") or (
                 ref.startswith("C") and part["Footprint"].startswith("Capacitor_SMD:C_")):
             status = "NONPOLAR_CHECK"
@@ -91,8 +98,30 @@ def build(raw_rows, bom_rows):
             status = "PREVIEW_MATCHED_POLARITY"
             check = "Cathode band matches PCB pad 1; retain article and verify final order"
         elif ref == "Q7":
+            if (part["LCSC Part #"], angle % 360) != ("C130104", 90):
+                raise ValueError(f"{ref}: TO-252 part/angle changed; reassess centroid shift")
             status = "PREVIEW_MATCHED_TO252"
-            check = "Tab top, gate/pin 1 lower left; verify source/drain against final order"
+            check = ("Tab top, gate/pin 1 lower left. JLC's model sits 1.4 mm towards the tab "
+                     "(2026-11-06 previews: leads only touch the pad edge, metal tab beyond the "
+                     "tab pad): centroid moved 1.4 mm towards the leads; verify in the final order")
+        elif ref == "C31":
+            if (part["LCSC Part #"], part["Footprint"], angle % 360) != (
+                    "C445452", "Capacitor_SMD:CP_Elec_8x10", 180):
+                raise ValueError(f"{ref}: capacitor part/footprint/angle changed; reassess polarity")
+            offset = 180
+            status = "PREVIEW_MATCHED_POLARITY"
+            check = ("2026-11-05 11:15:14 UTC preview confirms plus/pad 1 right, minus left; "
+                     "+180 degrees correction, raw 180 -> CPL 0; verify final order")
+        elif ref == "U7":
+            if (part["LCSC Part #"], part["Footprint"], angle % 360) != (
+                    "C51118", "Package_TO_SOT_SMD:SOT-23-5", 90):
+                raise ValueError(f"{ref}: LDO part/footprint/angle changed; reassess placement")
+            offset = 270
+            status = "PREVIEW_MATCHED_SOT23_5"
+            check = ("2026-11-06 09:19:56 UTC preview showed the raw angle 90 degrees off (three "
+                     "leads right, pin 1 lower right); +270 degrees, raw 90 -> CPL 0. The 09:27:10 UTC "
+                     "preview confirms pin 1/VIN lower left, three leads bottom (VIN, GND, EN), two top "
+                     "(NC, VOUT)")
         elif ref == "C6":
             status = "PREVIEW_MATCHED_POLARITY"
             check = "Plus bottom, minus top; do not apply generic electrolytic offset"
@@ -105,6 +134,9 @@ def build(raw_rows, bom_rows):
         rotation = (angle + offset) % 360
         placement = dict(row)
         placement["Rotation"] = f"{rotation:.6f}"
+        if ref == "Q7":
+            # leads point down on the board (raw 90 degrees); the CPL Y axis points up
+            placement["Mid Y"] = f"{float(row['Mid Y'].removesuffix('mm')) - Q7_LEAD_SHIFT:.6f}mm"
         placements.append(placement)
         review.append(dict(zip(REVIEW_FIELDS, [
             ref, part["LCSC Part #"], part["Footprint"], row["Rotation"],
@@ -142,6 +174,7 @@ def main():
     print(f"CPL: {len(placements)} placements, five previously reviewed ICs and Q3 +270 degrees, "
           "article-matched SOT-23 parts +180 degrees; "
           "Q4 +180 degrees confirmed in the 2026-11-04 19:31:57 UTC preview; "
+          "Q7 centroid 1.4 mm towards the leads; "
           "External 5V input and U6 removed. Check the final order preview. "
           "Hardware qualification remains open.")
 

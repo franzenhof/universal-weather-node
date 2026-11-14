@@ -1,0 +1,406 @@
+{
+  "scope": "Nominal subcircuit SPICE only; not a whole-board or real-fan qualification.",
+  "model": "Diodes Incorporated DMP6023LE model, v1.1 (2021-12-22)",
+  "model_url": "https://www.diodes.com/spice/download/2345/DMP6023LE.spice.txt",
+  "other_approximations": [
+    "Q5 AO3422 represented by an ideal voltage-controlled switch.",
+    "D26 represented by a nominal 12 V zener model, not its vendor model or a temperature corner.",
+    "Fan represented by a resistor (0.5 A at 5 V; 1 A at 29.2 V), not a BLDC motor.",
+    "No cable, source impedance, PCB parasitics, thermal coupling, or fan inductance."
+  ],
+  "cases": [
+    {
+      "condition": "assumed minimum 4.65 V fan supply, worst gate-drive resistor corner",
+      "fan_supply_V": 4.65,
+      "resistive_load_ohm": 9.3,
+      "R32_ohm": 74250.0,
+      "gate_bank_resistors_ohm": {
+        "R33": 2020.0,
+        "R62": 2020.0,
+        "R63": 2020.0,
+        "R64": 2020.0
+      },
+      "gate_bank_effective_ohm": 2020.0,
+      "pwm_Hz": 100,
+      "duty": 0.9,
+      "on_gate_drive_V": 4.526773389000001,
+      "off_command_to_output_below_10_percent_us": 375.021100000001,
+      "output_90_to_10_percent_us": 146.79210000000108,
+      "Q4_average_model_loss_W": 0.012939190451379517,
+      "gate_bank_average_model_loss_W": 1.1593024794819918e-05,
+      "resistor_average_model_loss_W": {
+        "R33": 2.898256200665886e-06,
+        "R62": 2.8982561967440733e-06,
+        "R63": 2.898256200665886e-06,
+        "R64": 2.8982561967440733e-06
+      },
+      "D26_average_model_loss_W": -7.195231140905048e-10
+    },
+    {
+      "condition": "5 V nominal fan supply",
+      "fan_supply_V": 5.0,
+      "resistive_load_ohm": 10.0,
+      "R32_ohm": 75000.0,
+      "gate_bank_resistors_ohm": {
+        "R33": 2000.0,
+        "R62": 2000.0,
+        "R63": 2000.0,
+        "R64": 2000.0
+      },
+      "gate_bank_effective_ohm": 2000.0,
+      "pwm_Hz": 100,
+      "duty": 0.9,
+      "on_gate_drive_V": 4.870075438,
+      "off_command_to_output_below_10_percent_us": 406.8121000000008,
+      "output_90_to_10_percent_us": 148.58310000000034,
+      "Q4_average_model_loss_W": 0.013395586687934362,
+      "gate_bank_average_model_loss_W": 1.3256513924567846e-05,
+      "resistor_average_model_loss_W": {
+        "R33": 3.314128480466332e-06,
+        "R62": 3.31412848181759e-06,
+        "R63": 3.314128480466332e-06,
+        "R64": 3.31412848181759e-06
+      },
+      "D26_average_model_loss_W": -7.233892995824128e-10
+    },
+    {
+      "condition": "29.2 V nominal fan supply",
+      "fan_supply_V": 29.2,
+      "resistive_load_ohm": 29.2,
+      "R32_ohm": 75000.0,
+      "gate_bank_resistors_ohm": {
+        "R33": 2000.0,
+        "R62": 2000.0,
+        "R63": 2000.0,
+        "R64": 2000.0
+      },
+      "gate_bank_effective_ohm": 2000.0,
+      "pwm_Hz": 100,
+      "duty": 0.9,
+      "on_gate_drive_V": 12.055588499999999,
+      "off_command_to_output_below_10_percent_us": 856.0848000000003,
+      "output_90_to_10_percent_us": 172.00000000000028,
+      "Q4_average_model_loss_W": 0.13515789701796382,
+      "gate_bank_average_model_loss_W": 0.13219957877008617,
+      "resistor_average_model_loss_W": {
+        "R33": 0.033049894692207135,
+        "R62": 0.03304989469283595,
+        "R63": 0.033049894692207135,
+        "R64": 0.03304989469283595
+      },
+      "D26_average_model_loss_W": 0.09116625927994927
+    },
+    {
+      "condition": "29.2 V, slow turn-off resistor corner",
+      "fan_supply_V": 29.2,
+      "resistive_load_ohm": 29.2,
+      "R32_ohm": 75750.0,
+      "gate_bank_resistors_ohm": {
+        "R33": 2020.0,
+        "R62": 2020.0,
+        "R63": 2020.0,
+        "R64": 2020.0
+      },
+      "gate_bank_effective_ohm": 2020.0,
+      "pwm_Hz": 100,
+      "duty": 0.9,
+      "on_gate_drive_V": 12.0549171,
+      "off_command_to_output_below_10_percent_us": 863.852200000001,
+      "output_90_to_10_percent_us": 172.00000000000028,
+      "Q4_average_model_loss_W": 0.1363544835069268,
+      "gate_bank_average_model_loss_W": 0.13090205117715448,
+      "resistor_average_model_loss_W": {
+        "R33": 0.03272551279329875,
+        "R62": 0.03272551279527848,
+        "R63": 0.03272551279329875,
+        "R64": 0.03272551279527848
+      },
+      "D26_average_model_loss_W": 0.0902616388762534
+    }
+  ],
+  "corner_checks": {
+    "R32_75k_tolerance_percent": 1,
+    "bank_resistor_2k_tolerance_percent": 1,
+    "bank_topology": "(R33 + R62) || (R63 + R64)",
+    "individual_resistor_tolerance_corner_count": 16,
+    "normal_input_bank_corners": [
+      {
+        "resistors_ohm": {
+          "R33": 1980.0,
+          "R62": 1980.0,
+          "R63": 1980.0,
+          "R64": 1980.0
+        },
+        "effective_ohm": 1980.0,
+        "power_W": {
+          "R33": 0.04274747474747474,
+          "R62": 0.04274747474747474,
+          "R63": 0.04274747474747474,
+          "R64": 0.04274747474747474
+        },
+        "total_power_W": 0.17098989898989897
+      },
+      {
+        "resistors_ohm": {
+          "R33": 1980.0,
+          "R62": 1980.0,
+          "R63": 1980.0,
+          "R64": 2020.0
+        },
+        "effective_ohm": 1989.9497487437186,
+        "power_W": {
+          "R33": 0.04274747474747474,
+          "R62": 0.04274747474747474,
+          "R63": 0.0418968,
+          "R64": 0.0427432
+        },
+        "total_power_W": 0.17013494949494948
+      },
+      {
+        "resistors_ohm": {
+          "R33": 1980.0,
+          "R62": 1980.0,
+          "R63": 2020.0,
+          "R64": 1980.0
+        },
+        "effective_ohm": 1989.9497487437186,
+        "power_W": {
+          "R33": 0.04274747474747474,
+          "R62": 0.04274747474747474,
+          "R63": 0.0427432,
+          "R64": 0.0418968
+        },
+        "total_power_W": 0.17013494949494948
+      },
+      {
+        "resistors_ohm": {
+          "R33": 1980.0,
+          "R62": 1980.0,
+          "R63": 2020.0,
+          "R64": 2020.0
+        },
+        "effective_ohm": 1999.8,
+        "power_W": {
+          "R33": 0.04274747474747474,
+          "R62": 0.04274747474747474,
+          "R63": 0.0419009900990099,
+          "R64": 0.0419009900990099
+        },
+        "total_power_W": 0.16929692969296928
+      },
+      {
+        "resistors_ohm": {
+          "R33": 1980.0,
+          "R62": 2020.0,
+          "R63": 1980.0,
+          "R64": 1980.0
+        },
+        "effective_ohm": 1989.9497487437186,
+        "power_W": {
+          "R33": 0.0418968,
+          "R62": 0.0427432,
+          "R63": 0.04274747474747474,
+          "R64": 0.04274747474747474
+        },
+        "total_power_W": 0.17013494949494948
+      },
+      {
+        "resistors_ohm": {
+          "R33": 1980.0,
+          "R62": 2020.0,
+          "R63": 1980.0,
+          "R64": 2020.0
+        },
+        "effective_ohm": 2000.0,
+        "power_W": {
+          "R33": 0.0418968,
+          "R62": 0.0427432,
+          "R63": 0.0418968,
+          "R64": 0.0427432
+        },
+        "total_power_W": 0.16927999999999999
+      },
+      {
+        "resistors_ohm": {
+          "R33": 1980.0,
+          "R62": 2020.0,
+          "R63": 2020.0,
+          "R64": 1980.0
+        },
+        "effective_ohm": 2000.0,
+        "power_W": {
+          "R33": 0.0418968,
+          "R62": 0.0427432,
+          "R63": 0.0427432,
+          "R64": 0.0418968
+        },
+        "total_power_W": 0.16927999999999999
+      },
+      {
+        "resistors_ohm": {
+          "R33": 1980.0,
+          "R62": 2020.0,
+          "R63": 2020.0,
+          "R64": 2020.0
+        },
+        "effective_ohm": 2009.9502487562188,
+        "power_W": {
+          "R33": 0.0418968,
+          "R62": 0.0427432,
+          "R63": 0.0419009900990099,
+          "R64": 0.0419009900990099
+        },
+        "total_power_W": 0.1684419801980198
+      },
+      {
+        "resistors_ohm": {
+          "R33": 2020.0,
+          "R62": 1980.0,
+          "R63": 1980.0,
+          "R64": 1980.0
+        },
+        "effective_ohm": 1989.9497487437186,
+        "power_W": {
+          "R33": 0.0427432,
+          "R62": 0.0418968,
+          "R63": 0.04274747474747474,
+          "R64": 0.04274747474747474
+        },
+        "total_power_W": 0.17013494949494948
+      },
+      {
+        "resistors_ohm": {
+          "R33": 2020.0,
+          "R62": 1980.0,
+          "R63": 1980.0,
+          "R64": 2020.0
+        },
+        "effective_ohm": 2000.0,
+        "power_W": {
+          "R33": 0.0427432,
+          "R62": 0.0418968,
+          "R63": 0.0418968,
+          "R64": 0.0427432
+        },
+        "total_power_W": 0.16927999999999999
+      },
+      {
+        "resistors_ohm": {
+          "R33": 2020.0,
+          "R62": 1980.0,
+          "R63": 2020.0,
+          "R64": 1980.0
+        },
+        "effective_ohm": 2000.0,
+        "power_W": {
+          "R33": 0.0427432,
+          "R62": 0.0418968,
+          "R63": 0.0427432,
+          "R64": 0.0418968
+        },
+        "total_power_W": 0.16927999999999999
+      },
+      {
+        "resistors_ohm": {
+          "R33": 2020.0,
+          "R62": 1980.0,
+          "R63": 2020.0,
+          "R64": 2020.0
+        },
+        "effective_ohm": 2009.9502487562188,
+        "power_W": {
+          "R33": 0.0427432,
+          "R62": 0.0418968,
+          "R63": 0.0419009900990099,
+          "R64": 0.0419009900990099
+        },
+        "total_power_W": 0.1684419801980198
+      },
+      {
+        "resistors_ohm": {
+          "R33": 2020.0,
+          "R62": 2020.0,
+          "R63": 1980.0,
+          "R64": 1980.0
+        },
+        "effective_ohm": 1999.8,
+        "power_W": {
+          "R33": 0.0419009900990099,
+          "R62": 0.0419009900990099,
+          "R63": 0.04274747474747474,
+          "R64": 0.04274747474747474
+        },
+        "total_power_W": 0.16929692969296928
+      },
+      {
+        "resistors_ohm": {
+          "R33": 2020.0,
+          "R62": 2020.0,
+          "R63": 1980.0,
+          "R64": 2020.0
+        },
+        "effective_ohm": 2009.9502487562188,
+        "power_W": {
+          "R33": 0.0419009900990099,
+          "R62": 0.0419009900990099,
+          "R63": 0.0418968,
+          "R64": 0.0427432
+        },
+        "total_power_W": 0.1684419801980198
+      },
+      {
+        "resistors_ohm": {
+          "R33": 2020.0,
+          "R62": 2020.0,
+          "R63": 2020.0,
+          "R64": 1980.0
+        },
+        "effective_ohm": 2009.9502487562188,
+        "power_W": {
+          "R33": 0.0419009900990099,
+          "R62": 0.0419009900990099,
+          "R63": 0.0427432,
+          "R64": 0.0418968
+        },
+        "total_power_W": 0.1684419801980198
+      },
+      {
+        "resistors_ohm": {
+          "R33": 2020.0,
+          "R62": 2020.0,
+          "R63": 2020.0,
+          "R64": 2020.0
+        },
+        "effective_ohm": 2020.0,
+        "power_W": {
+          "R33": 0.0419009900990099,
+          "R62": 0.0419009900990099,
+          "R63": 0.0419009900990099,
+          "R64": 0.0419009900990099
+        },
+        "total_power_W": 0.1676039603960396
+      }
+    ],
+    "minimum_gate_drive_at_assumed_4_65V_supply_V": 4.526845417595385,
+    "minimum_gate_drive_required_V": 4.5,
+    "worst_bank_power_at_29_2V_normal_input_W": 0.17098989898989897,
+    "worst_individual_resistor_power_at_29_2V_W": 0.04274747474747474,
+    "per_resistor_nameplate_power_W": 0.25,
+    "bank_aggregate_nameplate_power_W": 1.0,
+    "individual_resistor_power_margin_at_29_2V_W": 0.20725252525252524,
+    "power_rating_caveat": "Nameplate sum only; PCB thermal coupling, ambient derating and pulse capability remain unqualified.",
+    "worst_D26_power_at_29_2V_normal_input_W": 0.10036363636363636,
+    "D26_assumed_rating_W": 0.5,
+    "D26_power_at_48_4V_TVS_max_clamp_W": 0.20509090909090907,
+    "bank_power_at_48_4V_TVS_max_clamp_W": 0.7140202020202018,
+    "individual_resistor_power_at_48_4V_TVS_max_clamp_W": 0.17850505050505044,
+    "48_4V_state": "transient clamp only; resistor pulse qualification is not established by this model"
+  },
+  "acceptance": {
+    "turn_off_window_us": 1000,
+    "all_cases_below_10_percent_before_next_PWM_on": true,
+    "minimum_gate_drive_pass": true,
+    "normal_input_each_resistor_power_below_nameplate": true,
+    "normal_input_D26_power_below_assumed_rating": true
+  }
+}

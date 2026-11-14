@@ -36,35 +36,41 @@ PF = {"a": 180}                             # P-FET: G right, S top, D bottom
 BLOCKS = [
     dict(title="Heltec WiFi LoRa 32 V3.2", x=2, y=2, w=58, h=62, parts=[
         ("J1", 16, 30), ("J2", 40, 30, M),
-        ("R1", 8, 48, V), ("R2", 8, 54, V), ("C10", 13, 54, V),
+        ("R1", 8, 48, V), ("R2", 8, 54, V), ("C10", 13, 54, V), ("C37", 52, 30, V),
         ("J16", 30, 52, M),
-        ("TP1", 44, 47), ("TP2", 47, 47, VF), ("TP3", 50, 47, VF), ("TP4", 53, 47, VF), ("TP5", 56, 47)],
+        ("TP1", 44, 47), ("TP2", 47, 47, VF), ("TP3", 50, 47, VF), ("TP4", 53, 47, VF), ("TP5", 56, 47),
+        ("TP6", 50, 57, VF)],
         notes=[(3, 7, "J1 = header on the 5 V side, J2 = header on the 3V3 side (pin 1 = GND, USB-C end)\n"
                       "V3 / V3.1 / V3.2 are pin-compatible"),
                (3, 42, "HW revision ID (GPIO20):\nv2.0 = 1M / 1M -> 0.5 x 3V3"),
-               (22, 58, "J16 expansion header, TP1-TP5 test pads (not populated)")]),
+               (22, 58, "J16 expansion header, TP1-TP7 test pads (not populated)")]),
     dict(title="Power supply: VIN 6-29.2 V or Heltec USB-C; manual JP8 disconnect", x=62, y=2, w=106, h=46, parts=[
-        ("F1", 30, 9, H), ("C1", 32, 13, V), ("C2", 35, 13, V),
+        ("F1", 30, 9, H), ("C1", 32, 13, V), ("C33", 35, 13, V), ("C2", 38, 13, V),
         ("U1", 40, 11), ("C3", 45, 10, H), ("L1", 50, 10, H), ("C26", 44, 17, V),
-        ("C4", 55, 12, V), ("C5", 60, 12, V),
+        ("C4", 55, 12, V), ("C5", 60, 12, V), ("C34", 65, 12, V),
         ("C6", 36, 22, V), ("C7", 39, 22, V),
         ("JP8", 30, 19),
-        ("F3", 12, 34, H), ("C8", 18, 36, V), ("C9", 21, 36, V), ("D5", 24, 35.5, DK)],
+        ("C35", 3, 36, V), ("U7", 8, 34), ("C36", 13, 36, V),
+        ("F3", 18, 34, H), ("C8", 23, 36, V), ("C9", 26, 36, V), ("D5", 29, 35.5, DK)],
         notes=[(66, 8, "LMR36520: 4.2-65 V in, 5 V / 2 A nominal buck"),
                (44, 28, "J3 has VIN and GND only; no external 5 V input.\nUSB supplies logic/sensors; heater requires VIN."),
                (44, 18, "JP8 fitted = VIN via buck\nREMOVE BEFORE USB\nopen = USB only; never parallel sources"),
                (76, 39, "USB mode: remove JP8 and disconnect VIN before connecting USB-C.\nHeltec VBUS connects to the module 5 V pin; no automatic isolation."),
-               (30, 32, "3.3 V sensor rail from the Heltec LDO,\nPTC 250 mA + TVS for the external cables")]),
+               (33, 32, "3.3 V sensor rail: own LDO U7 from 5 V,\nPTC 250 mA + TVS for the external cables;\nthe Heltec 3.3 V rail powers only the module")]),
     dict(title="VIN reverse / transient protection", x=235, y=2, w=64, h=32, parts=[
         ("J3", 5, 11, M), ("F7", 14, 9, H), ("D1", 19, 10.5, DK),
-        ("Q7", 26, 11), ("D31", 33, 13, DK), ("R45", 37, 15, H)],
-        notes=[(3, 25, "VIN 6-29.2 V battery max. Q7 drain=input, source=protected rail.\nD31 is the 12 V VGS clamp; bidirectional D1: 48.4 V max clamp, no reverse crowbar.")]),
+        ("Q7", 26, 11), ("D31", 33, 13, DK), ("R45", 37, 15, H), ("C31", 46, 14, V)],
+        notes=[(3, 25, "VIN 6-29.2 V battery max. Q7 drain=input, source=protected rail.\nD31 is the 12 V VGS clamp; bidirectional D1: 48.4 V max clamp, no reverse crowbar.\nC31 is 47 uF/63 V on protected +VLOAD; source-dependent inrush.")]),
     dict(title="LMR36520 feedback divider", x=235, y=40, w=55, h=24, parts=[
         ("R46", 9, 10, H), ("R47", 16, 12, H), ("R48", 28, 12, H)],
         notes=[(2, 20, "1.0 V FB reference: 47k / (10k + 1.8k) = 4.983 V nominal")]),
     dict(title="PC fan tacho pull-up", x=235, y=112, w=55, h=23, parts=[
         ("R61", 12, 8, V), ("JP12", 25, 10)],
         notes=[(2, 18, "JP12 fitted: 10k to +5V for open collector.\nRemove for externally pulled-up / push-pull tacho.")]),
+    dict(title="Fan gate resistor bank", x=235, y=68, w=55, h=26, parts=[
+        ("R33", 15, 9, H), ("R62", 29, 9, H),
+        ("R63", 15, 16, H), ("R64", 29, 16, H)],
+        notes=[(3, 21, "(2k + 2k) || (2k + 2k) = 2k effective\n4 x C17944 / 1206 / 0.25 W, no new article\n1 W aggregate nameplate only; thermal/pulse tests required")]),
     dict(title="Victron VE.Direct (isolated)", x=170, y=2, w=62, h=36, parts=[
         ("U4", 30, 16), ("C21", 20, 8, V), ("C22", 40, 10, V), ("D27", 42, 23),
         ("J14", 56, 16), ("J15", 56, 27)],
@@ -72,9 +78,9 @@ BLOCKS = [
                (44, 31, "J15 pin 2 RX / pin 3 TX:\nnode TX -> pin 2, pin 3 -> node RX")]),
     dict(title="Outputs: rain-gauge heater (low side), fan (high side) + tacho", x=170, y=40, w=62, h=52, parts=[
         ("J12", 58, 6),
-        ("F5", 46, 10, HR), ("D22", 50, 8.5, DK), ("Q3", 42, 13), ("R30", 35, 13, H), ("U5", 27, 13), ("R39", 21, 14.5, V), ("R31", 38, 14.5, V),
+        ("F5", 46, 10, HR), ("D22", 50, 8.5, DK), ("Q3", 42, 13), ("R30", 35, 13, H), ("U5", 27, 13), ("C32", 33, 7, V), ("R39", 21, 14.5, V), ("R31", 38, 14.5, V),
         ("Q4", 36, 24), ("JP9", 52, 18), ("F6", 35, 31, V), ("D23", 48, 34, DK),
-        ("R32", 40, 22.5, V), ("D26", 44, 22.5, DK), ("R33", 48, 24, H), ("Q5", 52, 26), ("R37", 47, 27.5, V),
+        ("R32", 40, 22.5, V), ("D26", 44, 22.5, DK), ("Q5", 52, 26), ("R37", 47, 27.5, V),
         ("J13", 58, 28),
         ("D24", 8, 39.5, DK), ("R49", 13, 43, H), ("R50", 17, 46, V), ("Q8", 22, 43),
         ("R34", 11, 37, V), ("R35", 15, 39, H), ("D25", 20, 40, BS), ("C20", 24, 40, V),
@@ -107,7 +113,8 @@ BLOCKS = [
     dict(title="1-Wire (DS18B20)", x=60, y=108, w=48, h=40, parts=[
         ("J10", 5, 32, M),
         ("Q1", 10, 8, {"a": 180}), ("R19", 15, 6.5, V), ("Q2", 19, 12, M), ("R20", 24, 12, HR), ("R21", 27, 13.5, V),
-        ("F4", 9, 14, V), ("C15", 12, 19.5, V), ("C16", 16, 19.5, V), ("D14", 20, 19.5, DK), ("R22", 25, 19.5, V),
+        ("TP7", 14.5, 16, VF),
+        ("C38", 5, 8, V), ("F4", 9, 14, V), ("C15", 12, 19.5, V), ("C16", 16, 19.5, V), ("D14", 20, 19.5, DK), ("R22", 25, 19.5, V),
         ("R23", 20, 24, H), ("D16", 14, 27.5, {"a": 270}), ("D15", 29, 26, BS)],
         notes=[(31, 6, "supply switched by GPIO47\n(HIGH = on), 100 mA PTC\nup to 3 DS18B20")]),
     dict(title="AUX inputs", x=110, y=108, w=58, h=40, parts=[
@@ -119,11 +126,11 @@ BLOCKS = [
         notes=[(14, 32, "AIN -> GPIO4 (ADC1); R25 = 15k for 0-5 V sensors (DNP; scale 1.66667)\n"
                         "PULSE: reed / open collector -> GPIO48 (inverted)")]),
     dict(title="UV sensor input", x=170, y=96, w=76, h=50, parts=[
-        ("J17", 5, 20, M), ("D32", 12, 29), ("R51", 18, 20, H), ("JP10", 29, 22, M),
+        ("J17", 5, 20, M), ("F8", 12, 11, V), ("D32", 12, 29), ("R51", 18, 20, H), ("JP10", 29, 22, M),
         ("D30", 41, 18, BS), ("C27", 46, 25, V), ("R52", 55, 11, H),
         ("R53", 55, 18, H), ("R54", 55, 23, H), ("R55", 55, 28, H)],
         notes=[(3, 37, "J17 pins 1-4: GND | SIGNAL | 3V3 | 5V; use one sensor supply only"),
-               (34, 37, "JP10 1-2: 0-3.3 V, ratio 0.900990 (3.3 V -> 2.9733 V)\n"
+               (34, 37, "JP10 1-2: 0-3.3 V, ratio 0.909091 (3.3 V -> 3.0000 V)\n"
                         "JP10 2-3: 0-5 V, ratio 0.600479 (5 V -> 3.0024 V)\n"
-                        "Input scale factors: 1.10989 / 1.66534; GPIO3 ADC1")]),
+                        "Input scale factors: 1.1 / 1.66534; GPIO3 ADC1")]),
 ]

@@ -7,6 +7,7 @@ R0805 = "Resistor_SMD:R_0805_2012Metric"
 R2512 = "Resistor_SMD:R_2512_6332Metric"
 R1206 = "Resistor_SMD:R_1206_3216Metric"
 C0805 = "Capacitor_SMD:C_0805_2012Metric"
+C0402 = "Capacitor_SMD:C_0402_1005Metric"
 C1210 = "Capacitor_SMD:C_1210_3225Metric"
 CP63 = "Capacitor_SMD:CP_Elec_6.3x7.7"
 F1206 = "Fuse:Fuse_1206_3216Metric"
@@ -50,22 +51,33 @@ P("Q7", ("Transistor_FET", "Q_PMOS_GDS"), "NCE60P50K", "Package_TO_SOT_SMD:TO-25
   lcsc_key="NCE60P50K")
 P("D31", ("Device", "D_Zener"), "BZT52C12", "Diode_SMD:D_SOD-123",
   {"1": "+VLOAD", "2": "PWR_GATE"}, None, "Power", "12 V gate-source clamp for Q7")
-P("R45", ("Device", "R"), "10k", R0805, {"1": "PWR_GATE", "2": "GND"}, None, "Power",
-  "pulls Q7 gate low; D31 limits VGS to 12 V")
-P("F1", ("Device", "Polyfuse"), "PTC 1.1A 60V", "Fuse:Fuse_2920_7451Metric",
-  {"1": "+VLOAD", "2": "VIN_BUCK"}, None, "Power", "buck input branch protection")
+P("C31", ("Device", "C_Polarized"), "47uF 63V", "Capacitor_SMD:CP_Elec_8x10",
+  {"1": "+VLOAD", "2": "GND"}, None, "Power",
+  "Nichicon UCD1J470MNL1GS 47 uF, 63 V buffer on protected +VLOAD; +/-20%, 250 mA at 100 kHz, -55..105 C; source-dependent inrush", lcsc_key="47uF 63V Nichicon")
+P("R45", ("Device", "R"), "100k", R0805, {"1": "PWR_GATE", "2": "GND"}, None, "Power",
+  "pulls Q7 gate low; D31 limits VGS to 12 V; 100k keeps the standing zener current at 0.17 mA (29.2 V)")
+P("F1", ("Device", "Polyfuse"), "PTC 1.5A 60V", "Fuse:Fuse_2920_7451Metric",
+  {"1": "+VLOAD", "2": "VIN_BUCK"}, None, "Power",
+  "buck input branch protection; same article as F6, 1.5 A hold leaves margin at 6-9 V input with a 5 V fan", lcsc_key="PTC1.5A60")
 P("U1", ("WeatherNode", "LMR36520"), "LMR36520ADDAR", "Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.514x3.2mm",
   {"1": "GND", "2": "VIN_BUCK", "3": "VIN_BUCK", "4": None, "5": "BUCK_FB",
    "6": "BUCK_VCC", "7": "BUCK_BST", "8": "BUCK_SW", "9": "GND"}, None, "Power",
   "4.2-65 V in, 5 V rail via JP8 disconnect, 2 A synchronous buck", lcsc_key="LMR36520")
-P("C1", ("Device", "C"), "10uF 100V", C1210, {"1": "VIN_BUCK", "2": "GND"}, None, "Power")
+P("C1", ("Device", "C"), "10uF 50V", C1210, {"1": "VIN_BUCK", "2": "GND"}, None, "Power",
+  "Murata GRM32ER71H106KA12L X7R 10 uF/50 V (the 100 V GRM32EC72A106KE05K is unavailable); 29.2 V max operation, D1 clamps below 50 V; paired with C33, roughly 7-8 uF effective together at 29.2 V (estimate, not a guaranteed minimum)", lcsc_key="10uF 50V Murata")
+P("C33", ("Device", "C"), "10uF 50V", C1210, {"1": "VIN_BUCK", "2": "GND"}, None, "Power",
+  "second Murata GRM32ER71H106KA12L input ceramic in parallel with C1; verify installed effective capacitance", lcsc_key="10uF 50V Murata")
 P("C2", ("Device", "C"), "220nF 100V", C0805, {"1": "VIN_BUCK", "2": "GND"}, None, "Power")
 P("C3", ("Device", "C"), "100nF", C0805, {"1": "BUCK_BST", "2": "BUCK_SW"}, None, "Power", "bootstrap")
 P("L1", ("Device", "L"), "10uH", "Inductor_SMD:L_Bourns_SRP5030T", {"1": "BUCK_SW", "2": "+5V_BUCK"}, None, "Power",
   "Bourns SRP5030T-100M: 2.75 A RMS, 3.5 A soft saturation; LMR36520 400 kHz", lcsc_key="L10u")
 P("C26", ("Device", "C"), "1uF 50V", C0805, {"1": "BUCK_VCC", "2": "GND"}, None, "Power", "LMR36520 mandatory 1 uF VCC bypass", lcsc_key="1uF")
-P("C4", ("Device", "C"), "22uF 25V", C0805, {"1": "+5V_BUCK", "2": "GND"}, None, "Power", lcsc_key="22u")
-P("C5", ("Device", "C"), "22uF 25V", C0805, {"1": "+5V_BUCK", "2": "GND"}, None, "Power", lcsc_key="22u")
+P("C4", ("Device", "C"), "22uF 25V", C0805, {"1": "+5V_BUCK", "2": "GND"}, None, "Power",
+  "Existing Yageo MLCC; supplemental only, excluded from the effective-capacitance minimum until its bias curve is verified", lcsc_key="22u")
+P("C5", ("Device", "C"), "22uF 25V", C0805, {"1": "+5V_BUCK", "2": "GND"}, None, "Power",
+  "Existing Yageo MLCC; supplemental only, excluded from the effective-capacitance minimum until its bias curve is verified", lcsc_key="22u")
+P("C34", ("Device", "C"), "22uF 25V", C1210, {"1": "+5V_BUCK", "2": "GND"}, None, "Power",
+  "Murata GRM32ER71E226KE15L X7R 22 uF/25 V; LMR36520 5 V/400 kHz output bank member; SimSurfing typical bias/temp curves, not a guaranteed effective minimum", lcsc_key="22uF 25V Murata")
 P("R46", ("Device", "R"), "47k", R0805, {"1": "+5V_BUCK", "2": "BUCK_FB"}, None, "Power", "LMR36520 feedback top")
 P("R47", ("Device", "R"), "10k", R0805, {"1": "BUCK_FB", "2": "FB_LOW"}, None, "Power", "LMR36520 feedback bottom")
 P("R48", ("Device", "R"), "1.8k", R0805, {"1": "FB_LOW", "2": "GND"}, None, "Power", "series with R47; total feedback bottom 11.8k")
@@ -75,8 +87,14 @@ P("JP8", conn(2), "VIN buck enable", HDR.format(n=2),
   lcsc_key="HDR2")
 P("C6", ("Device", "C_Polarized"), "100uF", CP63, {"1": "+5V", "2": "GND"}, None, "Power")
 P("C7", ("Device", "C"), "100nF", C0805, {"1": "+5V", "2": "GND"}, None, "Power")
-# 3.3 V sensor rail from the Heltec LDO, current-limited for the external cables
-P("F3", ("Device", "Polyfuse"), "PTC 0.25A", F1206, {"1": "3V3_HELTEC", "2": "+3V3"}, None, "Power")
+# 3.3 V sensor rail from its own LDO (5 V -> 3.3 V), current-limited for the external cables;
+# cable faults and sensor load stay off the Heltec 3.3 V rail (ESP32, LoRa, OLED)
+P("U7", ("Regulator_Linear", "AP2112K-3.3"), "AP2112K-3.3TRG1", "Package_TO_SOT_SMD:SOT-23-5",
+  {"1": "+5V", "2": "GND", "3": "+5V", "4": None, "5": "3V3_LDO"}, None, "Power",
+  "sensor-rail LDO 600 mA, 6 V max input, stable with >= 1 uF ceramic; EN tied to VIN", lcsc_key="AP2112K-3.3")
+P("C35", ("Device", "C"), "10uF 50V", C1210, {"1": "+5V", "2": "GND"}, None, "Power", "U7 input, directly at VIN/GND")
+P("C36", ("Device", "C"), "10uF 50V", C1210, {"1": "3V3_LDO", "2": "GND"}, None, "Power", "U7 output, directly at VOUT/GND (before the PTC)")
+P("F3", ("Device", "Polyfuse"), "PTC 0.25A", F1206, {"1": "3V3_LDO", "2": "+3V3"}, None, "Power")
 P("C8", ("Device", "C"), "10uF 50V", C1210, {"1": "+3V3", "2": "GND"}, None, "Power", "bulk 3.3 V sensor rail (Rev 1.3: 100 uF electrolytic)")
 P("C9", ("Device", "C"), "100nF", C0805, {"1": "+3V3", "2": "GND"}, None, "Power")
 P("D5", ("Device", "D_Zener"), "SMLVT3V3", SMB, {"1": "+3V3", "2": "GND"}, None, "Power", "TVS 3.3V on the sensor rail")
@@ -84,6 +102,8 @@ P("D5", ("Device", "D_Zener"), "SMLVT3V3", SMB, {"1": "+3V3", "2": "GND"}, None,
 # ---------------- hardware revision ID: divider on GPIO20 (ADC2, read before WiFi) ---
 # v1.x: pin open, v2.0: 1M/1M -> 0.50 * 3V3 (1.65 uA, always-on rail)
 P("R1", ("Device", "R"), "1M", R0805, {"1": "3V3_HELTEC", "2": "HW_ID"}, None, "MCU", "HW revision ID (top)")
+P("C37", ("Device", "C"), "22uF 25V", C1210, {"1": "3V3_HELTEC", "2": "GND"}, None, "MCU",
+  "extra bulk on the Heltec 3.3 V pins J2.2/3 (Murata X7R); the module keeps its own regulator", lcsc_key="22uF 25V Murata")
 P("R2", ("Device", "R"), "1M", R0805, {"1": "HW_ID", "2": "GND"}, None, "MCU", "HW revision ID (bottom), v2.0: 0.50 * 3V3")
 P("C10", ("Device", "C"), "100nF", C0805, {"1": "HW_ID", "2": "GND"}, None, "MCU", "low source impedance for the ADC")
 
@@ -92,6 +112,10 @@ TPFP = "TestPoint:TestPoint_THTPad_D2.0mm_Drill1.0mm"
 for ref, net, lab in (("TP1", "GND", "GND"), ("TP2", "+VLOAD", "VIN"), ("TP3", "+5V", "5V"), ("TP4", "+3V3", "3V3"),
                       ("TP5", "GND", "GND")):
     P(ref, ("Connector", "TestPoint"), lab, TPFP, {"1": net}, None, "Power", "test point (not populated)", lcsc_key="-")
+# bring-up probe pads (bare SMD copper, no part): TP6 bottom side on the Heltec 3.3 V run, TP7 at the 1-Wire switch output
+for ref, net, lab, blk, d in (("TP6", "3V3_HELTEC", "3V3H", "MCU", "1.5"), ("TP7", "OW_SW", "OW", "1-Wire", "1.0")):
+    P(ref, ("Connector", "TestPoint"), lab, f"TestPoint:TestPoint_Pad_D{d}mm", {"1": net}, None, blk,
+      "probe pad (not populated)", lcsc_key="-")
 P("J16", conn(6), "Expansion", HDR.format(n=6), {"1": "GND", "2": "+3V3", "3": "SDA", "4": "SCL", "5": "GPIO19", "6": "+5V"},
   None, "MCU", "I2C + GPIO19 (3.3 V logic, unprotected), not populated", lcsc_key="HDR6", dnp=True)
 
@@ -174,7 +198,10 @@ P("Q2", ("Transistor_FET", "AO3400A"), "AO3400A", SOT23, {"1": "Q2_GATE", "2": "
 P("R20", ("Device", "R"), "1k", R0805, {"1": "GPIO47", "2": "Q2_GATE"}, None, "1-Wire", "gate series resistor")
 P("R21", ("Device", "R"), "10k", R0805, {"1": "GPIO47", "2": "GND"}, None, "1-Wire", "keeps the bus off at reset")
 P("F4", ("Device", "Polyfuse"), "PTC 0.1A", F1206, {"1": "OW_SW", "2": "OW_VCC"}, None, "1-Wire")
-P("C15", ("Device", "C"), "10uF 50V", C1210, {"1": "OW_VCC", "2": "GND"}, None, "1-Wire", "bus buffer (Rev 1.3: 4.7 uF)")
+P("C15", ("Device", "C"), "1uF 50V", C0805, {"1": "OW_VCC", "2": "GND"}, None, "1-Wire",
+  "bus buffer; 1 uF keeps the switch-on charge sharing with the 3.3 V sensor rail small (Rev 1.3: 4.7 uF)", lcsc_key="1uF")
+P("C38", ("Device", "C"), "22uF 25V", C0805, {"1": "+3V3", "2": "GND"}, None, "1-Wire",
+  "local reservoir at the Q1 source: supplies the C15 charge when GPIO47 switches the bus on; X5R, about half effective at 3.3 V", lcsc_key="22u")
 P("C16", ("Device", "C"), "100nF", C0805, {"1": "OW_VCC", "2": "GND"}, None, "1-Wire")
 P("D14", ("Device", "D_Zener"), "SMLVT3V3", SMB, {"1": "OW_VCC", "2": "GND"}, None, "1-Wire", "TVS 1-Wire supply")
 P("R22", ("Device", "R"), "4.7k", R0805, {"1": "OW_VCC", "2": "ONEWIRE_IO"}, None, "1-Wire", "1-Wire pull-up")
@@ -217,12 +244,14 @@ P("Q3", ("Transistor_FET", "SiS454DN"), "AON7264E", "Package_SO:Vishay_PowerPAK_
 # 5 V gate driver: the AON7264E is only specified from 4.5 V gate drive; the TTL input takes the 3.3 V GPIO
 P("U5", ("74xGxx", "74LVC1G125"), "SN74AHCT1G125DCKR", "Package_TO_SOT_SMD:SOT-353_SC-70-5",
   {"1": "GND", "2": "HEAT_PWM", "3": "GND", "4": "HEAT_DRV", "5": "+5V"}, None, "Outputs", "heater gate driver 3.3 V -> 5 V", lcsc_key="AHCT1G125")
+P("C32", ("Device", "C"), "100nF", C0402, {"1": "+5V", "2": "GND"}, None, "Outputs",
+  "local 0402 U5 gate-driver bypass; Samsung CL05B104KO5NNNC 100 nF/16 V X7R, directly at pins 5 (+5V) and 3 (GND)", lcsc_key="100nF0402")
 P("R39", ("Device", "R"), "100k", "Resistor_SMD:R_0402_1005Metric", {"1": "HEAT_PWM", "2": "GND"}, None, "Outputs",
   "driver input pull-down: heater off while GPIO38 floats at reset", lcsc_key="100k0402")
 P("R30", ("Device", "R"), "220", R0805, {"1": "HEAT_DRV", "2": "HEAT_G"}, None, "Outputs", "gate series resistor")
 P("R31", ("Device", "R"), "100k", R0805, {"1": "HEAT_G", "2": "GND"}, None, "Outputs", "keeps the heater off at reset")
-P("D22", ("Diode", "SS34"), "B360A", "Diode_SMD:D_SMA", {"1": "+VLOAD", "2": "HEAT"}, None, "Outputs",
-  "heater freewheel: 3 A / 60 V; reverse rating exceeds 48.4 V input TVS clamp", lcsc_key="B360A")
+P("D22", ("Diode", "SS34"), "SS210", "Diode_SMD:D_SMA", {"1": "+VLOAD", "2": "HEAT"}, None, "Outputs",
+  "heater freewheel: 2 A / 100 V basic part; resistive heater, only brief cable-inductance current; reverse rating exceeds 48.4 V input TVS clamp", lcsc_key="SS210")
 P("J13", conn(3), "Fan", TB.format(n=3), {"1": "FAN", "2": "GND", "3": "TACH"}, None, "Outputs",
   "bottom edge: FAN+ | GND | TACH; 0.5 A at 5 V or 1 A at VIN", lcsc_key="TB3")
 P("JP9", conn(3), "Fan supply", HDR.format(n=3), {"1": "+5V", "2": "FAN_SUPPLY", "3": "+VLOAD"}, None, "Outputs",
@@ -230,9 +259,15 @@ P("JP9", conn(3), "Fan supply", HDR.format(n=3), {"1": "+5V", "2": "FAN_SUPPLY",
 P("Q4", ("Transistor_FET", "Q_PMOS_GDS"), "DMP6023LE", "Package_TO_SOT_SMD:SOT-223-3_TabPin2",
   {"1": "FAN_G", "2": "FAN_SW", "3": "FAN_SUPPLY"}, None, "Outputs",
   "60 V P-MOSFET fan switch; 35 mOhm max at VGS=-4.5 V; SOT-223, G/D/S=1/2/3", lcsc_key="DMP6023LE")
-P("R32", ("Device", "R"), "100k", R0805, {"1": "FAN_SUPPLY", "2": "FAN_G"}, None, "Outputs", "keeps Q4 off; with R33, VGS is 97.85% of supply below the zener clamp")
+P("R32", ("Device", "R"), "75k", R0805, {"1": "FAN_SUPPLY", "2": "FAN_G"}, None, "Outputs",
+  "Q4 gate pull-up; 75k/2k preserves >=4.5 V drive at FAN_SUPPLY=4.65 V and speeds turn-off", lcsc_key="75k")
 P("D26", ("Device", "D_Zener"), "BZT52C12", "Diode_SMD:D_SOD-123", {"1": "FAN_SUPPLY", "2": "FAN_G"}, None, "Outputs", "gate-source clamp 12 V")
-P("R33", ("Device", "R"), "2.2k", R1206, {"1": "FAN_G", "2": "FAN_DRV"}, None, "Outputs", "gate drive; about 0.14 W at 29.2 V, 0.25 W 1206", lcsc_key="2k2R1206")
+for ref, left, right in (
+    ("R33", "FAN_G", "FAN_RA"), ("R62", "FAN_RA", "FAN_DRV"),
+    ("R63", "FAN_G", "FAN_RB"), ("R64", "FAN_RB", "FAN_DRV"),
+):
+    P(ref, ("Device", "R"), "2k", R1206, {"1": left, "2": right}, None, "Outputs",
+      "fan gate-driver bank: (R33+R62)||(R63+R64), 2 kOhm effective; each 2 kOhm 1% 0.25 W C17944. Thermal and clamp-pulse qualification required", lcsc_key="2k1206")
 P("Q5", ("Transistor_FET", "AO3400A"), "AO3422", SOT23, {"1": "FAN_PWM", "2": "GND", "3": "FAN_DRV"}, None, "Outputs",
   "fan driver 55 V, GPIO39 HIGH = on (PWM capable)", lcsc_key="AO3422")
 P("R37", ("Device", "R"), "100k", R0805, {"1": "FAN_PWM", "2": "GND"}, None, "Outputs", "keeps the fan off at reset")
@@ -240,11 +275,12 @@ P("R61", ("Device", "R"), "10k", R0805, {"1": "+5V", "2": "TACH_PU"}, None, "Out
 P("JP12", conn(2), "Tacho pull-up", HDR.format(n=2), {"1": "TACH_PU", "2": "TACH"}, None, "Outputs",
   "fit for open-collector PC fan; remove for externally pulled-up or push-pull tacho", lcsc_key="HDR2")
 P("F6", ("Device", "Polyfuse"), "PTC 1.5A 60V", "Fuse:Fuse_2920_7451Metric", {"1": "FAN_SW", "2": "FAN"}, None, "Outputs", "fan output, max 1 A; 60 V withstands the TVS clamp", lcsc_key="PTC1.5A60")
-P("D23", ("Diode", "SS34"), "B360A", "Diode_SMD:D_SMA", {"1": "FAN", "2": "GND"}, None, "Outputs",
-  "fan freewheel: 3 A / 60 V; reverse rating exceeds 48.4 V input TVS clamp", lcsc_key="B360A")
+P("D23", ("Diode", "SS34"), "SS210", "Diode_SMD:D_SMA", {"1": "FAN", "2": "GND"}, None, "Outputs",
+  "fan freewheel: 2 A / 100 V basic part, fan max 1 A; reverse rating exceeds 48.4 V input TVS clamp", lcsc_key="SS210")
 # Fan tacho is level-shifted before the 3.3 V logic network; 24/29.2 V pull-ups
 # can only drive Q8's base through R49 and cannot back-feed the 3.3 V rail.
-P("D24", ("Device", "D_Zener"), "SMBJ30A", SMB, {"1": "TACH", "2": "GND"}, None, "Outputs", "30 V standoff tacho TVS")
+P("D24", ("Device", "D_Zener"), "SMBJ33A", SMB, {"1": "TACH", "2": "GND"}, None, "Outputs",
+  "33 V standoff unidirectional tacho TVS (preferred part); negative spikes clamp at about -0.7 V", lcsc_key="SMBJ33A")
 P("R49", ("Device", "R"), "47k", R0805, {"1": "TACH", "2": "TACH_BASE"}, None, "Outputs", "limits level-shifter base current at 29.2 V")
 P("R50", ("Device", "R"), "100k", R0805, {"1": "TACH_BASE", "2": "GND"}, None, "Outputs", "keeps tacho level shifter off")
 P("Q8", ("Transistor_BJT", "Q_NPN_BEC"), "MMBT3904", SOT23,
@@ -259,9 +295,10 @@ P("R36", ("Device", "R"), "1k", R0805, {"1": "TACH_SCH", "2": "TACH_OUT"}, None,
 # ---------------- Victron VE.Direct (isolated, as on the water node) --------------------
 # VE.Direct GND is the charge controller's battery minus -> galvanic isolation (ADuM121N)
 P("U4", ("Isolator", "ADuM121N"), "ADuM121N1BRZ", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
-  {"1": "+3V3", "2": "VE_RX_MCU", "3": "VE_TX_MCU", "4": "GND", "5": "GND_VICTRON", "6": "VE_TX", "7": "VE_RX", "8": "VDD_VICTRON"},
+  {"1": "3V3_HELTEC", "2": "VE_RX_MCU", "3": "VE_TX_MCU", "4": "GND", "5": "GND_VICTRON", "6": "VE_TX", "7": "VE_RX", "8": "VDD_VICTRON"},
   None, "Victron", "VE.Direct TX -> GPIO33, GPIO34 -> VE.Direct RX; side 2 powered by the Victron", lcsc_key="ADUM121N")
-P("C21", ("Device", "C"), "100nF", C0805, {"1": "+3V3", "2": "GND"}, None, "Victron", "decoupling U4 side 1")
+P("C21", ("Device", "C"), "100nF", C0805, {"1": "3V3_HELTEC", "2": "GND"}, None, "Victron",
+  "decoupling U4 side 1; side 1 runs from the Heltec 3.3 V like GPIO34, not from the fused sensor rail")
 P("C22", ("Device", "C"), "100nF", C0805, {"1": "VDD_VICTRON", "2": "GND_VICTRON"}, None, "Victron", "decoupling U4 side 2")
 P("J14", conn(4), "VE.Direct", TB.format(n=4), {"1": "GND_VICTRON", "2": "VE_TX", "3": "VE_RX", "4": "VDD_VICTRON"}, None, "Victron",
   "1 GND, 2 TX (to Victron), 3 RX (from Victron), 4 +V", lcsc_key="TB4")
@@ -273,15 +310,17 @@ P("D27", ("Device", "D_TVS_Dual_AAC"), "PESD5V0S2BT", SOT23, {"1": "VE_RX", "2":
 
 # ---------------- UV sensor terminal: selectable 3.3 V / 5 V analog range ------------
 P("J17", conn(4), "UV sensor", TB.format(n=4),
-  {"1": "GND", "2": "UV_SIGNAL", "3": "+3V3", "4": "+5V"}, None, "UV",
+  {"1": "GND", "2": "UV_SIGNAL", "3": "+3V3", "4": "UV_5V"}, None, "UV",
   "UV terminal: GND | SIGNAL | 3V3 | 5V; use only one sensor supply", lcsc_key="TB4")
+P("F8", ("Device", "Polyfuse"), "PTC 0.1A", F1206, {"1": "+5V", "2": "UV_5V"}, None, "UV",
+  "UV sensor 5 V supply: a cable short must not pull down the Heltec 5 V rail")
 P("D32", ("Device", "D_TVS_Dual_AAC"), "PESD5V0S2BT", SOT23,
   {"1": "UV_SIGNAL", "2": None, "3": "GND"}, None, "UV",
   "5 V bidirectional ESD/TVS at J17 SIGNAL, before R51; second channel unused", lcsc_key="PESD")
 P("R51", ("Device", "R"), "10k", R0805, {"1": "UV_SIGNAL", "2": "UV_ADC"}, None, "UV",
   "series/top resistor for the selectable UV ADC divider")
-P("R52", ("Device", "R"), "91k", R0805, {"1": "UV_3V3_RANGE", "2": "GND"}, None, "UV",
-  "bottom resistor for 0-3.3 V range; scale 0.900990", lcsc_key="91k")
+P("R52", ("Device", "R"), "100k", R0805, {"1": "UV_3V3_RANGE", "2": "GND"}, None, "UV",
+  "bottom resistor for 0-3.3 V range (basic part); ratio 0.909091, scale 1.1")
 P("R53", ("Device", "R"), "10k", R0805, {"1": "UV_5V_RANGE", "2": "UV_5V_B"}, None, "UV",
   "5 V range bottom-resistor string")
 P("R54", ("Device", "R"), "4.7k", R0805, {"1": "UV_5V_B", "2": "UV_5V_C"}, None, "UV",

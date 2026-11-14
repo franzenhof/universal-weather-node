@@ -19,6 +19,7 @@ circuit or layout change (or edit the board directly in KiCad for small changes)
 | `build2.sh` | full flow: schematic → ERC → netlist → placement → parallel Freerouting attempts → best board |
 | `export.sh` | Gerber/drill ZIP, JLCPCB BOM/CPL, schematic PDF, renders, final DRC |
 | `jlcpcb_cpl.py` | Corrected JLCPCB CPL from temporary raw positions, with article/angle guards |
+| `simulate_fan_pwm.py` | Bounded Q4 PWM subcircuit regression with an externally downloaded vendor model |
 
 Requirements: KiCad 10 (`kicad-cli` and its bundled Python with `pcbnew`), Java and
 [Freerouting](https://github.com/freerouting/freerouting) 2.5 (`FREEROUTING_JAR=/path/freerouting-2.5.0.jar`).
@@ -67,7 +68,7 @@ Successive supplied JLCPCB previews were then checked against PCB pads:
 
 - U1-U5 and Q3: +270 degrees. U2/U3, U5 and Q3 offsets were determined from
   their selected library pin-1 marks, not a blanket package rule.
-- SOT-23 parts C15127, C20917, C37130, C20526, C8592 and C49338: +180 degrees.
+- SOT-23 parts C15127, C20917, C37130, C20526, C8592 and C49338: +180 degrees. BAT54S is now C7420333 (R+O); +180 degrees confirmed in the 2026-11-06 10:19:27 UTC preview.
 - C6: no offset; plus already agrees with the PCB, unlike the generic
   electrolytic rule.
 - The former Q4, Q7 and the two-terminal diodes: no offset; tab/gate and cathode bands
@@ -109,10 +110,26 @@ upper right. Recheck all remaining pin-1 and polarity marks before paying.
 Visual checks do not
 qualify the hardware or authorize payment/production on the user's behalf.
 
+The 2026-11-05 11:10:52 UTC preview shows C31 (47 uF/63 V, C445452)
+reversed: the part's plus is left, but PCB plus/pad 1 is right. Its
+identity/angle-guarded CPL entry now adds **180 degrees** (raw 180 -> CPL 0).
+The subsequent 2026-11-05 11:15:14 UTC preview confirms plus right,
+minus left (`PREVIEW_MATCHED_POLARITY`). C6's previously reviewed zero offset
+is unchanged. This visual confirmation is not hardware qualification.
+
 VIN uses Q7 with a 12 V gate-source clamp; D1 is the **bidirectional SMBJ30CA**
 (C83847), upstream of Q7. F2/D4/Q9/R56/U6/R57–R60/C28–C30 and their
 external-5V nets are removed from the schematic, PCB and production files.
-Q4 now uses DMP6023LE with R32=100k and R33=2.2k/1206. R61=10k and JP12
+Q4 uses DMP6023LE with R32=75k and the gate-driver bank
+`(R33 + R62) || (R63 + R64) = 2k`. All four are existing C17944
+2k/1%/0.25 W/1206 parts: no new article/feeder, three extra placements;
+actual setup/assembly savings require a supplier quote.
+The conservative 29.2 V estimate is 0.171 W total, at most 0.043 W each
+over all sixteen individual resistor corners. The nominal 1 W sum does
+not qualify thermal coupling, ambient derating or surge-pulse endurance.
+The explicit four-resistor model in `simulate_fan_pwm.py` retains the 1 ms
+turn-off check; it is not a whole-board or real-fan qualification.
+R61=10k and JP12
 provide an optional +5V tacho pull-up; fit JP12 for open collector, remove it
 for an externally pulled-up or push-pull signal.
 The former crowbar D3 is removed. Do not substitute a unidirectional D1:
@@ -143,9 +160,37 @@ The buck uses the LMR36520's **400 kHz** design, not AP63205 values: L1 is
 220 nF/100 V X7R. `layout_w1.py` fixes F1 and the complete buck cluster;
 `BUCK_PRE_ROUTE` preserves its front-only input, SW, BOOT and VCC routes.
 These critical pre-routes fail explicitly if blocked instead of silently
-leaving them to the autorouter. Four 0.6/0.3 mm EP thermal vias and local
+leaving them to the autorouter. `LOCAL_PRE_ROUTE` similarly preserves the
+small 0.3 mm U5/C32 supply and ground connections; do not use the wider
+connector pre-route width between the SC-70 pins. Four 0.6/0.3 mm EP thermal vias and local
 capacitor ground returns are also generated. Recheck the fully routed
 result: the generator's placement test is not a full routing/thermal test.
+
+Stability changes add C31 (47 uF/63 V on protected VIN), C32 (100 nF local
+U5 bypass), C33 (second 10 uF/50 V Murata GRM32ER71H106KA12L input ceramic; the 100 V part became unavailable), and C34
+(specified 22 uF/25 V 1210 output ceramic). C1 is the same specified Murata
+article as C33; C4/C5 and USB-side C6 remain. The original C1/C2 hot loop
+stays front-only; C33's reservoir branch has a short back-layer link.
+Keep the added ground stitch near board-local (48.5, 37) mm, the readable
+JP2 note and C31's reference outside its body after manual touch-ups.
+See the [capacitor evidence and qualification limits](../../pcb/v2.0/CHECKLIST.md#electrical-stability-improvements).
+
+Reproduce the fan check on macOS with KiCad's ngspice shared library:
+
+```bash
+mkdir -p tools/pcbgen/out
+curl --fail --location \
+  https://www.diodes.com/spice/download/2345/DMP6023LE.spice.txt \
+  --output tools/pcbgen/out/DMP6023LE.spice.txt
+python3 -B tools/pcbgen/simulate_fan_pwm.py
+```
+
+The third-party model is cached under ignored `out/`, not redistributed in
+the sources. Results go to `pcb/v2.0/fan-pwm-stability.json`, outside the
+three manufacturing order files. The check covers a resistive fan substitute,
+an ideal Q5 and an approximate zener; it does not qualify thermal, transient,
+EMI or real-fan behavior. The maximum simulated turn-off delay is 864 us
+within a 1 ms PWM off-window, not a guaranteed component-corner maximum.
 
 F7 now maps to the actual SMD Littelfuse 045106.3MRL (C178982), using the
 standard NANO2-451/453 footprint. F5 remains SETsafe SCT6125T4A250V
@@ -157,7 +202,7 @@ Optional AUX divider R25 is **15k**, DNP by default. With R24 10k,
 5 V becomes 3.0 V at the ADC; input scale is 1.66667 (downlink 1667).
 Existing firmware defaults and stored calibration remain unchanged.
 
-D22/D23 use B360A-13-F (C94193), 3 A / 60 V in the existing SMA footprints.
+D22/D23 use SS210 (C14996, basic), 2 A / 100 V in the existing SMA footprints (B360A-13-F before).
 The former 40 V SS34 reverse rating was below D1's 48.4 V maximum pulse clamp.
 Cathode/anode nets and the freewheel function are unchanged; PWM heating and
 cable ringing still require prototype tests.
@@ -175,6 +220,29 @@ is pre-routed. R51, the JP10 range divider, D30 rail clamps and C27 remain in
 place. The TVS has 5 V standoff and does not replace those ADC protections.
 The routed board's nearby UV labels were adjusted by hand; preserve their
 clearance after a rebuild.
+
+The sensor-rail LDO U7 (AP2112K-3.3, C51118) with C35 (input), C36 (output)
+and the Heltec bulk capacitor C37 (22 µF at J2.2/J2.3) were added to the routed
+board by hand, under the module between the sockets: U7 at local (13, 18.5) mm,
+VIN/EN tapped from the +5V diagonal, VOUT routed between J2 pins 3 and 4 to F3
+(0.3 mm in the socket gap, 0.27 mm clearance). Four stitching vias there were
+removed. A full rebuild places these parts automatically; keep the LDO output
+capacitor directly at U7 and C37 at J2.2.
+
+Final review fixes, also edited by hand: F8 (PTC 0.1 A, 1206) sits above J17 at
+(144, 116.6) mm board coordinates; the +5V B.Cu diagonal to J17 now ends at a
+via beside F8.1 and F8.2 feeds J17.4 (net UV_5V). U4 pin 1 and C21 moved from
++3V3 to 3V3_HELTEC: a 0.4 mm B.Cu run at x 70.5 from the Heltec 3.3 V track
+(y 83.84) to a via beside U4 pin 1, just right of the isolation moat; the U4
+GND B.Cu link was moved to x 71.4 and two stitching vias at x 70.95 removed.
+R45 is 100k (value change only).
+
+C15 changed from 10 uF 1210 to 1 uF 0805 and now sits horizontally below the
+OW_SW run at (107, 134) mm (an 0805 cannot straddle that track); C38 (22 uF
+0805, +3V3 at the Q1 source) sits beside it at (103.22, 134) mm with a shared
+GND link to the via at (103.77, 136.3). The C31 feed was widened to 0.8-1.0 mm
+except between the Q7 pins (0.3-0.5 mm); the GND stitching via at
+(58.95, 118.95) was removed for it.
 
 The current board target is 100 × 100 mm; the four mounting holes are at
 (4, 4), (96, 4), (4, 96), and (96, 96) mm (92 × 92 mm corner pattern).

@@ -566,6 +566,14 @@
       {
         "netclass": "Heavy",
         "pattern": "VIN_F"
+      },
+      {
+        "netclass": "Medium",
+        "pattern": "/3V3_LDO"
+      },
+      {
+        "netclass": "Medium",
+        "pattern": "3V3_LDO"
       }
     ]
   },

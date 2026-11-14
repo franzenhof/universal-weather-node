@@ -49,9 +49,12 @@ for ref, x in TERMS: FIXED[ref] = (x, TPIN, 0)
 # Preserve the reviewed buck cluster, including its local bypass and feedback parts.
 FIXED.update({
     "F1": (46.52, 44.48, 0), "U1": (57.5, 45.0, 0), "L1": (67.5, 44.65, 0),
-    "C1": (54.1, 40.2, 0), "C2": (52.65, 44.0, 90),
+    "C1": (54.1, 40.2, 0), "C2": (52.65, 44.0, 90), "C33": (59.0, 35.5, 0),
     "C3": (62.9, 45.5, 90), "C26": (62.0, 49.0, 0),
     "C4": (73.0, 42.9, 0), "C5": (73.0, 45.3, 0),
+    "C34": (68.0, 39.0, 0),
+    "C31": (7.0, 64.5, 180),
+    "C32": (29.1, 47.8, 90),
     "R46": (63.0, 52.0, 90), "R47": (56.5, 50.2, 180),
     "R48": (52.8, 50.2, 180),
 })
@@ -63,7 +66,11 @@ FIXED["JP8"] = (23.5, 37.6, 0)
 FIXED["D32"] = (88.75, 82.0, 180)
 # Retain the checked fan footprint angles.
 FIXED.update({
-    "Q4": (38.32, 70.21, 90), "R33": (43.4, 72.5, 90),
+    "U5": (30.92, 47.95, 270), "R32": (31.5, 51.45, 180),
+    "D26": (33.97, 46.35, 90),
+    "Q4": (38.32, 70.21, 90), "Q5": (44.52, 67.43, 270),
+    "R33": (22.8, 61.7, 0), "R62": (27.6, 61.7, 0),
+    "R63": (22.8, 64.8, 0), "R64": (27.6, 64.8, 0),
     "JP12": (28.5, 38.5, 90), "R61": (25.5, 59.0, 0),
 })
 # isolated VE.Direct domain at the left edge below the module (terminal J14 + JST-PH J15)
@@ -83,7 +90,7 @@ ZONES = [   # order = placement priority; ANCHORS below pull critical pads toget
     ("C", 0.6, MOD[2], C_TOP, C_BOT, [
         "D22", "Q3", "R30", "R31",                                  # heater: freewheel, low-side switch
         "F7", "D1", "Q7", "D31", "R45", "F1",
-        "U1", "C1", "C2", "C3", "C26", "L1", "C4", "C5", "R46", "R47", "R48",
+        "U1", "C1", "C2", "C3", "C26", "L1", "C4", "C5", "C33", "C34", "R46", "R47", "R48", "C31",
         "JP8", "C7", "TP2", "TP3", "TP1",                           # buck disconnect, test points
         "R1", "R2", "C10"]),                                        # HW revision ID at J1.17 (GPIO20)
     ("CLOW", 70.0, 88.0, 47.0, 64.0, ["C6"]),                      # bulk 5 V output capacitor
@@ -93,7 +100,7 @@ ZONES = [   # order = placement priority; ANCHORS below pull critical pads toget
         "F4", "C16", "C15", "Q1", "R19", "Q2", "R20", "R21",
         "R23", "D15", "R22"]),                                      # 1-Wire conditioning near J10
     ("IO", J13_X - 3.0, RJ_L - 0.3, C_TOP - 6.0, C_BOT, [
-        "U5", "R39", "D26", "R32", "Q4", "R33", "Q5", "R37", "D23", # heater gate driver and fan
+        "U5", "C32", "R39", "D26", "R32", "Q4", "R33", "R62", "R63", "R64", "Q5", "R37", "D23", # heater gate driver and fan
         "JP9", "F6", "R49", "R50", "Q8", "R34", "R35", "D25", "C20", "R36", "R61", "JP12",
         "R24", "R25", "D18", "C17",                                 # AUX analog
         "R26", "R27", "D19", "R28", "C18", "U3", "C19", "R29",      # AUX pulse
@@ -112,9 +119,12 @@ ANCHORS = [
     ("D32", "1", "J17", "2"),
     ("F7", "1", "J3", "1"), ("D1", "1", "F7", "2"), ("Q7", "2", "F7", "2"),
     ("D31", "1", "Q7", "3"), ("R45", "1", "Q7", "1"),
-    ("F1", "2", "U1", "2"), ("C1", "1", "U1", "2"), ("C2", "1", "U1", "2"),
+    ("C31", "1", "Q7", "3"),
+    ("F1", "2", "U1", "2"), ("C1", "1", "U1", "2"), ("C2", "1", "U1", "2"), ("C33", "1", "U1", "2"),
     ("C3", "1", "U1", "7"), ("C3", "2", "U1", "8"), ("C26", "1", "U1", "6"),
+    ("C32", "1", "U5", "5"), ("C32", "2", "U5", "3"),
     ("L1", "1", "U1", "8"), ("C4", "1", "L1", "2"), ("C5", "1", "L1", "2"),
+    ("C34", "1", "L1", "2"),
     ("R46", "1", "L1", "2"), ("R47", "1", "U1", "5"), ("R48", "1", "R47", "2"),
     ("R61", "2", "JP12", "1"), ("JP12", "2", "R49", "1"),
     ("C7", "1", "J1", "2"),
@@ -142,7 +152,9 @@ ANCHORS = [
     ("JP9", "2", "Q4", "3"), ("Q4", "2", "F6", "1"), ("F6", "2", "J13", "1"),
     ("R32", "2", "Q4", "1"), ("D26", "2", "Q4", "1"),
     ("D23", "1", "F6", "2"),
-    ("R33", "1", "Q4", "1"), ("Q5", "3", "R33", "2"), ("R37", "1", "Q5", "1"),
+    ("R33", "1", "Q4", "1"), ("R33", "2", "R62", "1"),
+    ("R63", "1", "R33", "1"), ("R63", "2", "R64", "1"),
+    ("R64", "2", "R62", "2"), ("Q5", "3", "R62", "2"), ("R37", "1", "Q5", "1"),
     ("D24", "1", "J13", "3"), ("R49", "1", "J13", "3"), ("R49", "2", "Q8", "1"),
     ("R50", "1", "Q8", "1"), ("Q8", "3", "R34", "2"), ("R35", "1", "R34", "2"),
     ("D25", "3", "R35", "2"), ("C20", "1", "R35", "2"), ("R36", "1", "U3", "4"),
@@ -155,7 +167,8 @@ ANCHORS = [
     ("JP11", "2", "R16", "2"), ("R17", "2", "JP11", "1"), ("R18", "2", "JP1", "1"),
     ("C8", "1", "J9", "1"),
     # ground side of decoupling / converter capacitors to the IC ground pin
-    ("C1", "2", "U1", "1"), ("C2", "2", "U1", "1"), ("C4", "2", "U1", "1"), ("C5", "2", "U1", "1"),
+    ("C1", "2", "U1", "1"), ("C2", "2", "U1", "1"), ("C33", "2", "U1", "1"),
+    ("C4", "2", "U1", "1"), ("C5", "2", "U1", "1"), ("C34", "2", "U1", "1"),
     ("C26", "2", "U1", "1"),
 ]
 SPILL = [(MOD[2] + 1.3, RJ_L - 0.3, 0.6, C_BOT), (0.6, 64.0, C_TOP, C_BOT), (RJ_L + 0.3, W - 0.6, RJ_WIND_TOP + 14.0, C_BOT)]
@@ -168,7 +181,8 @@ GND_OUTLINE = [(0, 0), (W, 0), (W, H), (0, H), (0, VIC_Y1 + MOAT_W), (VIC_X1 + M
 ISOLATORS = ("U4",)
 ISO_ZONES = ("VIC",)
 M = MOD[0] + 25.1
-TEXTS = (("Heltec WiFi LoRa 32 V3.2", M, ROW_TOP + 7.5, 1.5), ("(pin-compatible V3 / V3.1)", M, ROW_TOP + 10.0, 1.0), ("USB-C", MOD[0] + 3.5, ROW_TOP + 11.4, 1.2),
+# module title shifted right / USB-C left: U7, C35-C37 (sensor LDO, Heltec bulk) sit under the module near J2
+TEXTS = (("Heltec WiFi LoRa 32 V3.2", M + 3.5, ROW_TOP + 7.5, 1.5), ("(pin-compatible V3 / V3.1)", M + 3.5, ROW_TOP + 10.0, 1.0), ("USB-C", MOD[0] + 2.9, ROW_TOP + 11.4, 1.2),
          ("ANT", MOD[0] + 46.5, ROW_TOP + 11.4, 1.2), ("Universal Weather Node v2.0", M, ROW_TOP + 15.0, 1.0), ("franzenhof.com", M, ROW_TOP + 17.5, 1.0))
 BRAND = (("Universal Weather Node v2.0", 1.6), ("franzenhof.com", 1.6))
 # bottom-side terminal labels (left->right as seen from the top) and back title block
@@ -182,7 +196,7 @@ BACK_DOCUMENTATION = True
 BACK_TEXTS = (("Universal Weather Node v2.0", 26.0, 17.0, 2.0), ("franzenhof.com", 26.0, 21.5, 1.6), ("CERN-OHL-P v2", 26.0, 25.0, 1.2),
               ("JP8 FITTED: VIN BUCK\nREMOVE BEFORE USB\nUSB ONLY: DISCONNECT VIN\nCHANGE JUMPERS ONLY UNPOWERED", 31.0, 40.0, 0.9))
 
-POWER_NETS = ["GND", "FAN", "FAN_SW", "FAN_SUPPLY", "VIN_IN", "VIN_F", "+VLOAD", "VIN_BUCK", "+5V_BUCK", "BUCK_SW", "BUCK_BST", "BUCK_VCC", "+5V", "3V3_HELTEC"]
+POWER_NETS = ["GND", "FAN", "FAN_SW", "FAN_SUPPLY", "VIN_IN", "VIN_F", "+VLOAD", "VIN_BUCK", "+5V_BUCK", "BUCK_SW", "BUCK_BST", "BUCK_VCC", "+5V", "3V3_HELTEC", "3V3_LDO"]
 MEDIUM_NETS, MEDIUM_W = ["+3V3", "OW_SW", "OW_VCC"], 0.4      # sensor supplies (<= 250 mA, PTC-limited)
 HEAVY_NETS, HEAVY_W = ["VIN_IN", "VIN_F", "+VLOAD", "HEAT", "HEAT_D"], 1.5   # conservative width; temperature rise is not validated
 POWER_W = 0.6
@@ -196,7 +210,7 @@ GND_VIAS = [
     ("D1", "2"), ("D5", "2"), ("D6", "2"), ("D7", "2"), ("D20", "2"), ("D14", "2"), ("D28", "3"),
     ("D16", "3"), ("D17", "3"), ("D27", "3"), ("D32", "3"), ("C22", "2"), ("C21", "2"), ("D24", "2"), ("D23", "2"), ("Q3", "3"), ("Q5", "2"), ("Q8", "2"), ("C20", "2"),
     # every decoupling / filter capacitor gets its own ground via (placed before routing)
-    ("C1", "2"), ("C4", "2"), ("C5", "2"), ("C26", "2"),
+    ("C1", "2"), ("C4", "2"), ("C5", "2"), ("C33", "2"), ("C34", "2"), ("C31", "2"), ("C26", "2"),
     ("C7", "2"), ("C9", "2"), ("C10", "2"), ("C11", "2"), ("C12", "2"), ("C13", "2"), ("C14", "2"),
     ("C16", "2"), ("C17", "2"), ("C18", "2"), ("C19", "2"),
     ("R2", "2"), ("U2", "2"), ("U3", "2")]
@@ -231,6 +245,12 @@ PRE_ROUTE = [[("J5", "2"), ("D7", "1"), ("@", CX_SPD, WSPD_Y), ("@", CX_SPD, J4_
              [("J7", "2"), ("D20", "1"), ("@", CX_RAIN, J7_Y1 - PITCH), ("@", CX_RAIN, J6_P3_Y), ("J6", "3")],  # rain
              [("J9", "2"), ("D28", "1")], [("J9", "3"), ("D28", "2")],
              [("J17", "2"), ("D32", "1")]]
+LOCAL_PRE_ROUTE = [
+    (0.3, [("C32", "1"), ("@", 29.1, 49.7), ("@", 31.57, 49.7), ("U5", "5")]),
+    (0.3, [("U5", "3"), ("C32", "2")]),
+    (0.3, [("R33", "2"), ("R62", "1")]),
+    (0.3, [("R63", "2"), ("R64", "1")]),
+]
 RESERVED = [(CX_SPD - 0.6, J4_P5_Y - 0.6, CX_DIR + 0.6, WSPD_Y + 0.6),
             (CX_RAIN - 0.6, J6_P3_Y - 0.6, CX_RAIN + 0.6, J7_Y1 - PITCH + 0.6)]
 PRE_ROUTE_W = 0.5
@@ -252,7 +272,7 @@ BUCK_PRE_ROUTE = [
     (0.6, [("C1", "1"), ("@", 52.6, 40.4), ("@", 52.6, 41.2),
            ("@", 51.2, 42.6), ("@", 51.2, 43.4), ("@", 51.4, 43.6),
            ("@", 51.4, 43.8), ("@", 52.4, 44.8), ("C2", "1")]),
-    (0.6, [("L1", "2"), ("C4", "1"), ("C5", "1")]),
+    (0.6, [("L1", "2"), ("C4", "1"), ("C5", "1"), ("C34", "1")]),
 ]
 # silkscreen labels next to the pins of unpopulated headers
 ROW_LABELS = {"JP1": [("1", "2", "SDA")], "JP11": [("1", "2", "SCL")],

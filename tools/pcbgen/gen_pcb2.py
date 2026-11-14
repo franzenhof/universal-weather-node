@@ -457,7 +457,7 @@ def pre_route(chain, w, strict=False):
                 t = pcbnew.PCB_TRACK(board); t.SetStart(a); t.SetEnd(c); t.SetWidth(w)
                 t.SetLayer(pcbnew.F_Cu); t.SetNet(net); t.SetLocked(True); board.Add(t)
             else:
-                if strict: raise RuntimeError(f"Critical buck pre-route blocked: {i1} -> {i2}")
+                if strict: raise RuntimeError(f"Critical pre-route blocked: {i1} -> {i2}")
                 print("pre-route segment blocked:", i1, "->", i2)
             continue
         (r1, p1), (r2, p2) = i1, i2
@@ -477,10 +477,11 @@ def pre_route(chain, w, strict=False):
                     t.SetLayer(pcbnew.F_Cu); t.SetNet(net); t.SetLocked(True); board.Add(t)
                 break
         else:
-            if strict: raise RuntimeError(f"Critical buck pre-route blocked: {r1}.{p1} -> {r2}.{p2}")
+            if strict: raise RuntimeError(f"Critical pre-route blocked: {r1}.{p1} -> {r2}.{p2}")
             print("no pre-route for", r1, p1, "->", r2, p2)
 
 for width, chain in getattr(L, "BUCK_PRE_ROUTE", []): pre_route(chain, mm(width), strict=True)
+for width, chain in getattr(L, "LOCAL_PRE_ROUTE", []): pre_route(chain, mm(width), strict=True)
 for chain in getattr(L, "PRE_ROUTE", []): pre_route(chain, mm(getattr(L, "PRE_ROUTE_W", 0.5)))
 
 # silkscreen pin labels for unpopulated headers (test points, expansion)

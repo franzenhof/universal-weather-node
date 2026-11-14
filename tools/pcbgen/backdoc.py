@@ -31,7 +31,7 @@ BLOCKS = (
     ("UV", "UV / J17 / JP10 - GPIO3 ADC1\n"
      "J17: 1 GND | 2 SIGNAL | 3 3V3 | 4 5V\n"
      "Power sensor from ONE supply pin only.\n"
-     "JP10 1-2: input 0-3.3V; scale 1.10989\n"
+     "JP10 1-2: input 0-3.3V; scale 1.1\n"
      "JP10 2-3: input 0-5V; scale 1.66534\n"
      "Select range BEFORE applying signal.\n"
      "5V range: 5V input -> 3.0024V ADC.\n"
@@ -54,7 +54,7 @@ BLOCKS = (
      "pull-ups; check total bus pull-up load.\n"
      "J10 1-Wire: 1 GND | 2 3V3 | 3 DQ\n"
      "DS18B20 DQ GPIO5; powered 3-wire bus.\n"
-     "3V3 sensor rail: F3 PTC 0.25A nominal;\n"
+     "3V3 sensors: own LDO U7, F3 PTC 0.25A;\n"
      "1-Wire branch F4 PTC 0.10A nominal.\n"
      "PTC ratings derate with temperature."),
     ("DAVIS", "DAVIS WIND / RAIN\n"
@@ -82,7 +82,7 @@ BLOCKS = (
      "LOW = vane ON; not a free output.\n"
      "J16 signals: 3.3V, not field protected.\n"
      "TP1/TP5 GND | TP2 protected VIN\n"
-     "TP3 5V | TP4 3V3; use GND reference.\n"
+     "TP3 5V | TP4 3V3 | TP6 3V3H | TP7 OW\n"
      "ADC probe pads: C17 AUX / C27 UV."),
     ("START", "FIRST POWER-UP / HARDWARE\n"
      "Heltec WiFi LoRa 32 V3/V3.1/V3.2;\n"

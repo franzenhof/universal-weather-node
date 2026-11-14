@@ -195,14 +195,20 @@ disconnect: fitted for VIN operation, **REMOVE BEFORE USB**. Disconnect power
 and discharge the rails before changing it. There is no automatic source
 isolation. On the unchanged Heltec module, USB VBUS connects to its 5 V pin.
 Disconnect VIN and remove the JP8 shunt before USB programming.
-The 3.3 V sensor rail comes from the Heltec
-LDO through a 250 mA PTC and a TVS (SMLVT3V3).
+The 3.3 V sensor rail has its own LDO (U7, AP2112K-3.3, 600 mA) fed from the
+shared 5 V rail, followed by a 250 mA PTC (F3) and a TVS (SMLVT3V3). Cable
+faults, sensor inrush and analog sensor load therefore stay off the Heltec 3.3 V
+rail, which now powers only the module (ESP32-S3, LoRa, OLED), the HW-ID
+divider and the MCU side of the VE.Direct isolator U4 (so a tripped F3 cannot
+leave U4 unpowered while GPIO34 still drives its input). C35/C36 (10 µF each) sit directly at the LDO input/output; C37
+(22 µF X7R) adds bulk at the Heltec 3.3 V pins J2.2/J2.3.
 
 The 5 V rail is shared by the Heltec, sensors and the optional 5 V fan; the buck's
 nominal 2 A rating is **not** spare
 fan capacity. The design target is a fan up to 0.5 A at 5 V. Thermal performance and available supply margin must
 be checked on a prototype in the intended enclosure. The reverse-polarity
-MOSFET includes a gate-source clamp; it is not an active overvoltage disconnect.
+MOSFET includes a gate-source clamp (D31 12 V with R45 100k: about 0.17 mA
+standing current at 29.2 V); it is not an active overvoltage disconnect.
 
 VIN uses a series MOSFET with drain at the input and source at
 the protected output. D1 is a **bidirectional** TVS device, so a reversed
@@ -212,7 +218,7 @@ reverse-polarity protection, not reverse-current isolation or a power mux:
 disconnect all power and discharge the rails before changing wiring.
 Prototype reverse-polarity tests are still required.
 
-USB powers the Heltec, 3.3 V sensor rail, UV and other measurement interfaces.
+USB powers the Heltec, the 3.3 V sensor rail (via U7 from the module's 5 V pin), UV and other measurement interfaces.
 A 5 V fan is possible with JP9 pins 1–2, subject to the **combined USB and
 Heltec-path current budget**, not a guaranteed additional 0.5 A. The 250 mA
 sensor PTC is not a guarantee of available Heltec regulator current.
@@ -242,22 +248,54 @@ qualification. Use **one power source at a time**.
 | Optional expansion header (J16, DNP) | 3.3 V / 5 V and signals available if fitted, within shared budget | Same |
 | Firmware flashing / updates | USB flashing and OTA available | OTA available; for USB flashing, power off, disconnect VIN and remove JP8 first |
 
-The 3.3 V sensor rail is supplied by the **Heltec regulator in both modes**:
-F3 is a nominal 250 mA PTC, and the 1-Wire branch has a nominal 100 mA PTC.
-These are protection ratings, not guaranteed available currents; regulator
-headroom and temperature derating still apply. The VIN buck's nominal 2 A is
+The 3.3 V sensor rail is supplied by **its own LDO U7 from the 5 V rail in both
+modes** (VIN buck or USB): F3 is a nominal 250 mA PTC, and the 1-Wire branch has
+a nominal 100 mA PTC. These are protection ratings, not guaranteed available
+currents; U7 dropout (USB 5 V after the module's input path), regulator
+temperature and PTC derating still apply. Sensor-rail current is drawn from the
+shared 5 V budget. The VIN buck's nominal 2 A is
 shared, not an independently available output allowance. Combined-load,
 fan-startup, USB-inrush and thermal tests remain required.
 Heater and VIN-fan ratings must be checked against the actual supply voltage
 and combined VIN load; a 12 V load must not be used directly on a 29.2 V battery.
 
 The fan switch Q4 is DMP6023LE (60 V, SOT-223), with guaranteed maximum 35 mΩ
-at −4.5 V gate drive. R32=100k and R33=2.2k/1206 improve gate-drive margin;
+at −4.5 V gate drive. R32=75k and a 2k-effective resistor bank speed turn-off while retaining gate-drive margin;
 verify at least 4.65 V at FAN_SUPPLY under the intended 5 V load and inspect
 100 Hz PWM edges/temperature. Fit **JP12** for the R61 10k pull-up to +5V
 needed by open-collector PC fan tachometers. Remove JP12 for an externally
 pulled-up or push-pull tacho, especially at 12/24 V, to avoid backfeeding +5V.
 J13 retains its original pinout; this adds no separate four-wire fan PWM pin.
+
+**Electrical-stability improvements (v2.0):**
+
+1. **U5 local bypass:** C32 adds 100 nF directly beside the heater gate driver,
+   with a short ground return.
+2. **Buck capacitor reserve:** C1/C33 are two Murata GRM32ER71H106KA12L
+   10 µF/50 V X7R 1210 capacitors (the former 100 V part is unavailable).
+   Estimated effective capacitance at 29.2 V is roughly **7–8 µF combined**,
+   above the LMR36520's 4.7 µF minimum; D1 clamps below their 50 V rating.
+   C34 adds a specified Murata 22 µF/25 V 1210 output capacitor, alongside C4/C5.
+   These are curve-based estimates, not guaranteed effective capacitances.
+3. **Protected VIN buffer:** C31 adds **47 µF/63 V** behind Q7.
+   The shared USB-side 100 µF bulk capacitor is unchanged; with JP8 removed,
+   USB does not charge the new VIN/buck capacitor bank.
+4. **Fan turn-off:** R32=75 kΩ and **(R33 + R62) ∥ (R63 + R64) = 2 kΩ** retain approximately
+   **4.527 V** gate drive at an assumed 4.65 V fan rail with resistor tolerances.
+   The bounded SPICE cases switch below 10% output within **864 µs** at
+   100 Hz / 90% duty. This is not a real-fan or whole-board qualification.
+   All four bank resistors are the existing **C17944, 2 kΩ/0.25 W, 1206**:
+   no new article/feeder, but three additional placements; actual assembly costs
+   depend on the supplier's quote.
+
+The [assembly and bring-up checklist](pcb/v2.0/CHECKLIST.md#electrical-stability-improvements)
+records capacitor sources, temperature/bias limits, inrush and thermal checks.
+The bank dissipates an estimated 0.171 W total at maximum normal VIN, at most
+**0.043 W per resistor** across all sixteen ±1% resistor corners.
+The summed 1 W nameplate rating is not a thermally qualified board rating;
+ambient derating, thermal coupling and surge pulses remain to be verified. C31's corrected polarity
+was confirmed in the 2026-11-05 11:15:14 UTC JLCPCB preview (plus right,
+minus left); recheck the final order. No hardware release is implied.
 
 **Protection and signal conditioning (v2.0)**:
 
@@ -266,7 +304,7 @@ J13 retains its original pinout; this adds no separate four-wire fan PWM pin.
 - **BAT54S clamps** (one SOT-23 per signal, replacing the BAT43 pairs) before the GPIO pins
 - **RC low-pass filters** to debounce the reed switches — wind: 330 Ω + 4.7 kΩ + 100 nF (τ ≈ 0.5–0.9 ms, below the ~1.5 ms minimum contact time at full speed); rain: 330 Ω + 10 kΩ + 1 µF (τ ≈ 10–15 ms); wind direction: 10 kΩ + 1 µF
 - **74LVC2G14 Schmitt trigger** on wind speed and rain (inverting, as Rev 1.3)
-- **1-Wire supply** switched by GPIO47 (P-MOSFET), 100 mA PTC, 10 µF buffer
+- **1-Wire supply** switched by GPIO47 (P-MOSFET), 100 mA PTC, 1 µF + 100 nF buffer; C38 (22 µF) at the switch input supplies the switch-on charge so the 3.3 V sensor rail barely dips
 - **Extra I²C pull-ups** (4.7 kΩ) for BME280 cables up to 2 m — v2.0: two separate 2-pin headers, **JP1 = SDA** and **JP11 = SCL** (pins 1–2 on each). The rows are 5.08 mm apart, with one empty 2.54 mm grid row between them, preventing a normal 2.54 mm shunt from being fitted across the rows.
 
 **New in v2.0:**
@@ -274,9 +312,9 @@ J13 retains its original pinout; this adds no separate four-wire fan PWM pin.
 - **Heater**: **J12 HEATER** `+V HEAT-`, design target **3 A**, supplied from protected VIN (up to 29.2 V, not regulated). Low-side AON7264E on GPIO38, with a 5 V 74AHCT1G125 gate driver and a separate **4 A fuse F5**. The fuse rating is not an allowed continuous load current. Select a heater rated for the actual battery voltage, and size supply/wiring for its current.
 - **Fan**: **J13 FAN** `FAN+ GND TACH`, high-side switch on GPIO39. **JP9 1–2 = 5 V (default, max 0.5 A design target); JP9 2–3 = protected VIN (max 1 A design target)**. Fit only one shunt and change it with power disconnected. A usual 24 V fan is not automatically suitable for a fully charged 29.2 V battery. Heater and fan are PWM-capable and off at reset; current limits require thermal verification on the prototype.
 - **Fan tacho** on GPIO40: transistor level conversion for an open-collector signal or an external pull-up, without feeding that voltage back into the 3.3 V rail; filter and Schmitt trigger follow the transistor
-- **Victron VE.Direct** (isolated, ADuM121N): J14 screw terminal and J15 JST-PH; pin 1 = isolated GND, pin 2 = node TX to Victron RX, pin 3 = Victron TX to node RX, pin 4 = Victron-side V+. GPIO33 receives, GPIO34 is the unused transmit direction. Never bridge isolated GND to board GND.
+- **Victron VE.Direct** (isolated, ADuM121N): J14 screw terminal and J15 JST-PH; pin 1 = isolated GND, pin 2 = node TX to Victron RX, pin 3 = Victron TX to node RX, pin 4 = Victron-side V+. GPIO33 receives, GPIO34 is the unused transmit direction. The MCU side of U4 runs from the Heltec 3.3 V, independent of the fused sensor rail. Never bridge isolated GND to board GND.
 - **AUX inputs** (terminal J11: `3V3 AIN PULSE GND`): **AIN** on GPIO4 (ADC1, works while Wi-Fi is on; electrical input limit 3.3 V with R25 absent, useful ADC range approximately 0–3.1 V). Populate **R25 = 15 kΩ** for 0–5 V sensors: with R24 = 10 kΩ, 5 V becomes 3.0 V at the ADC; set the input scale to **1.66667**. **PULSE** on GPIO48 is for a reed switch / open collector (4.7 kΩ pull-up, RC 0.47 ms, Schmitt trigger — inverted like rain and wind), e.g. a second rain gauge or an anemometer
-- **UV sensor input** (terminal J17: `GND SIGNAL 3V3 5V`): GPIO3 ADC1 with a connector-side D32 PESD5V0S2BT TVS, a 10 kΩ input resistor, BAT54S rail clamps and range-select divider. JP10 1–2 selects 0–3.3 V (scale 1.10989); 2–3 selects 0–5 V (scale 1.66534). D32 has 5 V standoff, not a 5 V clamp; the resistor/divider and BAT54S remain necessary. Supply the sensor from exactly one voltage pin; the UV index requires separate sensor calibration. This protection does not guarantee survival of sustained overvoltage or prevent backfeeding from an externally powered sensor when the controller is off.
+- **UV sensor input** (terminal J17: `GND SIGNAL 3V3 5V`): GPIO3 ADC1 with a connector-side D32 PESD5V0S2BT TVS, a 10 kΩ input resistor, BAT54S rail clamps and range-select divider. JP10 1–2 selects 0–3.3 V (scale 1.10989); 2–3 selects 0–5 V (scale 1.66534). D32 has 5 V standoff, not a 5 V clamp; the resistor/divider and BAT54S remain necessary. The 5 V pin is fed through its own PTC F8 (nominal 100 mA), so a shorted UV cable cannot pull down the shared 5 V rail. Supply the sensor from exactly one voltage pin; the UV index requires separate sensor calibration. This protection does not guarantee survival of sustained overvoltage or prevent backfeeding from an externally powered sensor when the controller is off.
 - **Hardware revision ID**: 1 MΩ / 1 MΩ divider on GPIO20 (≈ 1.65 V on v2.0, pin open on Rev 1.x; 1.65 µA)
 - **Test pads** (GND, VIN, 5V, 3V3) and **expansion header J16** (`GND 3V3 SDA SCL IO19 5V`, 3.3 V logic, unprotected, not populated)
 - **Wind-vane supply switched** by GPIO19 (P-MOSFET Q6, LOW = on; TVS SMLVT3V3 on the switched line): J5 `3V3` and the RJ11 3.3 V pin are only powered around each reading in low-power mode — see [Low-Power Mode](#low-power-mode-lora-only). GPIO3 is the UV analog input.
@@ -293,13 +331,14 @@ J13 retains its original pinout; this adds no separate four-wire fan PWM pin.
 | File | Use |
 |------|-----|
 | [Gerber/drill ZIP](pcb/v2.0/production/universal-weather-node-v2.0-gerber.zip) | Board fabrication: copper, mask, silkscreen, paste, outline and holes |
-| [JLCPCB BOM](pcb/v2.0/production/universal-weather-node-v2.0-bom-jlcpcb.csv) | Bill of materials: 146 populated references in 65 groups, including THT parts |
-| [JLCPCB CPL](pcb/v2.0/production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | Component placement list: 125 top-side SMD parts, no THT/DNP parts |
+| [JLCPCB BOM](pcb/v2.0/production/universal-weather-node-v2.0-bom-jlcpcb.csv) | Bill of materials for JLCPCB assembly: 135 SMD references in 47 groups |
+| [JLCPCB CPL](pcb/v2.0/production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | Component placement list: 135 top-side SMD parts, no THT/DNP parts |
+| [THT parts (LCSC)](pcb/v2.0/production/universal-weather-node-v2.0-tht-lcsc.csv) | Through-hole connectors and headers for hand soldering, grouped by LCSC number with quantity per board (jumper shunts not included) |
 | [Schematic PDF](pcb/v2.0/universal-weather-node-v2.0-schematic.pdf) | Circuit reference; editable project in [pcb/v2.0](pcb/v2.0/) |
 
 DRC: **0 errors, 0 unconnected items, 0 schematic-parity issues**; nine known terminal silkscreen-edge warnings remain. These checks do not qualify electrical or thermal performance.
 
-**Before paying:** follow the [assembly and bring-up checklist](pcb/v2.0/CHECKLIST.md). Check parts availability, polarity/rotation in the manufacturer's preview, the quote and how the 21 THT components will be assembled. DNP means **do not populate**; fit optional parts only as instructed. The Heltec module and jumper shunts are separate from the SMD placement file. Pricing has not been re-quoted.
+**Before paying:** follow the [assembly and bring-up checklist](pcb/v2.0/CHECKLIST.md). Check parts availability, polarity/rotation in the manufacturer's preview, the quote and how the 22 THT components will be assembled. DNP means **do not populate**; fit optional parts only as instructed. The Heltec module and jumper shunts are separate from the SMD placement file. Pricing has not been re-quoted.
 
 **JLCPCB rotations updated on 2026-11-03:** the regular CPL now includes
 the corrections checked step by step against the supplied JLCPCB previews:
@@ -382,7 +421,7 @@ The following v2.0 pin lists are in **numbered pin order**, not necessarily left
 | **19** | Wind-vane supply (v2.0) | LOW = on (Q6); off between readings in low-power mode; internal USB PHY disabled before use |
 | **3** | UV analog input (v2.0) | ADC1, divided 0–3.3 V / 0–5 V input; never driven as an output. Rev 1.2: wind speed input |
 | **33 / 34** | VE.Direct RX / TX (v2.0) | isolated, 19200 Bd (UART1; TX unused, idle high) |
-| **38** | Heater output J12 (v2.0) | HIGH = on, 100 Hz PWM (LEDC channel 6) |
+| **38** | Heater output J12 (v2.0) | HIGH = on, 0.1 Hz time-proportional control (10 s cycle, independent timer task) |
 | **39** | Fan output J13 (v2.0) | HIGH = on, 100 Hz PWM (LEDC channel 7) |
 | **40** | Fan tacho (v2.0) | Schmitt trigger, inverted (pulse counter unit 3) |
 
@@ -513,7 +552,7 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | Rain per tip / wind per pulse | Sensor ratios — see [Using Other Sensors](#using-other-sensors) | Davis values |
 | **Inputs & outputs (PCB v2.0)** | Details: [Inputs and Outputs](#inputs-and-outputs-pcb-v20) | |
 | AUX analog input, scale | GPIO4; scale = V at the terminal per V at the pin (1.66667 with R25 = 15 kΩ) | off, 1.0 |
-| UV sensor, divider scale | GPIO3; terminal voltage per ADC voltage, matching JP10 (1–2: 0–3.3 V, 1.10989; 2–3: 0–5 V, 1.66534) | off, 1.10989 |
+| UV sensor, divider scale | GPIO3; terminal voltage per ADC voltage, matching JP10 (1–2: 0–3.3 V, 1.1; 2–3: 0–5 V, 1.66534) | off, 1.1 |
 | UV index enabled, calibration verified | Index is reported only when both switches are on and calibration is valid | both off |
 | UV index slope, offset | Linear conversion of terminal volts into index; slope 0.001–30 index/V, offset −10…+10 | 1.0, 0.0 (not calibrated) |
 | AUX pulse counter | GPIO48 | off |
@@ -885,7 +924,7 @@ Send on **FPort 1**: `0x10`, followed by one or more triplets `[paramId][valueHi
 | 33 | `0x21` | `wind2Mode` | `0` off, `1` 2nd anemometer at AUX `PULSE`, `2` plus vane at AUX `AIN` (PCB v2.0) | 2 | `10 21 00 02` |
 | 34 | `0x22` | `wind2DirOffsetDeg` | `−180`…`180`, north offset of the 2nd vane | -90 | `10 22 FF A6` |
 | 35 | `0x23` | `uvEn` | `0` / `1`, UV sensor voltage (PCB v2.0) | 1 | `10 23 00 01` |
-| 36 | `0x24` | `uvAinScale` | ×1000, `1000..5000`; terminal V per ADC V | 1110 (≈ 1.10989 default; use 1665 for JP10 2–3) | `10 24 04 56` |
+| 36 | `0x24` | `uvAinScale` | ×1000, `1000..5000`; terminal V per ADC V | 1100 (1.1 default; use 1665 for JP10 2–3) | `10 24 04 4C` |
 | 37 | `0x25` | `uvIndexEn` | `0` / `1`, publish the calibrated index | 1 | `10 25 00 01` |
 | 38 | `0x26` | `uvCalibrated` | `0` / `1`, explicit confirmation of sensor calibration | 1 | `10 26 00 01` |
 | 39 | `0x27` | `uvIndexSlope` | index/V ×1000, `1..30000` | 2000 (= 2 index/V) | `10 27 07 D0` |
@@ -949,8 +988,8 @@ terminals together. This input is for voltage-output modules, not bare
 photodiodes, 4–20 mA sensors or RS485 sensors.
 
 Set the input-range jumper **JP10** and matching firmware voltage scale before
-connecting the sensor. Pins 1–2 select 0–3.3 V (ADC/input ratio 0.900990,
-scale 1.10989); pins 2–3 select 0–5 V (ratio 0.600479, scale 1.66534, about
+connecting the sensor. Pins 1–2 select 0–3.3 V (ADC/input ratio 0.909091,
+scale 1.1); pins 2–3 select 0–5 V (ratio 0.600479, scale 1.66534, about
 3.0024 V at the ADC for a 5 V input). Fit only one range shunt. The scale
 reconstructs the voltage at the connector from the divided ADC voltage; it
 does not convert voltage into a UV index.
@@ -1004,7 +1043,7 @@ The v2.0 board adds optional I/O. **AUX, UV, wind 2, heater/fan, tacho and VE.Di
 | **UV analog** | Separate UV terminal | Averages 8 calibrated ADC readings per sub-sample over each cycle, scales to terminal volts; optionally calculates a sensor-specific calibrated UV index. Independent of AUX and the second wind sensor |
 | **AUX pulse** | J11 `PULSE` | Counts pulses (reed switch / open collector): per cycle and a **total since power-on** that survives restarts like the rain total (reset: downlink `0x06`, MQTT `resetAuxPulses`). Raw counts — scale them in your backend |
 | **2nd wind sensor** | J11 `PULSE` (+ `AIN`) | Instead of the AUX counter / analog input: a second anemometer (and vane) — see [Second Wind Sensor](#second-wind-sensor-pcb-v20) |
-| **Heater** | J12 `+V HEAT-` | **Off / on / auto**, max 3 A. *On:* constant power (1–100 %, 100 Hz PWM, 100 % = steady on). *Auto:* on below the switch-on temperature (default 4.0 °C) with the start power (default 10 %), rising linearly to the set power at the full-power temperature (default −10.0 °C) and below — e.g. 55 % at −3 °C; off again 1 K above the switch-on temperature |
+| **Heater** | J12 `+V HEAT-` | **Off / on / auto**, max 3 A design target. *On:* fixed average power (1–100 %, 0.1 Hz / 10 s cycle; 30 % = 3 s on / 7 s off; 100 % = steady on). *Auto:* on below the switch-on temperature (default 4.0 °C) with the start power (default 10 %), rising linearly to the set power at the full-power temperature (default −10.0 °C) and below — e.g. 55 % at −3 °C; off again 1 K above the switch-on temperature |
 | **Fan** | J13 `FAN+ GND TACH` | **Off / on / auto.** Auto: on from the threshold (default 15.0 °C), off 1 K below it — optionally only while the PV array delivers at least *minimum PV power* (VE.Direct), i.e. while the sun shines and the radiation error matters. Speed 1–100 % |
 | **Fan tacho** | J13 `TACH` | Speed in rpm (cycle average, *pulses per revolution*, PC fans: 2). Fan at 100 % for a whole cycle without a single pulse → **stalled** flag (payload, status page in red, MQTT) |
 | **Victron VE.Direct** | J14 / J15 | Reads the text protocol (19200 Bd, checksum-verified, receive only): battery voltage and current, PV voltage and power, yield today, charge state, error code, state of charge (BMV/SmartShunt), load output current (MPPT with load output — the node's own consumption when it is powered from there). Data older than 10 s counts as *no data* |
@@ -1014,7 +1053,8 @@ The v2.0 board adds optional I/O. **AUX, UV, wind 2, heater/fan, tacho and VE.Di
 - **Fan PV interlock:** in auto mode, a nonzero *minimum PV power* requires enabled VE.Direct, a valid frame and a finite PV power reading at or above the limit. Missing or stale data does not grant permission to run. This PV condition does not apply to manual *on* mode.
 - **PWM and the tacho:** a 2-wire fan on PWM has no usable tacho signal while its supply is switched off — rpm and the stall check are only meaningful at 100 %.
 - **Outputs at reset/boot:** off (gate pull-downs on the board, firmware drives them low before switching anything on). They follow the settings within one sample interval after boot.
-- **Config portal / OTA:** entering the portal immediately detaches PWM and drives both heater/fan outputs LOW, latched until restart. Saved output modes are retained; they are not operated without the normal monitoring loop.
+- **Heater timing:** a separate timer task maintains the 10 s cycle during blocking sensor/LoRa calls, with 100 ms timing steps (1 %). Duty changes retain the cycle phase; enabling from off starts a new cycle. The configured percentage remains the requested average power, not the instantaneous GPIO state. The heater still draws its full on-current during each pulse; match the foil to the maximum VIN and provide appropriate temperature protection. Fan PWM stays at 100 Hz.
+- **Config portal / OTA:** entering the portal immediately stops the heater timer, detaches fan PWM and drives both outputs LOW, latched until restart. Saved output modes are retained; they are not operated without the normal monitoring loop.
 - **Supply:** the heater always needs protected VIN. The fan uses the supply selected by JP9: 1–2 = shared 5 V rail (0.5 A design target), 2–3 = protected VIN (1 A design target). With VIN disconnected, only the 5 V fan option can run, within the selected source's remaining power budget. Never combine USB with external power (see [Custom PCB](#custom-pcb)).
 - **Payload:** the values are sent only while their function is on — see [CayenneLPP channels](#cayennelpp-channels) Ch 3/5/10/11/20–22/30/31 and [binary bits 20–27](#compact-binary-format). The display shows the Victron battery voltage and PV power instead of the LiPo line, plus `H` / `F` while heater / fan run.
 
