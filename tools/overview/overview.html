@@ -1,0 +1,183 @@
+<!doctype html>
+<!-- Source of pictures/overview.png. Render with tools/overview/render.sh (headless Chrome, 2x). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Universal Weather Node overview</title>
+<style>
+  :root {
+    --bg: #f3f5f7; --card: #ffffff; --ink: #17212b; --muted: #5d6b78; --line: #dde3e8;
+    --teal: #0f9d8a; --teal-soft: #e2f4f1;
+    --radio: #7c4dff; --radio-soft: #efe9ff;
+    --davis: #e0712c; --davis-soft: #fdeee3;
+    --wired: #2f80c9; --wired-soft: #e4f0fb;
+    --bme: #3aa356; --bme-soft: #e5f5e9;
+    --out: #17212b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); }
+  body { width: 1400px; padding: 44px 48px 40px; font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; color: var(--ink); }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 26px; }
+  h1 { font-size: 34px; letter-spacing: -0.5px; }
+  h1 span { color: var(--teal); }
+  header p { color: var(--muted); font-size: 17px; }
+  .label { font-size: 13px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; color: var(--muted); margin: 0 0 12px 4px; display: flex; gap: 10px; align-items: center; }
+  .label b { background: var(--ink); color: #fff; border-radius: 50%; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; letter-spacing: 0; }
+  .label i { font-style: normal; font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 14px; }
+
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; box-shadow: 0 1px 2px rgba(20,30,40,.04), 0 6px 18px rgba(20,30,40,.05); }
+  .sensor { border-top: 5px solid var(--c); }
+  .sensor .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .tag { font-size: 12px; font-weight: 700; color: var(--c); background: var(--cs); border-radius: 999px; padding: 4px 10px; letter-spacing: .3px; }
+  .setup { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: 1.2px; text-transform: uppercase; }
+  .sensor h3 { font-size: 21px; margin: 4px 0 4px; }
+  .sensor .sub { color: var(--muted); font-size: 14.5px; line-height: 1.4; min-height: 42px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .chip { font-size: 13px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; background: #fafbfc; }
+  .chip.x { color: var(--muted); border-style: dashed; background: transparent; }
+  .icon { width: 40px; height: 40px; border-radius: 12px; background: var(--cs); display: flex; align-items: center; justify-content: center; }
+  .icon svg { width: 24px; height: 24px; stroke: var(--c); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .head { display: flex; gap: 14px; align-items: center; }
+
+  .plus { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; margin-top: 18px; }
+  .bar { display: flex; gap: 16px; align-items: center; padding: 16px 20px; }
+  .bar h4 { font-size: 16px; margin-bottom: 3px; }
+  .bar p { color: var(--muted); font-size: 14px; line-height: 1.4; }
+  .bme { border-left: 5px solid var(--bme); }
+  .opt { border-left: 5px solid #9aa7b3; }
+  .mini { border-left: 5px solid var(--radio); margin-top: 16px; }
+
+  .flow { display: flex; justify-content: center; margin: 14px 0; }
+  .flow svg { width: 60px; height: 34px; }
+
+  .core { background: #000; border-radius: 22px; display: grid; grid-template-columns: 620px 1fr; overflow: hidden; color: #e8eef3; box-shadow: 0 10px 30px rgba(10,20,30,.25); }
+  .core img { width: 620px; height: 463px; display: block; }
+  .core .txt { padding: 34px 38px 30px 10px; display: flex; flex-direction: column; justify-content: center; }
+  .core .kicker { color: #43d1bd; font-size: 13px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; }
+  .core h2 { font-size: 30px; margin: 8px 0 6px; letter-spacing: -.3px; }
+  .core .mcu { color: #9fb0bf; font-size: 15.5px; margin-bottom: 18px; }
+  .core ul { list-style: none; display: grid; gap: 10px; }
+  .core li { font-size: 15.5px; line-height: 1.4; padding-left: 24px; position: relative; color: #d3dde6; }
+  .core li::before { content: ""; position: absolute; left: 4px; top: 7px; width: 9px; height: 9px; border-radius: 50%; background: #43d1bd; }
+  .core li b { color: #fff; }
+
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .out h3 { font-size: 18px; margin: 12px 0 4px; }
+  .out .via { font-size: 12.5px; font-weight: 700; color: var(--teal); letter-spacing: .6px; text-transform: uppercase; }
+  .out p { color: var(--muted); font-size: 14px; line-height: 1.45; margin-top: 6px; }
+  .out .icon { --c: var(--teal); --cs: var(--teal-soft); }
+  footer { margin-top: 22px; text-align: center; color: var(--muted); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Universal <span>Weather Node</span></h1>
+  <p>Weather sensors in &nbsp;→&nbsp; LoRaWAN and Wi-Fi out</p>
+</header>
+
+<div class="label"><b>1</b> Sensors <i>— pick one setup or mix them; per value you choose which sensor counts</i></div>
+<div class="grid3">
+  <div class="card sensor" style="--c:var(--radio);--cs:var(--radio-soft)">
+    <div class="top">
+      <div class="head">
+        <div class="icon"><svg viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8 15.5a5.5 5.5 0 0 1 8 0"/><circle cx="12" cy="19" r="1.2"/><path d="M2 9a14 14 0 0 1 20 0"/></svg></div>
+        <span class="setup">Setup A</span>
+      </div>
+      <span class="tag">868 MHz · no wiring</span>
+    </div>
+    <h3>Wireless sensors</h3>
+    <div class="sub">Bresser 5-in-1, 6-in-1 or 7-in-1 outdoor unit, or TFA Dostmann / LaCrosse IT+ thermo-hygro sensors &mdash; received by the board's LoRa chip</div>
+    <div class="chips"><span class="chip">wind + gust + direction</span><span class="chip">rain</span><span class="chip">temperature</span><span class="chip">humidity</span><span class="chip">UV index</span><span class="chip">light (7-in-1)</span><span class="chip x">TFA IT+: temp + humidity (beta)</span></div>
+  </div>
+  <div class="card sensor" style="--c:var(--davis);--cs:var(--davis-soft)">
+    <div class="top">
+      <div class="head">
+        <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 21V9"/><path d="M12 9 7 6m5 3 5-3m-5 3V4"/><circle cx="7" cy="6" r="1.6"/><circle cx="17" cy="6" r="1.6"/><circle cx="12" cy="3.6" r="1.6"/><path d="M8 21h8"/></svg></div>
+        <span class="setup">Setup B</span>
+      </div>
+      <span class="tag">RJ11 plug-in</span>
+    </div>
+    <h3>Davis sensors</h3>
+    <div class="sub">6410 anemometer with wind vane and 6466M / AeroCone rain gauge, plugged into the original RJ11 jacks</div>
+    <div class="chips"><span class="chip">wind + 3-s gust</span><span class="chip">wind direction</span><span class="chip">rain 0.2 mm</span><span class="chip">10-min WMO values</span></div>
+  </div>
+  <div class="card sensor" style="--c:var(--wired);--cs:var(--wired-soft)">
+    <div class="top">
+      <div class="head">
+        <div class="icon"><svg viewBox="0 0 24 24"><path d="M4 7h6v10H4z"/><path d="M10 10h4m-4 4h4"/><path d="M14 10c3 0 3-4 6-4m-6 8c3 0 3 4 6 4"/></svg></div>
+        <span class="setup">Setup C</span>
+      </div>
+      <span class="tag">screw terminals</span>
+    </div>
+    <h3>Generic wired sensors</h3>
+    <div class="sub">Any 2-wire reed-switch anemometer and rain bucket, potentiometer or resistor-ladder vane (calibration wizard)</div>
+    <div class="chips"><span class="chip">wind</span><span class="chip">wind direction</span><span class="chip">rain</span><span class="chip">ratio per pulse / tip</span></div>
+  </div>
+</div>
+
+<div class="plus">
+  <div class="card bar bme">
+    <div class="icon" style="--c:var(--bme);--cs:var(--bme-soft)"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 13l3-3"/><path d="M9 3h6"/></svg></div>
+    <div><h4>+ BME280 — in almost every setup</h4><p>Air pressure (absolute and sea level) — wireless stations have no barometer. Also temperature and humidity on the board.</p></div>
+  </div>
+  <div class="card bar opt">
+    <div class="icon" style="--c:#6b7a87;--cs:#eef1f4"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div>
+    <div><h4>Optional</h4><p>3 × DS18B20 · UV sensor · 2nd anemometer · AUX analog / pulse · Victron VE.Direct · LiPo · heater and fan</p></div>
+  </div>
+</div>
+
+<div class="flow"><svg viewBox="0 0 60 34"><path d="M30 2v26M20 19l10 10 10-10" fill="none" stroke="#9aa7b3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+<div class="label"><b>2</b> The node</div>
+<div class="core">
+  <img src="../../pcb/v2.0/universal-weather-node-v2.0-3d.png" alt="">
+  <div class="txt">
+    <div class="kicker">PCB v2.0 · open source hardware</div>
+    <h2>Universal Weather Node</h2>
+    <div class="mcu">Heltec WiFi LoRa 32 V3 — ESP32-S3 + SX1262, OLED display</div>
+    <ul>
+      <li><b>One LoRa chip, two jobs:</b> LoRaWAN uplinks and Bresser / TFA 868 MHz reception in between</li>
+      <li><b>Value sources:</b> Auto (board first, then wireless 1–4), board, wireless or off — per value</li>
+      <li><b>Computed on the node:</b> dew point, feels like, pressure tendency and trend, rain 1 h / 24 h / day, sunshine, warnings</li>
+      <li><b>WMO wind:</b> 3-s gusts, interval or 10-min values per output</li>
+      <li><b>Setup from the phone:</b> config portal, web settings, OTA updates, downlink parameters</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card bar mini">
+  <div class="icon" style="--c:var(--radio);--cs:var(--radio-soft)"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h6M9 11h6"/><circle cx="12" cy="16.5" r="1.3"/></svg></div>
+  <div><h4>Minimal build for wireless sensors &mdash; no custom PCB</h4><p>Heltec WiFi LoRa 32 V3 + BME280 module on four wires (3V3, GND, 41, 42) + Bresser or TFA sensors &mdash; same firmware, same outputs.</p></div>
+</div>
+
+<div class="flow"><svg viewBox="0 0 60 34"><path d="M30 2v26M20 19l10 10 10-10" fill="none" stroke="#9aa7b3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+<div class="label"><b>3</b> Outputs <i>— independently, in parallel</i></div>
+<div class="grid4">
+  <div class="card out">
+    <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 12v9"/><circle cx="12" cy="10" r="2"/><path d="M7.5 5.5a6.5 6.5 0 0 0 0 9m9-9a6.5 6.5 0 0 1 0 9"/><path d="M4.5 2.5a11 11 0 0 0 0 15m15-15a11 11 0 0 1 0 15"/></svg></div>
+    <h3>LoRaWAN</h3><div class="via">ChirpStack · TTN</div>
+    <p>Kilometres of range without Wi-Fi. Compact binary format or CayenneLPP, decoder included — on to Grafana, ioBroker, Node-RED.</p>
+  </div>
+  <div class="card out">
+    <div class="icon"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/></svg></div>
+    <h3>MQTT + Home Assistant</h3><div class="via">Wi-Fi · TLS</div>
+    <p>JSON with all values and every wireless sensor, Home Assistant auto-discovery, publish interval down to seconds.</p>
+  </div>
+  <div class="card out">
+    <div class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 14l3-4 3 2 4-5"/><path d="M9 21h6"/></svg></div>
+    <h3>Web dashboard + REST</h3><div class="via">in your LAN · offline</div>
+    <p>Live values, trend charts, wind rose, status page, log and built-in help. <code>/api/data</code> for your own tools.</p>
+  </div>
+  <div class="card out">
+    <div class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></div>
+    <h3>Weather networks</h3><div class="via">direct upload</div>
+    <p>AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy and openSenseMap — with 10-min WMO wind values.</p>
+  </div>
+</div>
+
+<footer>Everything runs on the ESP32-S3 — no PC, Raspberry Pi or cloud service in between · all transports at the same time · metric or imperial · open source</footer>
+<script>if (location.search === "?measure") document.body.setAttribute("data-h", Math.ceil(document.body.getBoundingClientRect().bottom + 2));</script>
+</body>
+</html>

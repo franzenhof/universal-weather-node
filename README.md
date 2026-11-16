@@ -2,10 +2,15 @@
 
 A DIY weather station on a custom PCB around the **Heltec WiFi LoRa 32 V3** (ESP32-S3). It measures **wind speed, wind direction, rain, temperature, humidity and air pressure** and sends the data wherever you need it — over LoRaWAN, over Wi-Fi, or both at once.
 
+The sensors are your choice: a **Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station** or **TFA Dostmann / LaCrosse IT+ thermo-hygro sensors** over 868 MHz (received by the board's LoRa chip — no wiring, no extra hardware), **Davis** wind and rain sensors on their original RJ11 plugs, or **generic wired** reed-switch sensors. A **BME280** adds the air pressure (wireless stations have no barometer) and is part of almost every setup.
+
+- 🧩 **Everything runs on the node itself** — the ESP32-S3 of the Heltec V3 receives, measures, computes (dew point, trends, daily totals …) and uploads. No Linux PC, Raspberry Pi, ioBroker script or cloud service in between
+- 📻 **Wireless sensors out of the box** — Bresser stations and TFA / LaCrosse IT+ sensors (IT+ not yet tested with real sensors) on 868 MHz, received between LoRaWAN uplinks; per value you choose which sensor counts (board, wireless, automatic fallback)
 - 📡 **LoRaWAN** to ChirpStack or TTN — compact binary format (default) or CayenneLPP, automatically fitted to the data rate
 - 📶 **Wi-Fi + MQTT** (TLS-capable) with **Home Assistant** auto-discovery
 - 🌐 **Built-in web dashboard** with live values, trend charts and hover details — works without internet
-- ☁️ **Direct uploads to weather networks** — AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro
+- 🧮 **Computed on the device:** dew point, feels-like temperature, cloud base, 3-h pressure tendency with a weather trend, temperature trend, rain last hour / 24 h / today / yesterday, sunshine duration (Bresser 7-in-1), frost/fog/sultry warnings
+- ☁️ **Direct uploads to weather networks** — AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap
 - 🔧 **Set up from your phone** — config portal on first boot, firmware updates over the air, no rebuild needed
 
 <!-- help:skip -->
@@ -19,7 +24,7 @@ A DIY weather station on a custom PCB around the **Heltec WiFi LoRa 32 V3** (ESP
 
 The transports can be enabled independently. Web serving and weather-network uploads run in background tasks; sensor sampling and LoRaWAN share the main loop, so a radio exchange briefly pauses sampling.
 
-**Current status:** [2.0.0-beta.1](firmware/universal-weather-node-2.0.0-beta.1.bin) is the latest prepared firmware. PCB v2.0 fabrication files are ready for **prototypes**, not a hardware-qualified production run. Builds and host tests pass; physical v2.0 qualification and beta field tests on Rev 1.2/1.3 remain open. The photos below show older Rev 1.2 hardware; the v2.0 images are renders.
+**Current status:** [2.0.0-beta.2](firmware/universal-weather-node-2.0.0-beta.2.bin) is the latest prepared firmware. PCB v2.0 fabrication files are ready for **prototypes**, not a hardware-qualified production run. Builds and host tests pass; physical v2.0 qualification and beta field tests on Rev 1.2/1.3 remain open. The photos below show older Rev 1.2 hardware; the v2.0 images are renders.
 
 > **PCB v2.0 power safety:** use **one power source at a time**. JP8 is a two-pin manual buck disconnect, not a power mux. Before connecting USB-C, disconnect VIN and remove the JP8 shunt. J3 has VIN and GND only; there is no external 5 V input. Never select PCB revision `20` on a Rev 1.2/1.3 board.
 
@@ -29,7 +34,7 @@ The transports can be enabled independently. Web serving and weather-network upl
 - [The Project in Pictures](#the-project-in-pictures)
 - [How It Fits Together](#how-it-fits-together)
 - [Quick Start](#quick-start)
-- [Hardware](#hardware)
+- [Hardware](#hardware) · [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb) · [Ordering the PCB (JLCPCB)](#ordering-the-pcb-jlcpcb)
 
 **Using the node**
 - [Configuration](#configuration)
@@ -37,8 +42,9 @@ The transports can be enabled independently. Web serving and weather-network upl
 - [Weather Networks](#weather-networks)
 - [MQTT and Home Assistant](#mqtt-and-home-assistant)
 - [LoRaWAN](#lorawan)
-- [Using Other Sensors](#using-other-sensors)
+- [Using Other Sensors](#using-other-sensors) · [Wireless Sensors (Bresser, TFA)](#wireless-sensors-bresser-tfa-it-868-mhz)
 - [Inputs and Outputs (PCB v2.0)](#inputs-and-outputs-pcb-v20) · [Second Wind Sensor](#second-wind-sensor-pcb-v20)
+- [Derived Values](#derived-values) · [Firmware Update Check](#firmware-update-check)
 - [Units (Metric/Imperial)](#units-metricimperial)
 
 **Reference**
@@ -55,49 +61,29 @@ The transports can be enabled independently. Web serving and weather-network upl
 ## The Project in Pictures
 
 <!-- help:skip -->
-<table>
-  <tr>
-    <td align="center" width="33%">
-      <img src="pictures/pcb-v12-empty.jpeg" alt="PCB Rev 1.2, empty board" width="100%">
-      <br><strong>PCB, empty</strong>
-    </td>
-    <td align="center" width="33%">
-      <img src="pictures/pcb-v12-assembled.jpeg" alt="PCB Rev 1.2, assembled board" width="100%">
-      <br><strong>PCB, assembled</strong>
-    </td>
-    <td align="center" width="33%">
-      <img src="pictures/pcb-v12-operational.jpeg" alt="PCB Rev 1.2, operational board" width="100%">
-      <br><strong>PCB, in operation</strong>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="pictures/overview.png" alt="Overview: sensor setups (Bresser or TFA IT+ 868 MHz wireless, Davis, generic wired, plus BME280) feed the Universal Weather Node PCB, which sends to LoRaWAN, MQTT/Home Assistant, the web dashboard/REST API and weather networks" width="100%">
+</p>
 
 <table>
   <tr>
-    <td align="center" width="33%">
-      <img src="pictures/3dprint-case-closed.jpeg" alt="3D-printed case, closed, with antenna and display" width="100%">
-      <br><strong>3D-printed case, closed</strong>
-    </td>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <img src="pictures/3dprint-case-open.jpeg" alt="3D-printed case, open, showing the assembled PCB" width="100%">
-      <br><strong>3D-printed case, open</strong>
+      <br><strong>3D-printed case (Rev 1.2)</strong>
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <img src="pictures/davis-rain-wind-sensor.jpeg" alt="Davis rain and wind sensor mounted outdoors" width="100%">
       <br><strong>Davis rain &amp; wind sensor</strong>
     </td>
-  </tr>
-</table>
-
-<table>
-  <tr>
     <td align="center" width="50%">
-      <img src="pictures/integrated-dashboard.jpeg" alt="Built-in web dashboard with live cards and trend charts" width="100%">
+      <img src="pictures/web-dashboard.png" alt="Built-in web dashboard with live cards, wind rose and trend charts" width="100%">
       <br><strong>Built-in web dashboard</strong>
     </td>
-    <td align="center" width="50%">
+  </tr>
+  <tr>
+    <td align="center" colspan="3">
       <img src="pictures/grafana-wind.jpeg" alt="Grafana dashboard for wind data" width="100%">
-      <br><strong>Grafana: wind data</strong>
+      <br><strong>Grafana: wind data via LoRaWAN</strong>
     </td>
   </tr>
 </table>
@@ -110,14 +96,15 @@ The transports can be enabled independently. Web serving and weather-network upl
 ## How It Fits Together
 
 ```
- Davis wind sensor ─┐
- Davis rain gauge ──┤                      ┌─► LoRaWAN ──► ChirpStack / TTN ──► Grafana, ...
- BME280 (I²C) ──────┼──► Weather Node ─────┤
- DS18B20 × 3 ───────┤    (Heltec V3)       ├─► Wi-Fi ──► MQTT broker ──► Home Assistant, ...
- LiPo (optional) ───┘                      │
-                                           ├─► Wi-Fi ──► AWEKAS, Weather Underground, ...
-                                           │
-                                           └─► Wi-Fi ──► Web dashboard / REST API in your LAN
+ Bresser / TFA IT+ ~ ~ 868 MHz ~ ~ ~┐
+ Davis / generic wind sensor ───────┤
+ Davis / generic rain gauge ────────┤                      ┌─► LoRaWAN ──► ChirpStack / TTN ──► Grafana, ...
+ BME280 (I²C) ──────────────────────┼──► Weather Node ─────┤
+ DS18B20 × 3 ───────────────────────┤    (Heltec V3)       ├─► Wi-Fi ──► MQTT broker ──► Home Assistant, ...
+ UV, AUX, Victron, LiPo (optional) ─┘                      │
+                                                           ├─► Wi-Fi ──► AWEKAS, Weather Underground, ...
+                                                           │
+                                                           └─► Wi-Fi ──► Web dashboard / REST API in your LAN
 ```
 
 The node runs continuously (no deep sleep). It samples the sensors every few seconds (default 3 s) and combines the samples into one measurement per **cycle** (default 300 s), which it then sends out. Wi-Fi is off by default — useful for battery installs; on mains power it can run alongside or instead of LoRaWAN.
@@ -152,10 +139,40 @@ For permanent VIN power on v2.0, disconnect USB first, then fit JP8 as described
 | Davis AeroCone / Standard, typically 6466M (default) | Rainfall (reed switch, 0.2 mm/pulse) |
 | BME280 | Temperature / humidity / air pressure (I²C 0x76; Cat5 recommended for longer cables, see [Connectors](#connectors)) |
 | DS18B20 | Up to 3 temperature probes (1-Wire, external) |
+| Bresser 5/6/7-in-1 station or TFA Dostmann / LaCrosse IT+ sensors (optional) | Wireless 868 MHz sensors, received by the Heltec's LoRa chip — no extra hardware; see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-868-mhz) |
 | LiPo battery | Optional; voltage measured via voltage divider + ADC |
 | Custom PCB **v2.0** (default) or Rev 1.2 / 1.3 | Connectors plus ESD protection, pull-ups, RC filters, polyfuses; v2.0 also power supply 6–29.2 V / 5 V and a UV input |
 
-> **Other sensors work too.** Rain gauges and anemometers are just reed-switch pulse counters — any similar sensor works after setting its ratio. See [Using Other Sensors](#using-other-sensors).
+> **Other sensors work too.** Rain gauges and anemometers are just reed-switch pulse counters — any similar sensor works after setting its ratio. See [Using Other Sensors](#using-other-sensors). **Without any wiring**, a Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station delivers wind, rain, temperature, humidity (and UV / light) over 868 MHz, TFA Dostmann / LaCrosse IT+ sensors temperature and humidity — see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-868-mhz); keep the BME280 for the air pressure. A wireless-only station even works **without the custom PCB** — see [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb).
+
+### Minimal Wireless Build (no custom PCB)
+
+For a wireless station (Bresser 5/6/7-in-1 or TFA / LaCrosse IT+ sensors) the custom PCB is optional: the Heltec module receives the sensors itself, and a **BME280** module adds the air pressure. *Not yet built and tested as described here — the firmware paths are the same as on the boards.*
+
+| Part | Notes |
+|------|-------|
+| Heltec WiFi LoRa 32 **V3 / V3.1 / V3.2** | with an **868 MHz** antenna (EU); never power it without the antenna |
+| BME280 module (I²C, 3.3 V) | address **0x76** (SDO to GND; many modules are 0x76, some 0x77 — check the jumper/solder bridge). Must be a BME280, not a BMP280 (no humidity) |
+| USB-C power supply 5 V, ≥ 1 A | the Heltec's own USB-C socket |
+| Bresser station or TFA IT+ sensor | see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-868-mhz) |
+
+**Wiring** (four wires, Heltec pin labels; keep them short, < 30 cm — there is no protection circuitry without the PCB):
+
+| BME280 | Heltec V3 |
+|--------|-----------|
+| VIN / VCC | **3V3** |
+| GND | **GND** |
+| SDA | **41** |
+| SCL | **42** |
+
+**Settings** (portal or web settings, after [flashing](#build--flash)):
+
+1. *Wind sensor* and *Rain sensor* **off** (nothing is connected to the board inputs); *PCB revision* stays at 13.
+2. *Wireless sensors* **on**, *Wireless sensor type* Bresser or TFA / LaCrosse IT+; enter the sensor ID shown on the status page under *Wireless sensor IDs*.
+3. *Source: temperature / humidity* = **Wireless 1** — otherwise *Auto* takes the BME280 first, which sits in the case next to the warm module. The BME280 then only provides the air pressure (QNH), which is not affected by its location.
+4. Wi-Fi / MQTT / LoRaWAN / weather networks as needed.
+
+Everything else — dashboard, Home Assistant, LoRaWAN, weather networks, derived values — works as on the boards. Not available without the PCB: Davis / wired sensors, DS18B20, UV, AUX, heater/fan, Victron, the wide-range and protected power input.
 
 ### Custom PCB
 
@@ -178,7 +195,7 @@ For permanent VIN power on v2.0, disconnect USB first, then fit JP8 as described
 - **Top-left:** Heltec WiFi LoRa 32 **V3.2**, pin-compatible with V3/V3.1. Its USB-C connector sits 1.5 mm inside the board edge.
 - **Right:** original Davis RJ11 plugs, each with a parallel 3.5 mm screw terminal below it (J7 rain, J5 wind). J17 UV sits further down this edge, with its wire opening facing right.
 - **Bottom:** power, heater, fan, AUX, 1-Wire and I²C terminals.
-- **Left:** isolated Victron VE.Direct screw terminal and JST-PH connector.
+- **Left:** isolated Victron VE.Direct screw terminal and JST-PH connector; below them, at the lower left corner, the optional **J18 DC jack** (5.5 × 2.1 mm) with its opening at the left edge.
 
 Rev 1.2/1.3's BME280 RJ45 jack is replaced by J9 on v2.0; an existing cable can be wired to J9 or an enclosure-mounted RJ45 keystone. Both sides label connector pins. The back additionally carries a standalone operating reference; see [Connectors](#connectors) for numbered pinouts.
 
@@ -186,8 +203,10 @@ Rev 1.2/1.3's BME280 RJ45 jack is replaced by J9 on v2.0; an existing cable can 
 
 | Input | Range | Protection | Selection |
 |-------|-------|------------|-----------|
-| **VIN** (J3) | 6–29.2 V, including an 8s LiFePO4 battery at full charge | Common fused P-channel reverse-polarity protection (Q7), bidirectional TVS SMBJ30CA, separately fused LMR36520 buck (5 V / 2 A nominal) | JP8 pins 1–2 |
+| **VIN** (J3, or DC jack J18) | 6–29.2 V, including an 8s LiFePO4 battery at full charge (J18: up to 24 V) | Common fused P-channel reverse-polarity protection (Q7), bidirectional TVS SMBJ30CA, separately fused LMR36520 buck (5 V / 2 A nominal) | JP8 pins 1–2 |
 | **USB-C** (Heltec) | Regulated USB 5 V; measurement / bench test / flashing | USB VBUS connects to the module 5 V rail; source/cable/Heltec-path limits apply | JP8 removed; VIN disconnected |
+
+**DC jack J18 (optional, hand-soldered):** a 5.5 × 2.1 mm barrel jack (XKB DC-005-5A-2.0, LCSC C381116, in the THT list) **in parallel with J3**, in front of the fuse F7, so it uses the same reverse-polarity protection, TVS and fuse. **Centre positive** — the usual polarity of 12 V plug-in power supplies; a reversed supply is blocked by Q7 (not yet tested on a prototype). The jack is rated **5 A / 24 V**: fine for 12 V / 24 V supplies and the heater; use J3 for an 8s LiFePO4 battery (up to 29.2 V). Connect **either J3 or J18**, never both. The 3D-printed case has a 0.6 mm knock-out in the left wall in front of the jack.
 
 J3 is a two-pin terminal: **1 VIN, 2 GND**. The external 5 V branch
 (F2/D4/Q9/R56/U6/R57–R60/C28–C30) has been removed. JP8 is now a two-pin
@@ -314,7 +333,7 @@ minus left); recheck the final order. No hardware release is implied.
 - **Fan tacho** on GPIO40: transistor level conversion for an open-collector signal or an external pull-up, without feeding that voltage back into the 3.3 V rail; filter and Schmitt trigger follow the transistor
 - **Victron VE.Direct** (isolated, ADuM121N): J14 screw terminal and J15 JST-PH; pin 1 = isolated GND, pin 2 = node TX to Victron RX, pin 3 = Victron TX to node RX, pin 4 = Victron-side V+. GPIO33 receives, GPIO34 is the unused transmit direction. The MCU side of U4 runs from the Heltec 3.3 V, independent of the fused sensor rail. Never bridge isolated GND to board GND.
 - **AUX inputs** (terminal J11: `3V3 AIN PULSE GND`): **AIN** on GPIO4 (ADC1, works while Wi-Fi is on; electrical input limit 3.3 V with R25 absent, useful ADC range approximately 0–3.1 V). Populate **R25 = 15 kΩ** for 0–5 V sensors: with R24 = 10 kΩ, 5 V becomes 3.0 V at the ADC; set the input scale to **1.66667**. **PULSE** on GPIO48 is for a reed switch / open collector (4.7 kΩ pull-up, RC 0.47 ms, Schmitt trigger — inverted like rain and wind), e.g. a second rain gauge or an anemometer
-- **UV sensor input** (terminal J17: `GND SIGNAL 3V3 5V`): GPIO3 ADC1 with a connector-side D32 PESD5V0S2BT TVS, a 10 kΩ input resistor, BAT54S rail clamps and range-select divider. JP10 1–2 selects 0–3.3 V (scale 1.1); 2–3 selects 0–5 V (scale 1.66534). D32 has 5 V standoff, not a 5 V clamp; the resistor/divider and BAT54S remain necessary. The 5 V pin is fed through its own PTC F8 (nominal 100 mA), so a shorted UV cable cannot pull down the shared 5 V rail. Supply the sensor from exactly one voltage pin; the UV index requires separate sensor calibration. This protection does not guarantee survival of sustained overvoltage or prevent backfeeding from an externally powered sensor when the controller is off.
+- **UV sensor input** (terminal J17: `GND SIGNAL 3V3 5V`): GPIO3 ADC1 with a connector-side D32 PESD5V0S2BT TVS, a 10 kΩ input resistor, BAT54S rail clamps and range-select divider. JP10 1–2 selects 0–3.3 V (scale 1.10989); 2–3 selects 0–5 V (scale 1.66534). D32 has 5 V standoff, not a 5 V clamp; the resistor/divider and BAT54S remain necessary. The 5 V pin is fed through its own PTC F8 (nominal 100 mA), so a shorted UV cable cannot pull down the shared 5 V rail. Supply the sensor from exactly one voltage pin; the UV index requires separate sensor calibration. This protection does not guarantee survival of sustained overvoltage or prevent backfeeding from an externally powered sensor when the controller is off.
 - **Hardware revision ID**: 1 MΩ / 1 MΩ divider on GPIO20 (≈ 1.65 V on v2.0, pin open on Rev 1.x; 1.65 µA)
 - **Test pads** TP1–TP5 (GND, VIN, 5V, 3V3), plus bare probe pads **TP6** (bottom, 1.5 mm) on the Heltec 3.3 V rail (3V3_HELTEC, also U4 pin 1) and **TP7** (top, 1.0 mm, next to Q1) on the switched 1-Wire supply OW_SW, for scoping the switch-on dip; the heater gate is probed at R31 pad 1. The bottom silkscreen has **S/N and date fields** for marking prototypes. None of these are BOM/CPL parts. **Expansion header J16** (`GND 3V3 SDA SCL IO19 5V`, 3.3 V logic, unprotected, not populated)
 - **Wind-vane supply switched** by GPIO19 (P-MOSFET Q6, LOW = on; TVS SMLVT3V3 on the switched line): J5 `3V3` and the RJ11 3.3 V pin are only powered around each reading in low-power mode — see [Low-Power Mode](#low-power-mode-lora-only). GPIO3 is the UV analog input.
@@ -331,8 +350,8 @@ minus left); recheck the final order. No hardware release is implied.
 | File | Use |
 |------|-----|
 | [Gerber/drill ZIP](pcb/v2.0/production/universal-weather-node-v2.0-gerber.zip) | Board fabrication: copper, mask, silkscreen, paste, outline and holes |
-| [JLCPCB BOM](pcb/v2.0/production/universal-weather-node-v2.0-bom-jlcpcb.csv) | Bill of materials for JLCPCB assembly: 135 SMD references in 47 groups |
-| [JLCPCB CPL](pcb/v2.0/production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | Component placement list: 135 top-side SMD parts, no THT/DNP parts |
+| [JLCPCB BOM](pcb/v2.0/production/universal-weather-node-v2.0-bom-jlcpcb.csv) | Bill of materials for JLCPCB assembly: 136 SMD references in 47 groups |
+| [JLCPCB CPL](pcb/v2.0/production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | Component placement list: 136 top-side SMD parts, no THT/DNP parts |
 | [THT parts (LCSC)](pcb/v2.0/production/universal-weather-node-v2.0-tht-lcsc.csv) | Through-hole connectors and headers for hand soldering, grouped by LCSC number with quantity per board (jumper shunts not included) |
 | [Schematic PDF](pcb/v2.0/universal-weather-node-v2.0-schematic.pdf) | Circuit reference; editable project in [pcb/v2.0](pcb/v2.0/) |
 
@@ -367,6 +386,7 @@ The following v2.0 pin lists are in **numbered pin order**, not necessarily left
 | Terminal | Pins | Function |
 |----------|------|----------|
 | J3 POWER IN | 1 VIN · 2 GND | 6–29.2 V only; fit JP8 for VIN, remove before USB |
+| J18 DC jack (left edge, optional) | 1 centre = VIN · 2 sleeve / 3 switch = GND | 5.5 × 2.1 mm, centre positive, up to 24 V / 5 A; parallel to J3 — use only one of them |
 | J12 HEATER | 1 +V · 2 HEAT- | Load between +V and HEAT-, 3 A design target, runs at VIN voltage; HEAT- is switched, not permanent GND |
 | J13 FAN | 1 FAN+ · 2 GND · 3 TACH | JP9 selects 5 V (0.5 A target) or protected VIN (1 A target); tacho input |
 | J11 AUX IN | 1 3V3 · 2 AIN · 3 PULSE · 4 GND | Analog 0–3.3 V (GPIO4), or 0–5 V with R25 and matching scale; pulse/reed (GPIO48) |
@@ -436,6 +456,8 @@ The following v2.0 pin lists are in **numbered pin order**, not necessarily left
 
 **v2.0** (KiCad, SMD, [`pcb/v2.0/`](pcb/v2.0/)) is the current hardware design, see [Custom PCB](#custom-pcb). The firmware recognises it by GPIO20's revision ID and runs as revision `20`. Without this ID, the stored revision applies (default `13`): **select `12` manually for Rev 1.2**. Only use the manual `20` override on an actual v2.0 board if its ID cannot be read; it enables GPIOs used differently on older boards. **Rev 1.3** is kept in [`pcb/v1.3/`](pcb/v1.3/); the board photos above show **Rev 1.2**.
 
+> **Rev 1.2 / 1.3 power:** the 5 V input feeds the Heltec's 5 V pin directly — **never connect USB-C and the 5 V input at the same time**, otherwise the power supply back-feeds into the computer's USB port. Use a regulated 5 V supply (a 12 V supply needs an external converter). The 3.3 V sensor rail comes from the Heltec's regulator through a 170 mA PTC.
+
 Rev 1.2 / 1.3 protect every external interface with TVS diodes (SMLVT3V3) at the connectors, BAT43 clamps before the GPIO pins, 330 Ω / 1 kΩ series resistors, the RC filters listed above, polyfuses F1 (900 mA, 5 V input, with D13/SMBJ5.0A) and F2 (170 mA, 3.3 V sensor supply) and the I²C pull-up jumpers J1/J2.
 
 Changes in Rev 1.3:
@@ -446,6 +468,51 @@ Changes in Rev 1.3:
 - 74LVC2G14 Schmitt trigger on wind speed and rain — it inverts, so the firmware counts falling edges on Rev 1.3
 - 5 V input connects directly to the Heltec's 5 V pin (J2 pin 2)
 - Optional footprint R21 (4.7 kΩ) for non-Davis wind vanes (see [Using Other Sensors](#using-other-sensors))
+
+### Ordering the PCB (JLCPCB)
+
+The board is open hardware: everyone orders it for their own use. The SMD parts (0805, SOT-23, SOIC with exposed pad, DFN) are meant for **JLCPCB assembly**; the through-hole parts are soldered by hand. Everything needed is in [`pcb/v2.0/production/`](pcb/v2.0/production/):
+
+| File | Use |
+|------|-----|
+| [`universal-weather-node-v2.0-gerber.zip`](pcb/v2.0/production/universal-weather-node-v2.0-gerber.zip) | Board (Gerber + drill) |
+| [`universal-weather-node-v2.0-bom-jlcpcb.csv`](pcb/v2.0/production/universal-weather-node-v2.0-bom-jlcpcb.csv) | SMD bill of materials with LCSC numbers (assembly) |
+| [`universal-weather-node-v2.0-cpl-jlcpcb.csv`](pcb/v2.0/production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | SMD positions and rotations, already corrected for JLC's library |
+| [`universal-weather-node-v2.0-tht-lcsc.csv`](pcb/v2.0/production/universal-weather-node-v2.0-tht-lcsc.csv) | Through-hole parts to order at LCSC (quantity per board) |
+
+**1. Board** — upload the Gerber ZIP at [jlcpcb.com](https://jlcpcb.com) (*Order now*). Size (100 × 100 mm) and layers (2) are detected. Choose:
+
+| Option | Setting | Why |
+|--------|---------|-----|
+| PCB thickness | **1.6 mm** | the 3D-printed case is built for it |
+| Surface finish | **LeadFree HASL** or ENIG | lead-free (RoHS); ENIG is flatter for the fine-pitch parts but costs more |
+| Outer copper weight | **1 oz** | the power traces are dimensioned for it |
+| Quantity | 5 (minimum) | — |
+| Everything else | default | colour is free choice; the order number is printed somewhere unless you pay to remove it |
+
+**2. Assembly** — switch on *PCB Assembly*:
+
+| Option | Setting |
+|--------|---------|
+| PCBA type | *Economic* if offered for this order, otherwise *Standard* |
+| Assembly side | **Top side** (all 135 SMD placements are on top) |
+| PCBA quantity | 2 or 5 (fixed costs per order; see the cost note below) |
+| Tooling holes | added by JLCPCB |
+| Confirm parts placement | **yes** — you get a placement preview to approve before production |
+
+**3. Parts** — upload the BOM and CPL. All 47 lines should be matched to their LCSC numbers; R25, J16 and TP1–TP7 are intentionally not populated (DNP) and not in the BOM. If a part is out of stock, pick a replacement with the **same value, voltage/current rating and package** — never replace **D1 (SMBJ30CA)** by a unidirectional *A* type, and keep the ratings of F5/F7, Q3/Q4/Q7, U1 and L1 (see [`CHECKLIST.md`](pcb/v2.0/CHECKLIST.md#a-jlcpcb-assembly-preview-before-paying)).
+
+**4. Placement preview** — check every polarised part against [CHECKLIST A](pcb/v2.0/CHECKLIST.md#a-jlcpcb-assembly-preview-before-paying) (diodes, transistors, ICs, C6/C31). The CPL already contains the corrections found in earlier previews; still look at each one before approving.
+
+**5. Through-hole parts** — order the [THT list](pcb/v2.0/production/universal-weather-node-v2.0-tht-lcsc.csv) at [lcsc.com](https://www.lcsc.com) (multiply by your number of boards), plus:
+
+- 2.54 mm **jumper shunts** (at least JP8, JP9, JP10; JP1/JP11/JP2/JP12 as needed),
+- the **Heltec WiFi LoRa 32 V3 / V3.2** with an **868 MHz** antenna (EU),
+- a **BME280** module (I²C, 3.3 V) and your sensors.
+
+J18 (DC jack) is optional. Solder from low to high: pin sockets J1/J2 (fit them onto the Heltec while soldering so they line up), headers, JST, screw terminals, RJ11 jacks, DC jack. Use **lead-free solder**. Then follow [CHECKLIST B](pcb/v2.0/CHECKLIST.md#b-bring-up-of-the-first-prototypes) for the first power-up.
+
+**Costs:** set-up, stencil and a per-type fee for every *extended* part are charged per order, so 2–5 assembled boards cost considerably more per board than a large batch; JLC's calculator shows the actual price, VAT and shipping before payment. A **group order** spreads these fixed costs: one person orders on behalf of and at the expense of the participants and the costs are split without a mark-up. Selling assembled boards is a different matter (CE, RoHS, WEEE obligations).
 
 ---
 
@@ -477,41 +544,16 @@ There are two places to change settings:
 
 > Don't hold the button while powering on or resetting — that starts the ESP32 bootloader instead of the firmware.
 
-- *Save* on the parameter page is enough. Only use **Configure WiFi** if you want to change the Wi-Fi network or a static IP.
+- *Save* on the parameter page is enough. Only use **Configure WiFi** if you want to change the Wi-Fi network or a static IP. The network is stored even if it is not in range (pre-provisioning a node for its final site): the portal reports the failed connection, and after closing it the node keeps trying that network. In normal operation the [web settings page](#web-settings-page) can change the network too.
 - If the portal is left untouched for 3 minutes, it closes and the node restarts. (The timer restarts with every page you open.)
 - The start page also offers the version-matched **payload decoder** download, the **help page** and the **wind-direction calibration** wizard.
 - The normal sampling/transmit loop pauses while the portal is open. Heater/fan outputs are forced off until restart; do not use the portal/update process when continuous output control is required.
 
 <!-- help:skip -->
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="pictures/wifi-config-startpage.png" alt="Config portal start page" width="100%">
-      <br><strong>Portal: start page</strong>
-    </td>
-    <td align="center" width="50%">
-      <img src="pictures/wifi-config-loraparameter.png" alt="Config portal LoRaWAN section" width="100%">
-      <br><strong>Portal: LoRaWAN</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="pictures/wifi-config-unitsandsensor.png" alt="Config portal units and sensor calibration" width="100%">
-      <br><strong>Portal: units &amp; sensor calibration</strong>
-    </td>
-    <td align="center" width="50%">
-      <img src="pictures/wifi-config-generalparameter.png" alt="Config portal general parameters" width="100%">
-      <br><strong>Portal: general</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="pictures/wifi-config-wifimqttparameter.png" alt="Config portal Wi-Fi and MQTT section" width="100%">
-      <br><strong>Portal: Wi-Fi + MQTT</strong>
-    </td>
-    <td width="50%"></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="pictures/wifi-config-startpage.png" alt="Config portal start page with the main menu" width="50%">
+  <br><strong>Config portal: start page</strong>
+</p>
 <!-- /help:skip -->
 
 ### Web Settings Page
@@ -522,7 +564,8 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 - Sections marked **restart** are only read at boot: LoRaWAN, network & MQTT, PCB revision. If you change one of them, the node saves and restarts — this clears the chart history, which lives in RAM.
 - **Passwords and keys are never shown.** Leave a password field empty to keep the stored value; optional ones have a *remove* checkbox.
 - Invalid values are listed after saving and keep their old value; everything else is saved.
-- The Wi-Fi network itself and switching Wi-Fi/web API off are only possible in the portal — so you can't lock yourself out.
+- **Wi-Fi network** (name and password, *Network & MQTT*): a change is **tested for 60 s** without a restart. If the node connects, the new network is stored; if not, it goes back to the current one and the settings page shows a notice — a typo can't lock you out. **Store without test (pre-provisioning)** stores a network that is not in range yet right away: the node leaves the current network immediately and keeps trying the new one (reachable again via that network, downlink `0x03` for the portal, or the button).
+- Only switching Wi-Fi or the web API off and the wind-direction calibration wizard are portal-only — so you can't lock yourself out.
 
 ### Settings Reference
 
@@ -537,14 +580,21 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | Low-power mode | Light sleep between sub-samples (LoRa only, Wi-Fi off) — see [Low-Power Mode](#low-power-mode-lora-only) | off |
 | Low-power: switch wind-vane supply off | PCB v2.0: vane potentiometer only powered around each reading | on |
 | **Measurement** | | |
-| Uplink / measurement interval | Seconds per measurement cycle (5–3600) | 300 |
-| Sample interval | Seconds between sub-samples within a cycle | 3 |
-| Wind / rain sensor | Enable or disable each sensor | on |
+| LoRaWAN / measurement interval | Seconds between LoRaWAN uplinks (5–3600); stretched automatically if the data rate would exceed 1 % airtime | 300 |
+| Wind sample interval | **1 s** or **3 s** — see [Measurement and Aggregation](#measurement-and-aggregation) | 1 |
+| LoRaWAN wind values | *Interval* (mean, 3-s gust and direction since the last uplink) or *10 min* (WMO values of the last 10 minutes) | interval |
+| MQTT interval | Seconds between MQTT publishes; `0` = like the LoRaWAN interval, else 2–3600 | 0 |
+| MQTT wind values | *Interval* or *10 min*, as for LoRaWAN | interval |
+| Wireless sensors | Receive 868 MHz sensors with the LoRa chip between uplinks — see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-868-mhz) | off |
+| Wireless sensor type | *Bresser* or *TFA / LaCrosse IT+* (both data rates, alternating, or 17.241 / 9.579 kbit/s only); *Bresser + TFA IT+ alternating* is possible but **not recommended** (packets of both are missed) | Bresser |
+| Wireless sensor IDs | Hex IDs to accept, comma-separated, max 4; empty = any. The order defines *Wireless 1–4* for the value sources; the hint lists the IDs received so far | – |
+| Source: temperature / humidity, wind, rain, UV, light | Which sensor feeds each value into all outputs: *Auto* (board first, then wireless 1–4), *Board sensor*, *Wireless 1–4*, *Off* — see [Value Sources](#value-sources) | Auto |
+| Wind / rain sensor | Enable or disable the board's anemometer / rain gauge (a wireless sensor can still deliver wind/rain, see value sources) | on |
 | LiPo measurement | Battery voltage measurement | off |
 | Altitude | Station altitude in m, for sea-level pressure (QNH) | 560 |
 | PCB revision | 12 = Rev 1.2, 13 = Rev 1.3, 20 = v2.0 (v2.0 is detected automatically) | 13 |
 | CPU frequency | 80 MHz (saves power) or 240 MHz | 80 |
-| Debug mode | Adds diagnostic fields (cycle counter, CPU temperature, free heap, uptime) | off |
+| Debug mode | Adds diagnostic fields (cycle counter, free heap, uptime; CPU temperature in the LoRaWAN payload — the JSON/MQTT data always contain it) | off |
 | **Units & calibration** | | |
 | Units | Metric or Imperial — see [Units](#units-metricimperial) | Metric |
 | Wind speed unit | km/h or m/s (metric only) | m/s |
@@ -565,11 +615,13 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | **Wi-Fi + MQTT** | | |
 | Wi-Fi / MQTT / web API / MQTT commands | On/off switches — see [MQTT and Home Assistant](#mqtt-and-home-assistant) | off |
 | Device name | Wi-Fi hostname, MQTT client ID, default topic prefix | – |
+| Wi-Fi network and password | Portal (*Configure WiFi*) or web settings (tested for 60 s with rollback, or *store without test* for pre-provisioning) | – |
 | Static IP, gateway, subnet, DNS | Optional fixed LAN address; leave disabled to use DHCP. Configure in the portal's Wi-Fi form or the web settings page (restart required) | DHCP; subnet 255.255.255.0; DNS defaults to gateway |
 | MQTT broker, port, user, password, topic prefix, TLS mode, CA certificate | Broker connection | port 1883, no TLS |
 | Web settings admin password | Required for the settings page and the log | – |
 | **Web settings page only** | | |
-| Weather networks | Station IDs, keys and intervals — see [Weather Networks](#weather-networks) | off |
+| Weather networks | Station IDs, keys and intervals (AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap) — see [Weather Networks](#weather-networks) | off |
+| Firmware update check, version list URL | Daily check for a newer version — see [Firmware Update Check](#firmware-update-check) | off; this project's Gitea tags |
 | Latitude / longitude | Only sent to AWEKAS | – |
 | Time zone, NTP server | POSIX time zone string and time server | Central Europe, `pool.ntp.org` |
 
@@ -621,7 +673,8 @@ With **Wi-Fi** and the **web API** enabled, open the node's IP address in a brow
 **Dashboard highlights:**
 
 - 🖱️ **Hover over a chart** (or tap/drag on a phone): a crosshair appears in *all* charts at the same moment, with a tooltip showing time, values and wind direction.
-- 🌧️ **Rain totals:** the rain tile and the rain amount chart show the sum over the selected range (Σ 24 h or Σ 7 days); after a restart the actually buffered span is named instead (e.g. Σ 5.2h). The daily total since midnight is on `/status` (*Rain today*).
+- 🌧️ **Rain totals:** the rain tile and the rain amount chart show the sum over the selected range (Σ 24 h or Σ 7 days); after a restart the actually buffered span is named instead (e.g. Σ 5.2h). The tile also shows the last hour and today.
+- 🌡️ **Derived values in the tiles:** temperature with *feels like* and dew point, pressure with the 3-h tendency (↗ / → / ↘).
 - 🌍 5 languages (English, German, French, Spanish, Portuguese), light/dark theme, Metric/Imperial — saved in your browser only, the device settings stay untouched.
 - 🔄 Auto-refresh from 1 s to 1 min, or off.
 - 🙈 Sensors without data (e.g. no BME280 connected) are hidden automatically.
@@ -637,7 +690,12 @@ With **Wi-Fi** and the **web API** enabled, open the node's IP address in a brow
 | Clock (NTP) | Synced time, or "waiting for first sync" |
 | Each weather network | Last successful upload, last server reply on errors, ok/failed counters |
 
-It also shows the latest measurements incl. **rain today**, and reloads itself every 30 seconds.
+It also shows the latest measurements and the [derived values](#derived-values) — rain last hour / 24 h / today / yesterday, last rain, dew point, feels like, cloud base, pressure tendency with the weather trend, temperature trend, sunshine and warnings — and reloads itself every 30 seconds.
+
+| Box | Shows |
+|-----|-------|
+| LoRaWAN | Data rate / SF, channel and TX power of the last uplink; device address and uplink frame counter (compare with the network server); time, RSSI and SNR of the last downlink; uplinks since the last downlink against the [silent-session rejoin](#join-and-session) limit; rejoins since start |
+| Device | Next measurement, PCB revision, sensors, **CPU temperature** (chip, above ambient), uptime, *firmware update* (with the [update check](#firmware-update-check) on), **cause of the last restart** (power-on, watchdog, crash, brownout …), free heap and its minimum since start |
 
 > 🔒 **Security:** the settings page and the log use HTTP Digest authentication (user `admin`), so the password itself is never sent in plain text. The connection is still unencrypted HTTP — anything you *type into* the settings form can be read by someone sniffing your network. Use a strong admin password and never expose the node to the internet. Without an admin password, these pages are disabled.
 
@@ -645,7 +703,7 @@ It also shows the latest measurements incl. **rain today**, and reloads itself e
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="pictures/integrated-dashboard.jpeg" alt="Web dashboard with live cards and trend charts" width="100%">
+      <img src="pictures/web-dashboard.png" alt="Web dashboard with live cards and trend charts" width="100%">
       <br><strong>Dashboard (<code>/</code>)</strong>
     </td>
     <td align="center" width="50%">
@@ -696,8 +754,12 @@ Share your data with the big community weather networks — **straight from the 
 | [Weather Underground](https://www.wunderground.com/pws/overview) | Station ID + station key | 300 s |
 | [Weathercloud](https://weathercloud.net) | ID + key (register the device as type "Other") | 600 s (free accounts) |
 | [Wetternetzwerk.pro](https://wetternetzwerk.pro) | Station ID + key | 60 s |
+| [Windy](https://stations.windy.com) | Station ID + station password (*My stations*, API v2) | 300 s (minimum) |
+| [openSenseMap](https://opensensemap.org) | senseBox ID, access token and the sensor IDs (see below) | 300 s |
 
-**What gets sent:** average wind speed, strongest gust and average wind direction over the interval, air pressure (sea level), humidity, temperature, **rain since midnight** and, for AWEKAS/Weathercloud, the rain rate. Latitude/longitude are optional and only sent to AWEKAS.
+**What gets sent:** wind as **10-minute WMO values** — 10-min mean, highest 3-s gust and vector-mean direction of the last 10 minutes, independent of the upload interval, so the station compares with others (see [Measurement and Aggregation](#measurement-and-aggregation)) — air pressure (sea level, BME280), humidity, temperature, **rain since midnight** and, for AWEKAS/Weathercloud, the rain rate. Also, where the network takes them: **dew point** (Weather Underground, Wetternetzwerk.pro, Weathercloud, Windy, openSenseMap), **rain of the last hour** (Weather Underground, Wetternetzwerk.pro, Windy, openSenseMap), wind chill / heat index (Weathercloud) and the **UV index** (Weather Underground, Weathercloud, Windy, openSenseMap). Wind, rain, temperature, humidity and UV come from the selected [value source](#value-sources) (board sensor or a wireless sensor). Latitude/longitude are optional and only sent to AWEKAS.
+
+**openSenseMap:** create a senseBox with the sensors you want and copy each sensor's ID into *openSenseMap sensor IDs* as `key=sensorId`, comma-separated, e.g. `temp=5f1c…,hum=5f1d…,press=5f1e…`. Keys and units: `temp` °C, `hum` %, `press` hPa (sea level), `wind` / `gust` m/s, `dir` °, `rain` mm (last hour), `rainday` mm (today), `dew` °C, `uv` index, `lux` lx. The access token is sent as the `Authorization` header (boxes with authentication, the default for new boxes).
 
 **Good to know:**
 
@@ -730,7 +792,7 @@ Any combination works. If the network is down, the MQTT message is simply skippe
 
 | Topic | Direction | Content |
 |-------|-----------|---------|
-| `<prefix>/data` | node → broker | Measurement JSON, once per cycle |
+| `<prefix>/data` | node → broker | Measurement JSON, every MQTT interval (default: like the LoRaWAN interval); wind as configured (*interval* or *10 min*) |
 | `<prefix>/cmd` | broker → node | Commands (only with MQTT commands enabled) |
 | `<prefix>/status` | node → broker | `online` / `offline` (retained, via last will) |
 
@@ -758,12 +820,16 @@ Any combination works. If the network is down, the MQTT message is simply skippe
     "bus1Present": false,
     "sendFailCount": 0
   },
-  "nextCycleInSec": 2
+  "nextCycleInSec": 2,
+  "cpuTemp": 41.8,
+  "cpuTempUnit": "C",
+  "resetReason": "power-on"
 }
 ```
 
 - `ds18b20` contains the current scanned probe slots, with `null` for a slot whose temperature read fails. Slots follow ROM-address search order, not physical cable order; removing/adding probes can change which physical probe occupies an index. The array is omitted when no probes are found.
-- `nextCycleInSec`: seconds until the next measurement. In debug mode, `cycle`, `cpuTemp`, `freeHeapKiB` and `uptimeH` are added.
+- `nextCycleInSec`: seconds until the next measurement. In debug mode, `cycle`, `freeHeapKiB` and `uptimeH` are added.
+- `cpuTemp` / `cpuTempUnit`: ESP32-S3 chip temperature, typically 10–20 K above ambient — for spotting an overheating enclosure, not an air temperature. `resetReason`: cause of the last restart (`power-on`, `software restart`, `crash (panic)`, `watchdog (task)`, `brownout (supply voltage dip)`, …).
 - `status.pcbRev`: 12, 13 or 20 (v2.0).
 - PCB v2.0, only while the function is enabled: `auxAnalogV`, `auxPulses` / `auxPulsesTotal`, `heater` (`mode`, `on`, `dutyPct`), `fan` (`mode`, `on`, `dutyPct`, with the tacho also `rpm`, `stalled`), `victron` (`valid`, `batteryV`, `batteryA`, `pvV`, `pvW`, `yieldTodayKWh`, `socPct`, `loadA`, `chargeState`, `error` — each only if the device sends it), and `status.batteryLowLockout` while the battery lockout holds the outputs off:
 
@@ -776,7 +842,9 @@ Any combination works. If the network is down, the MQTT message is simply skippe
 }
 ```
 
-This is a partial v2.0 example, not the complete telemetry document. UV adds `uvEnabled`, `uvIndexCalibrated`, `uvSensorVolts` and, when calibrated/enabled, `uvIndex`; wind 2 adds the `wind2` object.
+**Derived values** ([details](#derived-values)), each only while its inputs exist: `dewPoint`, `feelsLike` (temperature unit), `cloudBase` + `cloudBaseUnit` (m / ft above the station), `windDirText` (`N` … `NNW`), `pressureTrend3h` (pressure unit), `pressureTendency` (`steady`, `rising slowly`, …), `weatherTrend` (`improving`, `worsening`, `storm warning`, `settled`, `unsettled`, `no change`), `tempTrend1h` (K, °F in imperial), `rain1h`, `rain24h`, `rainToday`, `rainYesterday`, `lastRain` (ISO 8601, UTC), `sunshineTodayMin` / `sunshineYesterdayMin`, `warnings` (`frost`, `fog`, `sultry`: true/false) and `firmwareUpdate` (a newer version, with the update check on).
+
+This is a partial v2.0 example, not the complete telemetry document. UV adds `uvEnabled`, `uvIndexCalibrated`, `uvSensorVolts` and, when calibrated/enabled, `uvIndex`; wind 2 adds the `wind2` object. With wireless sensors on, `rfSensors`, `sources`, `radioBatteryLow` and — from the selected sources — `lightLux` and a wireless `uvIndex` are added; `temp` / `humidityPct` / wind / rain then carry the [selected source](#value-sources).
 
 **Commands** on `<prefix>/cmd`:
 
@@ -800,6 +868,8 @@ With MQTT enabled, the node registers itself in Home Assistant automatically (MQ
 - The retained status/last will marks entities unavailable when the broker detects a disconnect; an abrupt power/network loss can take until the MQTT keepalive timeout.
 - The 3 DS18B20 entities always exist; a disconnected probe shows as unavailable.
 - PCB v2.0: AUX, UV voltage/calibrated index, wind 2, heater/fan power, fan speed and the Victron values (battery voltage/current, PV power, yield today, state of charge, load current) appear while their functions are enabled.
+- With wireless sensors on, temperature, humidity, wind, rain, *UV Index* and *Illuminance* are always announced (they follow the [value sources](#value-sources) and show as unavailable while no source delivers them).
+- Derived values: *Dew Point*, *Feels Like*, *Cloud Base*, *Temperature Change (1 h)*, *Pressure Change (3 h)*, *Pressure Tendency*, *Weather Trend*, *Wind Direction (compass)*, *Rain Last Hour / Last 24 h / Today / Yesterday*, *Last Rain* (timestamp), with wireless sensors *Sunshine Today / Yesterday*, and the warnings *Frost*, *Fog / Dew* and *Sultry* as binary sensors — ready for automations (e.g. a frost notification). *Firmware Update* with the update check on.
 - If you switch a sensor on or off, the entity list updates on the next MQTT reconnect.
 
 ---
@@ -857,10 +927,14 @@ Works the same way, no firmware changes needed:
 - **Join:** OTAA. The AppKey is used as both AppKey and NwkKey, so LoRaWAN **1.0.x and 1.1** network servers both work.
 - Join nonces are persisted to avoid reuse across normal restarts. Erasing flash can remove that state; coordinate a reset/reprovisioning with the network server rather than assuming a flash erase is harmless.
 - **Every restart performs a new join** (the node never deep-sleeps, and the session is only kept across deep sleep). In normal operation the session stays in RAM.
+- **Silent session → rejoin:** with ADR on, the node asks for a network answer after 64 uplinks without a downlink and the network server must reply within 32 more. After **288 uplinks in a row without any downlink** (3 × (64 + 32)) the session is treated as broken and the node rejoins (log: `No downlink for 288 uplinks …`). At a 300 s interval that is 24 h, at 60 s about 5 h. If the rejoin does not help (still no downlink at all), the threshold doubles each time up to 2304 uplinks (8 days at 300 s); any received downlink resets it to 288. Before this, a session that stopped receiving downlinks stayed stuck at SF12 until the next restart.
 - Sensors, I/O and Wi-Fi start **before** the first join attempt. Radio initialization,
   provisioning or join failures do not trap the node in a startup retry loop:
-  measurements, history and Wi-Fi/MQTT remain available, with retries no more
-  often than every 60 s. Each individual RadioLib join exchange still blocks
+  measurements, history and Wi-Fi/MQTT remain available. Failed joins are retried
+  after 1, 2, 4, 8 … minutes, at most every 60 min, and back to 1 min after a
+  successful join (each attempt costs airtime and a DevNonce; a fixed 1-min retry
+  during a network outage would break the LoRaWAN join duty cycle and use up the
+  65 536 nonces in about 45 days). Each individual RadioLib join exchange still blocks
   the main loop for several seconds, like an uplink; pulse counters keep running.
   Logs report failures; hold the button 3 s to check keys and region.
 - After 10 consecutive uplink failures, the node schedules a new join instead
@@ -891,7 +965,7 @@ Send on **FPort 1**: `0x10`, followed by one or more triplets `[paramId][valueHi
 | ID (dec) | ID (hex) | Parameter | Range | Example | Full payload (hex) |
 |---|---|---|---|---|---|
 | 1 | `0x01` | `uplinkIntervalSec` | `5..3600` | 300 s | `10 01 01 2C` |
-| 2 | `0x02` | `sampleSec` | `1..uplinkIntervalSec` | 3 s | `10 02 00 03` |
+| 2 | `0x02` | `sampleSec` | wind sample interval `1` or `3` s (2 → 1, 4 and more → 3) | 1 s | `10 02 00 01` |
 | 3 | `0x03` | `windEn` | `0` / `1` | 1 | `10 03 00 01` |
 | 4 | `0x04` | `rainEn` | `0` / `1` | 1 | `10 04 00 01` |
 | 5 | `0x05` | `lipoEn` | `0` / `1` | 1 | `10 05 00 01` |
@@ -930,6 +1004,12 @@ Send on **FPort 1**: `0x10`, followed by one or more triplets `[paramId][valueHi
 | 38 | `0x26` | `uvCalibrated` | `0` / `1`, explicit confirmation of sensor calibration | 1 | `10 26 00 01` |
 | 39 | `0x27` | `uvIndexSlope` | index/V ×1000, `1..30000` | 2000 (= 2 index/V) | `10 27 07 D0` |
 | 40 | `0x28` | `uvIndexOffset` | index ×1000, `−10000..10000` | −500 (= −0.5) | `10 28 FE 0C` |
+| 41 | `0x29` | `mqttIntervalSec` | `0` (= LoRaWAN interval) or `2..3600` | 5 s | `10 29 00 05` |
+| 42 | `0x2A` | `loraWindAgg` | `0` interval, `1` 10 min (WMO) | 0 | `10 2A 00 00` |
+| 43 | `0x2B` | `mqttWindAgg` | `0` interval, `1` 10 min (WMO) | 1 | `10 2B 00 01` |
+| 44 | `0x2C` | `rfEn` | `0` / `1`, 868 MHz wireless sensors (IDs only via web settings / portal) | 1 | `10 2C 00 01` |
+| 45–49 | `0x2D`–`0x31` | value sources: temperature/humidity, wind, rain, UV, light | `0` auto, `1` board, `2`–`5` wireless 1–4, `6` off — see [Value Sources](#value-sources) | 2 (wind from wireless 1) | `10 2E 00 02` |
+| 50 | `0x32` | `rfProto` | wireless sensor type, bit mask: `1` Bresser, `2` IT+ 17.241 kbit/s, `4` IT+ 9.579 kbit/s, `6` IT+ both, `7` Bresser + IT+ (several bits = the receiver alternates and misses packets; Bresser + IT+ not recommended) | 6 | `10 32 00 06` |
 
 IDs 15–30 and wind-2 mode (33) belong to the [PCB v2.0 I/O block](#inputs-and-outputs-pcb-v20); on Rev 1.2/1.3 they are rejected except for disabling a function. Enabling UV (35) also requires v2.0. Calibration values can be prepared where accepted, but do not provide the missing hardware.
 
@@ -1032,6 +1112,62 @@ calibration result is not restricted to an arbitrary meteorological threshold.
 
 ---
 
+### Wireless Sensors (Bresser, TFA IT+, 868 MHz)
+
+The node can additionally receive wireless sensors on 868.3 MHz (FSK) **with the existing LoRa chip, no extra hardware**: **Bresser** sensors — e.g. the **7-in-1** station (wind, rain, temperature, humidity, UV, light), 5-in-1 and 6-in-1 stations, thermo/hygro, soil, lightning and leakage sensors — or **TFA Dostmann / LaCrosse IT+** temperature/humidity sensors (details below; not yet tested with real sensors). Switch it on with *Wireless sensors* and choose the family with *Wireless sensor type* (web settings *Measurement*, portal, or parameters 44 and 50).
+
+- **Shared radio:** the SX1262 listens for the sensors whenever LoRaWAN does not need it. Before every uplink (and its two receive windows) and every join, the firmware stops the reception and restarts it afterwards. LoRaWAN is not affected; a sensor packet that arrives during an uplink is lost — Bresser sensors repeat every 12–16 s, IT+ sensors about every 4 s, so at a 60 s LoRaWAN interval roughly 5 % of the packets are missed, and only the latest values are kept anyway.
+- **Sensor IDs:** with *Wireless sensor IDs* empty the node accepts any sensor of the selected type in range (up to 4); IT+ sensors get a new ID with every battery change. The status page lists every received ID with RSSI — enter yours (hex, comma-separated) to ignore the neighbours'.
+- **Output:** status page box *Wireless sensors (868 MHz)* and the JSON field `rfSensors` in `/api/data` and the MQTT data topic — one object per sensor with `id`, `type`, `protocol` (`Bresser`, `IT+ 17.241 kbit/s`, `IT+ 9.579 kbit/s`), `rssi`, `ageSec`, `batteryOk` and, as far as the sensor sends them, `temp`, `humidityPct`, `windSpeed` / `windGust` / `windDirDeg` (the sensor's own mean and gust), `rainTotal` (the sensor's running total, resets on a battery change), `uvIndex`, `lightLux`. Units follow the unit settings. Which of these values go into LoRaWAN, MQTT, Home Assistant, the weather networks and the history is set with the [value sources](#value-sources).
+- **Low-power mode** is not available while wireless sensors are on (the chip stays in receive mode, ~5 mA).
+- **TFA Dostmann / LaCrosse IT+ sensors** instead of Bresser: set *Wireless sensor type* (web settings, portal field `rfproto`, parameter 50) to *TFA / LaCrosse IT+*. Supported: temperature / humidity sensors at **17.241 kbit/s** (TFA 30.3143.IT, 30.3144.IT, 30.3147.IT, 30.3157.IT, 30.3159.IT; TX21/25/27/29-IT) and **9.579 kbit/s** (TFA 30.3155.WD, 30.3156.WD; TX35-IT). With *both data rates* the receiver alternates every 5 s (the sensors send about every 4 s); choose the single rate if you know it. **Bresser and IT+ at the same time** is only possible alternating (*Bresser + TFA IT+ alternating*: 17 s Bresser, 5 s each IT+ rate) — the single SX1262 can listen to one data rate / sync word at a time, so packets of both families are missed (e.g. a good part of the Bresser wind packets, which makes wireless wind coarser). **Not recommended**; use one sensor family where possible. IT+ sensors only have a 6-bit ID that changes with every battery change — they appear as **`170000xx`** (17.241 kbit/s) or **`090000xx`** (9.579 kbit/s); after a battery change, update *Wireless sensor IDs* (or leave the list empty). **Not yet tested with real sensors** — the decoder is checked against a published frame. TFA *WeatherHub* / Mobile Alerts sensors are not supported yet (scrambled 6 kbit/s format; see `lib/TfaWeatherSensorReceiver/README.md`).
+- Decoding: Bresser with a fork of [BresserWeatherSensorReceiver](https://github.com/matthias-bs/BresserWeatherSensorReceiver) (MIT) in `lib/BresserWeatherSensorReceiver` — adapted to share the transceiver with LoRaWAN and to RadioLib 7; changes in its `FORK.md`. IT+ with `lib/TfaWeatherSensorReceiver` (own, MIT, same usage pattern — kept self-contained so it can become a stand-alone library). Ecowitt/Fine Offset and 433 MHz (OOK) sensors are not supported (the SX1262 has no OOK receiver).
+
+### Value Sources
+
+Board sensors and wireless sensors can measure the same quantities. For each group one setting (web settings *Measurement*, portal field `srcs`, parameters 45–49) decides which sensor feeds **all** outputs — LoRaWAN, `/api/data` / MQTT, Home Assistant, weather networks, history, display:
+
+| Group | Board sensor | Wireless sensors |
+|-------|--------------|------------------|
+| Temperature / humidity | BME280 | Bresser 5/6/7-in-1, thermo/hygro; TFA / LaCrosse IT+ (humidity only if the sensor has it) |
+| Wind (mean, gust, direction always together) | Davis anemometer + vane | Bresser 5/6/7-in-1 |
+| Rain | tipping-bucket gauge | Bresser 5/6/7-in-1 |
+| UV | analog UV input (PCB v2.0) | Bresser 6/7-in-1 (UV index) |
+| Light | – | Bresser 7-in-1 (lux) |
+
+Pressure always comes from the BME280; the DS18B20 probes, wind 2 and AUX are unaffected.
+
+- **Auto** (default) works like a PC boot order: the board sensor first (if enabled / detected), then wireless 1–4 — the first one that currently delivers the value is used. A wireless sensor counts as long as its last packet with that value is at most **5 minutes** old, so a dead or out-of-range sensor drops out automatically. With only the board sensors (no wireless sensors) *Auto* behaves exactly as before.
+- **Board sensor** / **Wireless n** use exactly that sensor and nothing else; if it does not deliver, the value is left out (no fallback). *Off* never reports the group.
+- **Wireless 1–4** are the IDs in *Wireless sensor IDs* in their order; with an empty list, the sensors in the order they were first received since start (so better enter the IDs — the settings page lists the received ones).
+- **Wind** from a wireless sensor uses the sensor's own mean, gust and direction per packet (every 12–16 s), aggregated per send path exactly like the board anemometer: *Interval* (time-weighted mean, highest gust, vector-mean direction since the last send) or *10 min*. The weather networks get the 10-min values. The gust is the sensor's gust, not the board's 3-s gust.
+- **Rain**: the running total (*rain since start*) only adds the increases of the selected source — the board's tipping-bucket pulses or the difference between two packets of the wireless sensor's total. Switching the source never produces a jump; a battery change of the wireless sensor (its total restarts) counts from zero again. Missed packets (during an uplink, interference, weak signal) lose no rain: the sensor sends its total, so the next packet received carries the increase — after a longer gap it is booked at once in that interval.
+- **Where the value came from** is visible on the status page (*Sources*, while wireless sensors are on or a source is set other than *Auto*), in JSON as `sources` (`{"tempHum": "board", "wind": "radio:39582376", …, "light": "none"}`, plus `radioBatteryLow` when a wireless sensor in use reports a low battery) and in the LoRaWAN payload (CayenneLPP Ch 16 / binary field 33) — these three only while wireless sensors are on.
+- Not (yet) sent to the weather networks: UV and light.
+
+### Derived Values
+
+Computed on the node from the measured values — the same numbers in JSON/MQTT, Home Assistant, on the status page, the dashboard and (where supported) the weather networks. LoRaWAN carries no extra bytes: the [decoder](chirpstack/decoder.js) computes dew point, feels like, cloud base, the compass text and the warnings from the decoded values itself (`dew_point`, `feels_like`, `cloud_base_m`, `wind_direction_text`, `warnings`).
+
+| Value | How | Needs |
+|-------|-----|-------|
+| Dew point | Magnus formula (17.62 / 243.12 °C) | temperature + humidity |
+| Feels like | wind chill (JAG/TI, at ≤ 10 °C and wind > 4.8 km/h), else heat index (NWS, from 26.7 °C), else the air temperature | temperature (+ wind / humidity) |
+| Cloud base | 125 m per K of temperature − dew point spread, above the station (cumulus estimate) | temperature + humidity |
+| Pressure tendency (3 h) | QNH now minus 3 h ago: *steady* (< 0.1 hPa), *slowly* (< 1.6), normal (< 3.6), *quickly* (< 6), *very rapidly* | BME280, 3 h of history after a start |
+| Weather trend | barometer rule of thumb: *storm warning* (falling ≥ 6 hPa / 3 h), *worsening* (≥ 1.6), *improving* (rising ≥ 1.6), else *settled* (QNH ≥ 1020), *unsettled* (< 1000) or *no change* — not a forecast model | as above |
+| Temperature trend (1 h) | now minus 1 h ago | 1 h of history |
+| Rain last hour / 24 h | sum of the 5-min history buckets (since start if shorter) | rain source |
+| Rain today / yesterday, last rain | local days (NTP); kept across restarts in RTC RAM, not across a power cut | rain source, time |
+| Sunshine today / yesterday | time with the selected light source ≥ 15 000 lx — an estimate of the WMO 120 W/m² threshold; a lux sensor sees global, not direct radiation | Bresser 7-in-1 (light) |
+| Warnings | *frost* (T ≤ 0 °C), *fog/dew* (spread ≤ 1 K and RH ≥ 95 %), *sultry* (dew point ≥ 16 °C) | temperature (+ humidity) |
+
+Long-term statistics (monthly and yearly values, summer/frost days, records) are a job for your database — e.g. InfluxDB/Grafana or Home Assistant's long-term statistics fed by MQTT; the node keeps only 7 days in RAM.
+
+### Firmware Update Check
+
+With *Check daily for newer firmware* on (web settings, *Firmware update check*; off by default), the node asks a version list once a day — by default this project's Gitea tags API, any Gitea `…/tags` or GitHub `…/releases` URL works — and shows a newer version on the status page, as `firmwareUpdate` in JSON and in Home Assistant. Installing stays manual ([OTA](#firmware-update-ota)). Pre-releases count: `2.0.0-beta.3` is newer than `2.0.0-beta.2`, `2.0.0` newer than any `2.0.0-beta`.
+
 ## Inputs and Outputs (PCB v2.0)
 
 The v2.0 board adds optional I/O. **AUX, UV, wind 2, heater/fan, tacho and VE.Direct are off by default**. Enable them in the portal, the web settings page (*Inputs & outputs*) or by MQTT/LoRaWAN (IDs 15–30, 33–40). The main wind-vane supply and hardware ID are still managed on v2.0 even with optional I/O disabled. Do not enable v2.0 functions on Rev 1.2/1.3.
@@ -1057,7 +1193,7 @@ The v2.0 board adds optional I/O. **AUX, UV, wind 2, heater/fan, tacho and VE.Di
 - **Heater timing:** a separate timer task maintains the 10 s cycle during blocking sensor/LoRa calls, with 100 ms timing steps (1 %). Duty changes retain the cycle phase; enabling from off starts a new cycle. The configured percentage remains the requested average power, not the instantaneous GPIO state. The heater still draws its full on-current during each pulse; match the foil to the maximum VIN and provide appropriate temperature protection. Fan PWM stays at 100 Hz.
 - **Config portal / OTA:** entering the portal immediately stops the heater timer, detaches fan PWM and drives both outputs LOW, latched until restart. Saved output modes are retained; they are not operated without the normal monitoring loop.
 - **Supply:** the heater always needs protected VIN. The fan uses the supply selected by JP9: 1–2 = shared 5 V rail (0.5 A design target), 2–3 = protected VIN (1 A design target). With VIN disconnected, only the 5 V fan option can run, within the selected source's remaining power budget. Never combine USB with external power (see [Custom PCB](#custom-pcb)).
-- **Payload:** the values are sent only while their function is on — see [CayenneLPP channels](#cayennelpp-channels) Ch 3/5/10/11/20–22/30/31 and [binary bits 20–27](#compact-binary-format). The display shows the Victron battery voltage and PV power instead of the LiPo line, plus `H` / `F` while heater / fan run.
+- **Payload:** the values are sent only while their function is on — see [CayenneLPP channels](#cayennelpp-channels) Ch 3/5/10/11/20–22/30/31 and [binary bits 20–27, 35–41](#compact-binary-format). The display shows the Victron battery voltage and PV power instead of the LiPo line, plus `H` / `F` while heater / fan run.
 
 **Examples (downlink, FPort 1):** heater auto below 1.5 °C → `10 12 00 02 14 00 0F` · heater curve 20 % at 4 °C to 80 % at −15 °C → `10 1D 00 14 13 00 50 1E FF 6A` · fan on at 60 % → `10 15 00 01 16 00 3C` · VE.Direct on with 12.4 V lockout → `10 1B 00 01 1C 00 7C`.
 
@@ -1083,7 +1219,7 @@ One switch, **Units**, sets the unit for everything the node sends and shows:
 
 ## Measurement Principles
 
-**Wind speed:** the anemometer's reed switch closes once per revolution; the ESP32's hardware pulse counter counts without CPU load. Davis: 1 revolution/s = 2.25 mph = 3.62 km/h. The **gust** is the highest sub-sample speed within a cycle.
+**Wind speed:** the anemometer's reed switch closes once per revolution; the ESP32's hardware pulse counter counts without CPU load. Davis: 1 revolution/s = 2.25 mph = 3.62 km/h. The **gust** is the highest **3-second mean** (WMO) — see [Measurement and Aggregation](#measurement-and-aggregation).
 
 **Wind direction:** the Davis vane is a 20 kΩ potentiometer; the voltage (0–3.3 V) maps linearly to 0–359°, plus the north offset. A 10 kΩ / 1 µF filter (τ on the order of 15 ms including the vane resistance) reduces noise; component references differ between PCB revisions. The cycle value is a **vector average** (sin/cos), so 350° and 10° average to 0°, not 180°.
 
@@ -1110,14 +1246,39 @@ QNH = absolute pressure × (1 - 0.0000226 × altitude[m])^(-5.255)
 
 The BME280 is **hot-pluggable**: while missing it is re-probed every sub-sample and re-initialized as soon as it answers.
 
-### Measurement Cycle and Timing
+### Measurement and Aggregation
 
-- Every **sample interval** (default 3 s) the node takes a sub-sample; every **uplink interval** (default 300 s) it combines them and sends.
-- Wind speed, temperature, humidity, pressure: **average** of the sub-samples. Gust: **maximum**. Direction: **vector average**. Rain: **sum**. DS18B20: measured once per cycle.
-- The interval is a target: the node only waits the remaining time, so measuring and sending don't add up.
-- The minimum configurable interval is 5 s, not a guaranteed legal/practical transmit interval. Calculate airtime and obey regional duty cycle; on TTN also apply the [daily fair-use budget](#the-things-network-ttn).
+The node samples once and aggregates **separately for every transmission path**, so LoRaWAN, MQTT and the weather networks can use different intervals without disturbing each other.
 
----
+**Sampling and resolution per sensor**
+
+| Sensor | Sampled | Resolution | Notes |
+|---|---|---|---|
+| Wind speed | every **wind sample interval** (1 s or 3 s): pulses counted by hardware since the last sample | Davis: 1 pulse/s = 1.006 m/s; over a 3-s gust window 0.34 m/s | pulses are never lost between samples; means are pulse-weighted (pulses / time) |
+| Wind direction | with every wind sample | 1° (pot. vane, 12-bit ADC averaged) or the calibrated table steps | vector average (sin/cos): 350° and 10° → 0° |
+| Rain | pulses counted continuously, read with every wind sample | 1 tip (Davis 0.2 mm) | one running total (`rainSinceStart`); each path reports the difference since its own last send |
+| BME280 (temperature, humidity, pressure) | every 10 s, at least once per base cycle | 0.01 °C / 0.008 %rH / 0.18 Pa (sensor) | average of the readings in the base cycle |
+| DS18B20 | once per base cycle (~750 ms conversion) | 0.0625 °C | |
+| UV, AUX analog, 2nd anemometer (PCB v2.0) | with every wind sample | 12-bit ADC | average / gust per base cycle |
+| Battery, CPU temperature | once per base cycle | | |
+
+**Base cycle:** the shortest active send interval — the LoRaWAN interval, or the MQTT interval if MQTT is on and faster. At its end the status page, REST API (`/api/data`), display and dashboard history get the base cycle's values, and every path that is due sends.
+
+**Gust:** the highest 3-second mean (WMO-No. 8). With 1-s sampling that is the pulses of the last three samples, with 3-s sampling one sample. A single 1-s spike is therefore averaged out, as at official stations. 3-s sampling uses fixed, non-overlapping windows: slightly fewer wake-ups (low-power mode), but a peak that straddles two windows reads a little lower. Faster sampling than 1 s does not improve the 3-s gust; at 0.5 s one pulse would already be 2 m/s.
+
+**Aggregation per path**
+
+| Path | Interval | Wind speed / gust / direction | Rain | BME280, DS18B20, other |
+|---|---|---|---|---|
+| LoRaWAN | LoRaWAN interval (stretched for 1 % airtime) | *Interval*: mean, highest 3-s gust and vector-mean direction since the last uplink — or *10 min* (setting) | since the last uplink; rate = amount / window | latest base-cycle values |
+| MQTT | MQTT interval | *Interval* since the last publish — or *10 min* (setting) | since the last publish | latest base-cycle values |
+| Weather networks | each network's upload interval | always **10-min WMO values**: 10-min mean, highest 3-s gust and vector-mean direction of the last 10 minutes | rate averaged over the upload window, daily total | averaged over the upload window |
+| Status page, REST, dashboard history | base cycle | base cycle (interval) | since the last base cycle | base cycle |
+
+- **Interval** is the right choice when the data is aggregated further downstream (e.g. Grafana computing 10-minute means: average the means, take the `max()` of the gusts, vector-average the direction — and use only one path per measurement, LoRaWAN *or* MQTT).
+- **10 min** delivers ready-to-use values comparable with official stations, for receivers without their own aggregation (e.g. Home Assistant). Do **not** average these again downstream — that smears the means and counts gusts several times.
+- The wind ring keeps the last 10 minutes of wind samples (about 4 KB). After a restart the 10-min values cover the buffered span only.
+- **Timing:** the node only waits the remaining time of each interval, so measuring and sending don't add up. The minimum configurable LoRaWAN interval (5 s) is not a legal transmit interval: the node stretches it to keep **1 % airtime** at the current data rate (SF7, 27 bytes: ~7 s; SF12: ~150 s; shown on the status page). On TTN also apply the [daily fair-use budget](#the-things-network-ttn).
 
 ### Second Wind Sensor (PCB v2.0)
 
@@ -1138,10 +1299,10 @@ For larger setups (e.g. two mast heights at a wind-turbine site) a second anemom
 For battery/solar installs without Wi-Fi: with **`lowPowerEn = 1`** (portal, web settings, downlink param 31) the node no longer idles between sub-samples but goes into **light sleep** until the next one. RAM, the LoRaWAN session and the chart history stay intact; the SX1262 sleeps between uplinks.
 
 - **Wind speed and rain** wake the chip on every edge of the reed contacts and are counted in software while it sleeps (the hardware pulse counters are not clocked in light sleep). Works on every PCB revision.
-- **Sub-samples** (gust, direction, BME280) run as before, every sample interval.
+- **Samples** (wind, gust, direction every wind sample interval; BME280 every 10 s) run as before. With 3-s wind sampling the node wakes less often.
 - **Wind-vane supply** (PCB v2.0): with **`vanePowerSave = 1`** (default) the potentiometer is only powered for ~100 ms around each reading (the filter, τ ≈ 15 ms, settles in that time, spent in light sleep). Set it to `0` for vanes that need continuous power.
 - **VE.Direct:** the node stays awake for the last ~2.5 s before each uplink to catch a frame.
-- Only active while **Wi-Fi is off** and neither heater nor fan is running (their PWM stops in light sleep). Wind, rain and AUX pulses (counter or 2nd anemometer) are counted while sleeping. The user button still wakes the node and turns the display on.
+- Only active while **Wi-Fi is off**, **wireless sensors are off** (the LoRa chip would have to keep listening) and neither heater nor fan is running (their PWM stops in light sleep). Wind, rain and AUX pulses (counter or 2nd anemometer) are counted while sleeping. The user button still wakes the node and turns the display on.
 - The power saving still has to be measured on real hardware.
 
 ---
@@ -1152,10 +1313,10 @@ Choose with **Payload format** in the settings or downlink parameter `10`. The [
 
 | FPort | Format | Size (wind + rain + BME280 + 3 × DS18B20 + LiPo) |
 |-------|--------|------------------------------------------------|
-| 3 | **Compact binary (default)** | **35 bytes** — fits every EU868 data rate, even DR0/SF12 |
+| 3 | **Compact binary (default)** | **34 bytes** — fits every EU868 data rate, even DR0/SF12 |
 | 1 | CayenneLPP | 62 bytes — needs DR3/SF9 or faster on EU868 |
 
-EU868 payload limits: DR0–DR2 (SF12–SF10) 51 bytes, DR3 (SF9) 115 bytes, DR4–DR5 222 bytes (US915 DR0: only 11 bytes). A UV group adds 5 bytes to compact binary and 7 bytes to CayenneLPP for voltage/status, or 11 bytes with the calibrated index.
+EU868 payload limits: DR0–DR2 (SF12–SF10) 51 bytes, DR3 (SF9) 115 bytes, DR4–DR5 222 bytes (US915 DR0: only 11 bytes). UV adds 2 bytes per value (voltage, index) to compact binary and 7 bytes to CayenneLPP for voltage/status, or 11 bytes with the index.
 
 **Fitting into the data rate:** before every uplink the node asks the LoRaWAN stack how many bytes the current data rate allows (ADR may switch to SF12 at any time; pending MAC answers are taken into account). If the payload is larger, it leaves out the least important field groups until it fits, in this order: debug → AUX pulses → AUX analog → UV → wind 2 → fan speed → output power → I/O status → Victron → LiPo → DS18B20 #2, #1, #0 → BME280 → rain → wind. The status byte always stays. Missing fields simply don't appear in the decoded JSON for that uplink; the rain total since start is a counter, so a skipped value is caught up by the next uplink. The log and the status page (`/status`, LoRaWAN row) show what the last uplink left out. CayenneLPP generally drops more fields than binary — use binary unless your backend needs CayenneLPP.
 
@@ -1178,19 +1339,21 @@ New nodes start with the binary format; nodes that already have a stored setting
 | Ch 203 | Generic Sensor | Free heap | KiB | debug |
 | Ch 204 | Generic Sensor | Uptime (0.1 h) | h | debug |
 | Ch 1 | Voltage | LiPo voltage | V | LiPo on |
-| Ch 1 | Rel. Humidity | Humidity | % | BME280 |
+| Ch 1 | Rel. Humidity | Humidity (selected [source](#value-sources)) | % | source delivers humidity |
 | Ch 1 | Baro. Pressure | Pressure QNH | hPa / inHg ×10 | BME280 |
 | Ch 2 | Baro. Pressure | Pressure absolute | hPa / inHg ×10 | BME280 |
-| Ch 1 | Temperature | BME280 temperature | °C / °F | BME280 |
+| Ch 1 | Temperature | Temperature (selected source: BME280 or wireless) | °C / °F | source delivers temperature |
 | Ch 2–4 | Temperature | DS18B20 probe 0–2 | °C / °F | probe found |
 | Ch 3 | Digital Input | I/O status bits (see below) | bitfield | any v2.0 function on |
 | Ch 5 | Analog Input | AUX analog input | V | AUX analog on |
 | Ch 10 / 11 | Generic Sensor | AUX pulses this cycle / since power-on | count | AUX pulse on |
 | Ch 2 | Direction | 2nd wind vane | ° | 2nd wind sensor, mode 2 |
 | Ch 6 / 7 | Analog Input | 2nd anemometer speed / gust | km/h, m/s or mph | 2nd wind sensor on |
-| Ch 12 | Voltage | UV sensor terminal voltage | V | UV enabled, valid voltage |
-| Ch 13 | Analog Input | Calibrated UV index | index, resolution 0.01 | UV enabled and index explicitly calibrated/enabled |
-| Ch 14 | Digital Input | UV flags: bit 0 voltage enabled, bit 1 calibrated index present | bitfield | UV voltage present |
+| Ch 12 | Voltage | UV sensor terminal voltage | V | board UV source, valid voltage |
+| Ch 13 | Analog Input | UV index (calibrated board index or wireless sensor) | index, resolution 0.01 | index available |
+| Ch 14 | Digital Input | UV flags: bit 0 board voltage present, bit 1 index present | bitfield | UV group present |
+| Ch 15 | Generic Sensor | Illuminance | lx | light source delivers |
+| Ch 16 | Generic Sensor | Value sources: 2 bits per group (temp/hum, wind, rain, UV, light: 0 none, 1 board, 2 wireless), bit 15 wireless battery low | bitfield | wireless sensors on |
 | Ch 20 / 21 | Digital Output | Heater / fan power | % | heater or fan not off |
 | Ch 22 | Generic Sensor | Fan speed | rpm | tacho on |
 | Ch 30 | Voltage | Victron battery voltage | V | VE.Direct data |
@@ -1205,12 +1368,12 @@ New nodes start with the binary format; nodes that already have a stored setting
 - Rain uses the CayenneLPP *Distance* type, but the values are **mm (or in), not meters** — use the provided decoder.
 - In imperial mode the pressure field carries inHg ×10 (0.01 inHg resolution); the decoder divides by 10 again.
 - All values are rounded and clamped to the field's range (never wrapped). Analog Input covers ±327.67.
-- Sizes: minimal 7–15 bytes, full 62 bytes, full with debug 84 bytes. The v2.0 I/O block adds up to 62 bytes (every function on, all Victron fields) — use the binary format on slow data rates.
+- Sizes: minimal 7–15 bytes, full 62 bytes, full with debug 84 bytes. The v2.0 I/O block adds up to 62 bytes (every function on, all Victron fields), wireless sensors add up to 12 bytes (Ch 15 light, Ch 16 sources) — use the binary format on slow data rates.
 - **I/O status bits** (Ch 3 / binary bit 20): bit 0 heater on, bit 1 fan on, bit 2 fan stalled, bit 3 battery lockout active, bit 4 VE.Direct on but no data. The decoder returns them as `io_status.*`; the Victron charge state additionally as text (`victron_charge_state_text`: off, fault, bulk, absorption, float, …).
 
 ### Compact Binary Format
 
-Layout: `[version: 1 byte][presence bitmask: 4 bytes, little-endian][fields...]`. Only fields whose bit is set are included, in bit order; values are big-endian, rounded and clamped. Current versions: **2 without UV**, **3 with the UV group**.
+Layout (version 4): `[version: 1 byte][presence mask: 1–6 bytes][fields...]`. The mask has a **variable length**: each byte carries 7 field bits (bit 0–6 = fields 7k…7k+6), bit 7 set = another mask byte follows; bytes after the highest present field are left out. Only fields whose bit is set are included, in bit order; values are big-endian, rounded and clamped. **A value that is not available takes no space** — e.g. a station with only wind, rain and a BME280 needs a 2-byte mask, a Victron charger without SOC sends no SOC field. The firmware always sends version 4.
 
 | Bit | Field | Encoding | Present when |
 |-----|-------|----------|--------------|
@@ -1222,10 +1385,10 @@ Layout: `[version: 1 byte][presence bitmask: 4 bytes, little-endian][fields...]`
 | 5 | Rain since start | `u32`, ×10 mm / ×1000 in | rain on |
 | 6 | Status byte | `u8`, same bits as CayenneLPP | always |
 | 7 | Battery voltage | `u16`, ×100, V | LiPo on |
-| 8 | Humidity | `u8`, ×2, % | BME280 |
+| 8 | Humidity | `u8`, ×2, % | selected source delivers humidity |
 | 9 | Pressure QNH | `u16`, ×10 hPa / ×100 inHg | BME280 |
 | 10 | Pressure absolute | `u16`, ×10 hPa / ×100 inHg | BME280 |
-| 11 | BME280 temperature | `i16`, ×10, °C or °F | BME280 |
+| 11 | Temperature (selected source) | `i16`, ×10, °C or °F | source delivers temperature |
 | 12–14 | DS18B20 probe 0–2 | `i16`, ×10, °C or °F | probe found |
 | 15 | Cycle counter | `u8` | debug |
 | 16 | CPU temperature | `i16`, ×10 | debug |
@@ -1238,19 +1401,23 @@ Layout: `[version: 1 byte][presence bitmask: 4 bytes, little-endian][fields...]`
 | 23 | AUX pulses total | `u32` | AUX pulse on |
 | 24 | Heater / fan power | 2 × `u8`, % | heater or fan not off |
 | 25 | Fan speed | `u16`, rpm | tacho on |
-| 26 | Victron VE.Direct | 14 bytes: battery V `u16` ×100, battery A `i16` ×100, PV V `u16` ×100, PV W `u16`, charge state `u8`, error `u8`, yield today `u16` ×100 kWh, SOC `u16` ×10 %; fields the device doesn't send are `0xFFFF` / `0x8000` / `0xFF` | VE.Direct data |
+| 26 | Victron battery voltage (v1–v3: whole VE.Direct block, see below) | `u16`, ×100, V | VE.Direct data |
 | 27 | Victron load output current | `i16`, ×100, A | MPPT reports it |
 | 28 | 2nd wind vane direction | `u16`, ° | 2nd wind sensor, mode 2 |
 | 29 / 30 | 2nd anemometer speed / gust | `i16`, ×100 | 2nd wind sensor on |
-| 31 | UV group (protocol version 3) | 5 bytes: terminal voltage `u16` ×1000 V, index `u16` ×100 (`0xFFFF` = absent), flags `u8` (bit 0 voltage enabled, bit 1 calibrated index present) | valid UV voltage |
+| 31 | UV sensor terminal voltage | `u16`, ×1000, V | board UV source, valid voltage |
+| 32 | UV index (calibrated board index or wireless sensor) | `u16`, ×100 | index available |
+| 33 | Value sources | `u16`, same bits as CayenneLPP Ch 16 | wireless sensors on |
+| 34 | Illuminance | `u32`, lx | light source delivers |
+| 35 | Victron battery current (negative = discharge) | `i16`, ×100, A | VE.Direct data |
+| 36 / 37 | Victron PV voltage / PV power | `u16` ×100 V / `u16` W | VE.Direct data |
+| 38 / 39 | Victron charge state (`CS`) / error code (`ERR`) | `u8` each | VE.Direct data |
+| 40 | Victron yield today | `u16`, ×100, kWh | VE.Direct data |
+| 41 | Victron state of charge | `u16`, ×10, % | BMV / SmartShunt |
 
-Bits 20–30 were added without a version change: they come after all older fields, so an older decoder simply ignores them. The field-layout maximum including debug is 78 bytes before UV, or 83 with UV; actual configurations can be smaller because AUX and wind 2 share inputs.
+Typical sizes: wind + rain + BME280 + 3 × DS18B20 + LiPo 34 bytes; everything incl. debug, the v2.0 I/O block, all Victron values, UV, light and sources at most 90 bytes (encoder buffer 96).
 
-**Version 3** uses the same header and existing fields as version 2, with the
-five-byte UV group at bit 31. Packets without that group continue to use version
-2, including when UV is omitted to fit the data rate. Update the backend
-[decoder](chirpstack/decoder.js) before enabling UV; it supports versions 1, 2
-and 3.
+**Older versions** (firmware up to 2.0.0-beta.1), still read by the [decoder](chirpstack/decoder.js): a fixed 4-byte little-endian mask; bit 26 was one 14-byte VE.Direct block (battery V/A, PV V/W, charge state, error, yield, SOC; missing values `0xFFFF` / `0x8000` / `0xFF`); **version 3** added a 5-byte UV group at bit 31 (voltage, index, flags), packets without UV stayed **version 2**. Update the decoder on ChirpStack/TTN **before** installing firmware that sends version 4.
 
 > **Version 1** (firmware ≤ 1.0.4) used ×10 for imperial rain/pressure too (a 0.2 mm tip became 0) and `u16` for rain since start. The decoder still reads version 1; metric values are identical in both.
 
@@ -1266,7 +1433,7 @@ Start with a short button press to view the display and `pio device monitor` for
 | Display says `cfgdata missing` | Perform a full [USB flash](#build--flash) with the current partition table; OTA alone cannot fix it |
 | Portal does not open | Hold the button for 3 s **after boot**, connect to `WeatherNode`, enter `http://192.168.4.1` in a normal browser; disable mobile-data/VPN routing if it interferes |
 | No measurements sent yet | Wait one cycle (default 300 s); check transport enable flags. An active portal pauses normal operation |
-| LoRaWAN remains “not joined” | DevEUI/JoinEUI/AppKey, region, network profile and gateway coverage; inspect the logged error. Retries are spaced by at least 60 s |
+| LoRaWAN remains “not joined” | DevEUI/JoinEUI/AppKey, region, network profile and gateway coverage; inspect the logged error. Retries back off from 1 to 60 min (`retry in N min` in the log); a restart starts again at 1 min |
 | Uplinks arrive, command does not run | Queue HEX `03` on **FPort 1**, wait for the next uplink; inspect gateway TX_ACK and device logs. FPort 0 traffic is MAC control, not this command; this firmware uses Class A |
 | Wind/rain stays at zero | Correct manual Rev 1.2/1.3 selection, sensor enabled, numbered pinout, reed contact; debug log shows pulse counts |
 | BME280 missing | Actual BME280 (not BMP280), 3.3 V supply, address 0x76, SDA/SCL wiring, cable length and pull-ups |
@@ -1274,6 +1441,7 @@ Start with a short button press to view the display and `pio device monitor` for
 | Settings/Log cannot be opened | Enable Wi-Fi + web API and set an admin password in the portal; browser login user is `admin` |
 | MQTT or weather uploads absent | Enable the service, verify credentials and network reachability; weather uploads also require NTP time. Broker TLS mode must match its listener |
 | Heater/fan stays off | Correct supply and jumper, mode, first valid temperature in auto, VE.Direct battery/PV interlocks; entering the portal latches outputs off until restart |
+| Wireless sensor not listed | *Wireless sensors* on, sensor within range (RSSI on the status page; above about −100 dBm is fine), ID filter empty or containing its ID; only Bresser and TFA / LaCrosse IT+ 868 MHz sensors are supported — *Wireless sensor type* must match (for IT+ try *both data rates*). *Paused for a LoRaWAN uplink* on the status page is normal |
 | UV voltage or index is wrong | Correct J17 pin numbers, one sensor supply, JP10 and matching scale; a UV index additionally needs the sensor-specific transfer function and both calibration/index switches |
 
 **Known limits:** v2.0 has not been qualified on real hardware. Current targets are not lightning/surge certification or guaranteed thermal ratings. An externally powered analog sensor can backfeed an unpowered controller; avoid powered signals with the node off. Chart history is lost on restart, and RTC-backed rain/AUX totals are lost on power loss. Keep the device on a trusted local network; neither the HTTP interface nor the open setup portal provides encrypted configuration transport.
@@ -1305,7 +1473,7 @@ esptool.py --chip esp32s3 write_flash --flash_size 8MB \
   0x10000 firmware.bin          # or firmware/universal-weather-node-<version>.bin
 ```
 
-- **Versioning:** [`tools/version.py`](tools/version.py) stamps the build with `git describe` and generates `include/generated_version.h`, `include/decoder_js.h` and `include/readme_md.h` (git-ignored). Only release builds — an exact tag on a clean tree, or `FW_VERSION=1.2.3 pio run` — are copied to `firmware/`.
+- **Versioning:** [`tools/version.py`](tools/version.py) stamps the build with `git describe` and generates `include/generated_version.h`, `include/decoder_js.h` and `include/readme_md.h` (git-ignored). Only release builds — an exact tag on a clean tree, or `FW_VERSION=1.2.3 pio run` — are copied to `firmware/`. Tags are written without a leading `v` (e.g. `2.0.0-beta.1`); a leading `v` is stripped from the version anyway.
 - **README in the firmware:** blocks between `<!-- help:skip -->` and `<!-- /help:skip -->` (pictures, badges) are left out of the built-in help page, whose renderer supports plain Markdown only.
 
 ### Tests
@@ -1336,7 +1504,7 @@ The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 desig
 <img src="pictures/wifi-rest-json.png" alt="REST API JSON response" width="60%">
 <!-- /help:skip -->
 
-**How fresh is `/api/data`?** It doesn't trigger a measurement; it returns the latest values. Wind and BME280 values update every sample interval; rain shows the last completed cycle; DS18B20, battery and CPU temperature update once per cycle. `nextCycleInSec` tells you when the next cycle completes.
+**How fresh is `/api/data`?** It doesn't trigger a measurement; it returns the latest values. All values are those of the last completed base cycle (see [Measurement and Aggregation](#measurement-and-aggregation)); wind gust is the highest 3-s mean in that cycle. `nextCycleInSec` tells you when the next cycle completes.
 
 Telemetry is not limited to 1,024 JSON bytes: `/api/data` streams a complete
 chunked response, and MQTT sizes both its serialization buffer and packet buffer
@@ -1348,7 +1516,7 @@ logged (HTTP returns 500), rather than publishing truncated JSON.
 ### Robustness
 
 - **Watchdog** (120 s): the main loop subscribes after setup and unsubscribes before entering the blocking portal. A radio call that hangs during normal operation can still trigger it.
-- **Automatic rejoin** after 10 consecutive send failures: clear the session and retry after 60 s without rebooting or clearing chart history.
+- **Automatic rejoin** after 10 consecutive send failures, or after 288 uplinks in a row without any downlink (see [Join and Session](#join-and-session)): clear the session and retry after 60 s without rebooting or clearing chart history.
 - **Button** via interrupt — a short press is never missed, even during LoRa airtime.
 - **Display** is off in normal operation (turns on for 20 s with a short press) and stays on during startup to show errors.
 - **ADC averaging** over 8 samples for wind direction and battery.
@@ -1379,6 +1547,11 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 │   ├── payload_binary.cpp   # Compact binary encoder (host-testable)
 │   ├── lora_payload.h/.cpp  # CayenneLPP encoder
 │   ├── history.h/.cpp       # In-RAM history for the dashboard
+│   ├── wind_window.h/.cpp   # Wind ring buffer, 3-s gust, per-path windows (host-tested)
+│   ├── rf_sensors.h/.cpp    # Bresser 868 MHz wireless sensors on the shared SX1262
+│   ├── sources.h/.cpp       # value sources: board or wireless sensor per measured group
+│   ├── derived.h/.cpp       # dew point, feels like, cloud base, tendency, warnings, version compare (pure)
+│   ├── derived_now.h/.cpp   # snapshot of the derived values from history and daily totals
 │   ├── serial_log.h/.cpp    # Serial output + in-RAM log for /api/log
 │   ├── portal.h/.cpp        # Config portal (/decoder, /help, /calibrate)
 │   ├── params.h/.cpp        # Parameter IDs + commands (LoRaWAN, MQTT, web)
@@ -1387,19 +1560,21 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 │   ├── wifi_mqtt.h/.cpp     # Wi-Fi/MQTT, Home Assistant discovery, MQTT commands
 │   ├── web_api.h/.cpp       # REST API, status page, settings page
 │   ├── time_sync.h/.cpp     # NTP + time zone
-│   └── wx_upload.h/.cpp     # Weather network uploads
+│   └── wx_upload.h/.cpp     # Weather network uploads, daily totals, firmware update check
 ├── include/
 │   ├── chart_page.h         # Dashboard (/)
 │   ├── log_page.h           # Log viewer (/api/log)
 │   ├── help_page.h          # Help page renderer (/help)
 │   ├── calibrate_page.h     # Wind-direction calibration (/calibrate)
 │   └── generated_version.h, decoder_js.h, readme_md.h   # generated, git-ignored
+├── lib/BresserWeatherSensorReceiver/  # Fork (MIT) of the Bresser 868 MHz decoder, see FORK.md
+├── lib/TfaWeatherSensorReceiver/     # TFA / LaCrosse IT+ 868 MHz receiver + decoder (own, MIT), see its README
 ├── chirpstack/decoder.js    # Payload decoder (ChirpStack v3/v4, TTN)
 ├── test/                    # Decoder, round-trip, VE.Direct and firmware runtime tests
 ├── tools/version.py         # Pre-build script: version, decoder, README headers
 ├── partitions.csv           # Partition table (with cfgdata)
 ├── firmware/                # Release binaries (OTA)
-├── pictures/                # Photos, screenshots, badges
+├── pictures/                # Photos, screenshots, badges; overview.png is rendered from tools/overview/ (render.sh, headless Chrome)
 ├── 3dprint/                 # Rev 1.2/1.3 cases + v20/ indoor prototype case, STL/STEP/CAD and assembly guide
 ├── pcb/v2.0/                # KiCad project, renders, schematic PDF; production/ = Gerber, JLCPCB BOM/CPL
 ├── pcb/v1.3/                # Fritzing, schematic, layout, BOM, Gerber (Rev 1.2/1.3)
@@ -1423,6 +1598,8 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 | OneWire, DallasTemperature | ^2.3.8 / ^4.0.6 | DS18B20 |
 | ArduinoJson | ^7.2.0 | JSON (MQTT, REST, discovery) |
 | PubSubClient | ^2.8 | MQTT client |
+| BresserWeatherSensorReceiver | fork of 0.44.0 in `lib/` | Bresser 868 MHz sensor decoding (MIT, see `lib/BresserWeatherSensorReceiver/FORK.md`) |
+| TfaWeatherSensorReceiver | 0.1.0 in `lib/` (own) | TFA / LaCrosse IT+ 868 MHz sensor receiving and decoding (MIT) |
 | WiFi, WiFiClientSecure, WebServer, HTTPClient | ESP32 core | Wi-Fi, TLS, web server, uploads |
 
 ### Technical Notes
@@ -1437,6 +1614,48 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 ---
 
 ## Changelog
+
+### 2.0.0-beta.2
+
+Firmware binary: [`universal-weather-node-2.0.0-beta.2.bin`](firmware/universal-weather-node-2.0.0-beta.2.bin) (application image for OTA or USB). Same hardware support and beta status as 2.0.0-beta.1. **Update the payload decoder on ChirpStack/TTN first** (binary format version 4). New settings keep the previous behavior by default (MQTT interval 0 = like the LoRaWAN interval, wind values *interval*, value sources *Auto*, wireless sensors off); the wind sample interval default changes to 1 s for new installations, stored values are mapped to 1 s or 3 s.
+
+**Wireless sensors and value sources**
+* **Wireless sensors (Bresser, 868 MHz):** the LoRa chip receives Bresser 5/6/7-in-1 stations and other Bresser sensors between LoRaWAN uplinks (setting *Wireless sensors*, parameter 44, optional ID filter). Values on the status page and as `rfSensors` in `/api/data` / MQTT. Uses a fork of BresserWeatherSensorReceiver (MIT) in `lib/`, adapted to the shared transceiver and RadioLib 7.
+* **Value sources:** per group (temperature/humidity, wind, rain, UV, light) *Auto* (board first, then wireless 1–4 with values not older than 5 min), *Board*, *Wireless 1–4* or *Off* — for LoRaWAN, MQTT/JSON, Home Assistant, weather networks, history and display (settings, portal field `srcs`, parameters 45–49). Wireless wind is aggregated per path like the anemometer (interval / 10 min); rain only adds increases of the selected source, so switching never jumps. New: `sources`, `lightLux`, `radioBatteryLow` in JSON; CayenneLPP Ch 15/16; wireless UV index; temperature/humidity no longer require a BME280 (pressure still does). Decoder updated (versions 1–4).
+
+**LoRaWAN**
+* **Compact binary format version 4** (always sent; decoder reads versions 1–4 — update it on ChirpStack/TTN **before** the firmware): variable-length presence mask (1–6 bytes instead of 4), UV voltage and index as separate fields (bits 31/32, no flag byte), new fields value sources (33) and illuminance (34), Victron values as separate fields (26, 35–41) instead of a fixed 14-byte block. A value that is not available takes no space; no existing value was removed. Typical station 1–3 bytes smaller than in 2.0.0-beta.1, minimal packet 3 instead of 6 bytes.
+* Rejoin automatically after 288 uplinks in a row without any downlink (3 × the ADR acknowledgement window); if that does not help, the threshold doubles up to 2304 uplinks, any downlink resets it. A session that had stopped receiving downlinks — uplinks fine, ADR stuck at SF12, queued commands never delivered — previously stayed that way until the next restart.
+* Failed joins are retried after 1, 2, 4 … minutes, at most every 60 min, instead of every minute — protects the join duty cycle and the DevNonce budget during network outages.
+* **LoRaWAN airtime:** the uplink interval is stretched automatically to keep 1 % airtime at slow data rates (shown on the status page).
+
+**Measurement and aggregation**
+* **Separate aggregation per path:** LoRaWAN, MQTT and the weather networks keep their own windows; one send no longer resets the values of another. Rain: one running total, each path reports the difference since its own last send (interface unchanged).
+* **MQTT interval** (setting, parameter 41): MQTT can publish faster than LoRaWAN, e.g. every 5 s; `0` keeps the old behavior (like the LoRaWAN interval).
+* **Gust = highest 3-s mean** (WMO) instead of the highest single sample; **wind sample interval** 1 s (new default) or 3 s — other values map to a step (parameter 2 keeps working).
+* **Wind values per path** (parameters 42/43): *interval* (since the last send, for downstream aggregation such as Grafana) or *10 min* (WMO values of the last 10 minutes from a 10-min ring buffer).
+* **Weather networks** always get 10-min WMO wind values, independent of their upload interval.
+* BME280 read every 10 s (at least once per base cycle) instead of every sub-sample. Docs: new section *Measurement and Aggregation*.
+
+**Derived values, statistics and networks (all computed on the node)**
+* **Derived values:** dew point, feels like (wind chill / heat index), cloud base, compass wind direction, 3-h pressure tendency with a weather trend, 1-h temperature trend, rain last hour / 24 h / yesterday and the time of the last rain, sunshine duration today / yesterday (Bresser 7-in-1 light), frost / fog / sultry warnings — in JSON/MQTT, Home Assistant (warnings as binary sensors), status page and dashboard tiles. The decoder adds dew point, feels like, cloud base, compass text and warnings from the decoded values (payload unchanged).
+* **Weather networks:** Windy (PWS API v2) and openSenseMap (senseBox, sensor-ID mapping); dew point, rain of the last hour and UV index to the networks that take them; wind chill / heat index to Weathercloud.
+* **Firmware update check** (optional, daily): newer version on the status page, in JSON and Home Assistant.
+* History stores the rain per bucket in 0.01 mm (was 0.1 mm).
+
+**TFA / LaCrosse IT+ wireless sensors**
+* *Wireless sensor type* (web settings, portal `rfproto`, parameter 50): Bresser or TFA / LaCrosse IT+ temperature/humidity sensors (17.241 and/or 9.579 kbit/s, alternating every 5 s with both; Bresser + IT+ alternating is selectable but not recommended). IDs `170000xx` / `090000xx`, `protocol` in `rfSensors`. New library `lib/TfaWeatherSensorReceiver` (own, MIT, same pattern as the Bresser fork). Decoder checked against a published frame; not yet tested with real sensors. WeatherHub / Mobile Alerts not supported yet.
+
+**Hardware (PCB v2.0)**
+* **J18 DC jack** 5.5 × 2.1 mm (optional THT, LCSC C381116) parallel to J3 for 12 V / 24 V plug-in supplies, centre positive, up to 24 V / 5 A; F7, D1 and R45 moved beside it, VIN paths 1.5 mm wide. Case: knock-out in the left wall. Gerber/BOM/CPL/THT list regenerated, DRC clean.
+
+**Web settings**
+* **Wi-Fi network on the web settings page:** name and password can be changed in normal operation. The new network is tested for 60 s without a restart and only stored if the node connects; otherwise it returns to the previous network and shows a notice. *Store without test* pre-provisions a network that is not in range yet.
+
+**Status page and diagnostics**
+* Status page: new **LoRaWAN** box (data rate/SF, channel, TX power, device address, frame counter, last downlink with RSSI/SNR, uplinks since the last downlink vs. the rejoin limit, rejoins since start) and in **Device** the CPU temperature, the cause of the last restart and the minimum free heap.
+* `/api/data` and MQTT JSON: `cpuTemp`/`cpuTempUnit` are now always included (previously debug mode only), plus `resetReason`; Home Assistant discovery offers both (*CPU Temperature*, *Last Restart*) without debug mode.
+* Status page: the wireless receiver's pause during a LoRaWAN uplink is shown as normal (*paused for a LoRaWAN uplink*) instead of as an error.
 
 ### 2.0.0-beta.1
 
