@@ -31,7 +31,9 @@ def get_version_string():
         return "dev"
 
 
-version_string = get_version_string().replace('"', '\\"')
+# Tags are written without a leading "v" (2.0.0-beta.1); strip it anyway so an old or
+# accidental v-tag (v1.1.0, v1.1.0-3-gabc1234) still gives the same version/file name.
+version_string = re.sub(r"^v(?=\d)", "", get_version_string()).replace('"', '\\"')
 header_path = Path(env.get("PROJECT_DIR")) / "include" / "generated_version.h"
 write_if_changed(
     header_path,

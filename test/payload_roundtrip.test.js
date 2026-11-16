@@ -42,7 +42,7 @@ function eq(actual, expected, message) {
 
 for (const [name, imp] of [['metric', false], ['imperial', true]]) {
   const d = decode(name);
-  eq(d.proto_version, 2, `${name} version`);
+  eq(d.proto_version, 4, `${name} version`);
   eq(d.wind_direction_deg, 338, `${name} wind dir`);
   eq(d.wind_speed_avg, 7, `${name} wind speed`);
   eq(d.wind_gust, 10.42, `${name} wind gust`);
@@ -64,7 +64,7 @@ for (const [name, imp] of [['metric', false], ['imperial', true]]) {
   eq(d.debug_uptime_h, 1234.6, `${name} debug uptime`);
 }
 
-eq(cases.minimal.length, 6, 'minimal size (header + status)');
+eq(cases.minimal.length, 3, 'minimal size (version + 1 mask byte + status)');
 eq(decode('minimal').status.bme280_present, false, 'minimal status');
 
 const clamp = decode('clamp');
@@ -91,13 +91,14 @@ eq(io.victron_error, 0, 'io Victron error');
 eq(io.victron_yield_today_kwh, 0.12, 'io Victron yield');
 eq(io.victron_soc_pct, undefined, 'io Victron SOC not sent by an MPPT');
 eq(io.victron_load_a, 0.31, 'io Victron load current');
-eq(io.proto_version, 2, 'io keeps protocol version 2');
+eq(io.proto_version, 4, 'io uses protocol version 4');
+eq(io.victron_soc_pct, undefined, 'io: SOC not sent takes no space');
 eq(io.wind2_direction_deg, 271, 'io wind 2 direction');
 eq(io.wind2_speed_avg, 4.56, 'io wind 2 speed');
 eq(io.wind2_gust, 9.87, 'io wind 2 gust');
 
 const uv = decode('uv');
-eq(uv.proto_version, 3, 'UV selects binary v3');
+eq(uv.proto_version, 4, 'UV in binary v4');
 eq(uv.uv_sensor_voltage_v, 4.999, 'UV sensor voltage millivolt precision');
 eq(uv.uv_index, 327.67, 'binary UV index clamps to signed centi-unit ceiling');
 eq(uv.uv_index_calibrated, true, 'UV calibration flag');
@@ -105,20 +106,35 @@ const uvUncalibrated = decode('uv_uncalibrated');
 eq(uvUncalibrated.uv_sensor_voltage_v, 3.3, 'uncalibrated UV voltage remains available');
 eq(uvUncalibrated.uv_index, undefined, 'uncalibrated UV index omitted');
 eq(uvUncalibrated.uv_index_calibrated, false, 'uncalibrated UV flag');
-eq(uvUncalibrated.proto_version, 3, 'uncalibrated UV uses extension version');
+eq(uvUncalibrated.proto_version, 4, 'uncalibrated UV in v4');
 const uvOutOfRange = decode('uv_out_of_range');
-eq(uvOutOfRange.proto_version, 2, 'invalid UV reading does not emit a v3 field');
+eq(uvOutOfRange.uv_sensor_enabled, undefined, 'invalid UV reading emits no UV field');
 eq(uvOutOfRange.uv_sensor_voltage_v, undefined, 'out-of-range UV reading omitted');
+
+const radio = decode('radio');
+eq(radio.proto_version, 4, 'binary v4');
+eq(radio.uv_sensor_enabled, false, 'wireless UV: no board voltage flag');
+eq(radio.bme280_temperature_c, 4.5, 'wireless temperature');
+eq(radio.bme280_humidity_pct, undefined, 'no humidity from a thermo-only source');
+eq(radio.bme280_pressure_qnh_hpa, undefined, 'no pressure without the BME280');
+eq(radio.uv_sensor_voltage_v, undefined, 'wireless UV has no terminal voltage');
+eq(radio.uv_index, 3.4, 'wireless UV index');
+eq(radio.light_lux, 98765, 'illuminance');
+eq(radio.sources.temp_humidity, 'wireless', 'source temp/hum');
+eq(radio.sources.rain, 'board', 'source rain');
+eq(radio.sources.light, 'wireless', 'source light');
+eq(radio.wireless_battery_low, true, 'wireless battery low');
 
 // Fitting into the data-rate limit: least important groups go first.
 eq(cases.all.length > 51, true, 'everything incl. v2.0 block exceeds 51 bytes');
-eq(cases.all.length <= 85, true, 'everything incl. UV fits the encoder buffer');
+eq(cases.all.length <= 96, true, 'everything fits the encoder buffer');
+eq(decode('all').light_lux, 120000, 'all: illuminance beyond uint16');
 const f51 = decode('fit51');
 eq(cases.fit51.length <= 51, true, `fit51 within 51 bytes (got ${cases.fit51.length})`);
 eq(f51.debug_cycle_counter, undefined, 'fit51 drops debug first');
 eq(f51.aux_pulses, undefined, 'fit51 drops AUX pulses');
 eq(f51.uv_sensor_voltage_v, undefined, 'fit51 sheds UV group when needed');
-eq(f51.proto_version, 2, 'fitted packet returns to legacy format when UV is shed');
+eq(f51.proto_version, 4, 'fitted packet stays version 4');
 eq(f51.wind2_speed_avg, undefined, 'fit51 drops wind 2 before Victron');
 eq(f51.wind_speed_avg, 7, 'fit51 keeps wind');
 eq(f51.rain_rate_mmh, 2.4, 'fit51 keeps rain');

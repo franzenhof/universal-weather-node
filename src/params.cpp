@@ -1,4 +1,5 @@
 #include "params.h"
+#include "wind_window.h"
 #include "globals.h"
 #include "sensors.h"
 #include "board_io.h"
@@ -25,13 +26,35 @@ bool applyParam(uint8_t paramId, int16_t value)
         case PARAM_UPLINK_INTERVAL_SEC: // uplinkIntervalSec
             if (value < 5 || value > 3600) return false;
             gCfg.uplinkIntervalSec = value;
-            if (gCfg.sampleSec > gCfg.uplinkIntervalSec) {
-                gCfg.sampleSec = gCfg.uplinkIntervalSec;
-            }
             return true;
-        case PARAM_SAMPLE_SEC: // sampleSec
-            if (value < 1 || value > gCfg.uplinkIntervalSec) return false;
-            gCfg.sampleSec = value;
+        case PARAM_SAMPLE_SEC: // wind sample interval: 1 or 3 s, other values map to a step
+            if (value < 1 || value > 3600) return false;
+            gCfg.sampleSec = windSampleSecNormalized(value);
+            return true;
+        case PARAM_MQTT_INTERVAL_SEC:
+            if (value != 0 && (value < 2 || value > 3600)) return false;
+            gCfg.mqttIntervalSec = value;
+            return true;
+        case PARAM_LORA_WIND_AGG:
+            if (value != WIND_AGG_INTERVAL && value != WIND_AGG_10MIN) return false;
+            gCfg.loraWindAgg = value;
+            return true;
+        case PARAM_MQTT_WIND_AGG:
+            if (value != WIND_AGG_INTERVAL && value != WIND_AGG_10MIN) return false;
+            gCfg.mqttWindAgg = value;
+            return true;
+        case PARAM_SRC_TEMP_HUM: case PARAM_SRC_WIND: case PARAM_SRC_RAIN:
+        case PARAM_SRC_UV: case PARAM_SRC_LIGHT:
+            if (value < 0 || value > 6) return false;
+            gCfg.srcSel[paramId - PARAM_SRC_TEMP_HUM] = (uint8_t)value;
+            return true;
+        case PARAM_RF_PROTO:
+            if (value < 1 || value > RF_PROTO_ALL) return false;
+            gCfg.rfProto = value;
+            return true;
+        case PARAM_RF_EN:
+            if (value != RF_RADIO_OFF && value != RF_RADIO_SX1262) return false;
+            gCfg.rfEn = value;
             return true;
         case PARAM_WIND_EN: // windEn
             if (value != 0 && value != 1) return false;

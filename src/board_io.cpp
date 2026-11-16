@@ -267,6 +267,10 @@ bool detectPcbV2()
     return v2;
 }
 
+bool ioUvActive()       { return gCfg.uvEn; }
+bool ioAuxAinActive()   { return gCfg.auxAinEn && gCfg.wind2Mode != 2; }
+bool ioWind2DirActive() { return gCfg.wind2Mode == 2; }
+
 bool ioV2()
 {
     return gCfg.pcbVersion >= PCB_REV_2_0;
@@ -309,8 +313,8 @@ void ioInit()
         timer.skip_unhandled_events = true;
         ESP_ERROR_CHECK(esp_timer_create(&timer, &heaterTimer));
     }
-    // GPIO3 is permanently an ADC input on this revision and must never be
-    // driven, even when UV measurement is disabled.
+    // GPIO3 is an ADC input on this revision and must never be driven, even
+    // when UV measurement is disabled.
     pinMode(PIN_UV_AIN, INPUT);
     adcAttachPin(PIN_UV_AIN);
     // Push-pull Schmitt-trigger outputs and an RC-filtered ADC input: no pulls.
@@ -421,7 +425,7 @@ static void sampleWind2()
     }
     wind2SpeedSum += speed;
     if (speed > wind2Gust) wind2Gust = speed;
-    if (gCfg.wind2Mode == 2) {
+    if (ioWind2DirActive()) {
         int deg = map(adcAverage(PIN_AUX_AIN), 0, 4095, 0, 359) + gCfg.wind2DirOffsetDeg;
         float rad = ((deg % 360 + 360) % 360) * DEG_TO_RAD;
         wind2SinSum += sinf(rad);
@@ -433,13 +437,13 @@ static void sampleWind2()
 void ioSample()
 {
     if (!ioV2()) return;
-    if (gCfg.uvEn) {
+    if (ioUvActive()) {
         uint32_t mv = 0;
         for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(PIN_UV_AIN);
         uvAinMvSum += mv / 8.0f;
         uvAinSamples++;
     }
-    if (gCfg.auxAinEn && gCfg.wind2Mode != 2) {
+    if (ioAuxAinActive()) {
         uint32_t mv = 0;
         for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(PIN_AUX_AIN);
         auxAinMvSum += mv / 8.0f;
@@ -457,12 +461,12 @@ void ioFinishCycle(unsigned long /*elapsedMs*/)
     if (!ioV2()) return;
     ioPoll();   // collect the last pulses
 
-    gIo.auxAinV = (gCfg.auxAinEn && auxAinSamples > 0)
+    gIo.auxAinV = (ioAuxAinActive() && auxAinSamples > 0)
                   ? auxAinMvSum / auxAinSamples / 1000.0f * gCfg.auxAinScale : 0.0f;
     gIo.uvSensorVolts = NAN;
     gIo.uvIndex = NAN;
     gIo.uvIndexCalibrated = false;
-    if (gCfg.uvEn && uvAinSamples > 0 && isfinite(gCfg.uvAinScale) &&
+    if (ioUvActive() && uvAinSamples > 0 && isfinite(gCfg.uvAinScale) &&
         gCfg.uvAinScale >= 1.0f && gCfg.uvAinScale <= 5.0f) {
         float sensorVolts = uvAinMvSum / uvAinSamples / 1000.0f * gCfg.uvAinScale;
         if (isfinite(sensorVolts) && sensorVolts >= 0.0f && sensorVolts <= 5.5f) {
@@ -477,12 +481,12 @@ void ioFinishCycle(unsigned long /*elapsedMs*/)
         } else {
             dbgSerial.printf("UV ADC: scaled voltage %.3f V out of range; reading omitted\n", sensorVolts);
         }
-    } else if (gCfg.uvEn && uvAinSamples == 0) {
+    } else if (ioUvActive() && uvAinSamples == 0) {
         dbgSerial.println("UV ADC: enabled but no samples were collected.");
-    } else if (gCfg.uvEn && (!isfinite(gCfg.uvAinScale) || gCfg.uvAinScale < 1.0f || gCfg.uvAinScale > 5.0f)) {
+    } else if (ioUvActive() && (!isfinite(gCfg.uvAinScale) || gCfg.uvAinScale < 1.0f || gCfg.uvAinScale > 5.0f)) {
         dbgSerial.println("UV ADC: invalid divider scale in config; reading omitted.");
     }
-    if (gCfg.uvEn && isfinite(gIo.uvSensorVolts)) {
+    if (ioUvActive() && isfinite(gIo.uvSensorVolts)) {
         if (gIo.uvIndexCalibrated)
             dbgSerial.printf("UV sensor: %.3f V, calibrated index %.2f\n", gIo.uvSensorVolts, gIo.uvIndex);
         else if (gCfg.uvIndexEn)

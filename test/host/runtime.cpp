@@ -26,3 +26,12 @@ HostPersistence persist;
 int hostRadioResult=0,hostRadioBegins=0,hostJoinCalls=0,hostNodes=0,hostSleeps=0;
 int hostSessionSaves=0;
 bool hostProvisionOk=true,hostJoinOk=false;
+
+// ---- Stubs for the derived values (history.cpp / wx_upload.cpp are not
+// part of the host build): no history and no daily data yet. ----
+#include "../../src/wx_upload.h"
+bool  historyPressureAgo(uint32_t, float&) { return false; }
+bool  historyTempAgo(uint32_t, float&) { return false; }
+float historyRainSum(uint32_t) { return 0.0f; }
+void  wxDailyStats(WxDailyStats& out) { out = WxDailyStats{}; }
+void  wxUpdateAvailable(char* out, size_t len) { if (len) out[0] = '\0'; }

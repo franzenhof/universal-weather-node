@@ -2,6 +2,7 @@
 #include "globals.h"
 #include "params.h"
 #include "board_io.h"
+#include "sources.h"
 #include "lora_payload.h"
 #include "json_payload.h"
 #include "history.h"
@@ -16,6 +17,9 @@
 #include "time_sync.h"
 #include "wx_upload.h"
 #include "lora_transport.h"
+#include "wind_window.h"
+#include "rf_sensors.h"
+#include "derived_now.h"
 
 #include <Arduino.h>
 #include <WebServer.h>
@@ -278,25 +282,99 @@ void handleStatusPage()
     html += "<p class='sub'>Firmware " FIRMWARE_VERSION " &middot; refreshes every 30 s</p>";
 
     html += "<section><h4>Measurements</h4><table>";
-    if (gCfg.windEn) {
-        addRow(html, "Wind direction",     String(doc["windDirDeg"].as<int>()) + "&deg;");
+    bool srcSet = gCfg.rfEn != 0;
+    for (int g = 0; g < SG_COUNT; g++) srcSet |= gCfg.srcSel[g] != SRC_AUTO;
+    if (srcSet) {   // which sensor feeds each value (settings "Value sources")
+        static const char* const names[SG_COUNT] = { "temperature/humidity", "wind", "rain", "UV", "light" };
+        String v;
+        for (int g = 0; g < SG_COUNT; g++) {
+            char d[24]; srcDescribe((SrcGroup)g, d, sizeof(d));
+            if (g) v += " &middot; ";
+            v += String(names[g]) + ": " + d;
+        }
+        if (gSrc.rfBatteryLow) v += " &middot; <b>wireless battery low</b>";
+        addRow(html, "Sources", "<span class='dim'>" + v + "</span>");
+    }
+    if (srcActive(SG_WIND)) {
+        addRow(html, "Wind direction",     String(doc["windDirDeg"].as<int>()) + "&deg;" +
+                                           (doc["windDirText"].is<const char*>() ? String(" (") + doc["windDirText"].as<const char*>() + ")" : String()));
         addRow(html, "Wind speed",         String(doc["windSpeed"].as<float>(), 1) + " " + doc["windUnit"].as<const char*>());
         addRow(html, "Wind gust",          String(doc["windGust"].as<float>(),  1) + " " + doc["windUnit"].as<const char*>());
     }
-    if (gCfg.rainEn) {
+    if (srcActive(SG_RAIN)) {
         bool dailyValid;
         float dailyMm = wxDailyRainMm(dailyValid);
         addRow(html, "Rain rate",          String(doc["rainRate"].as<float>(), 2)       + " " + doc["rainRateUnit"].as<const char*>());
         addRow(html, "Rain (this cycle)",  String(doc["rain"].as<float>(), 2)           + " " + doc["rainUnit"].as<const char*>());
         addRow(html, "Rain today",         String(rainForOutput(dailyMm, gCfg), 2) + " " + rainUnitLabel(gCfg) +
                                            (dailyValid ? "" : " <span class='dim'>(clock not synced yet)</span>"));
+        addRow(html, "Rain last hour / 24 h", String(doc["rain1h"].as<float>(), 2) + " / " + String(doc["rain24h"].as<float>(), 2) +
+                                           " " + doc["rainUnit"].as<const char*>());
+        if (doc["rainYesterday"].is<float>())
+            addRow(html, "Rain yesterday", String(doc["rainYesterday"].as<float>(), 2) + " " + doc["rainUnit"].as<const char*>());
         addRow(html, "Rain since start",   String(doc["rainSinceStart"].as<float>(), 2) + " " + doc["rainUnit"].as<const char*>());
+        if (doc["lastRain"].is<const char*>()) {
+            String lr = doc["lastRain"].as<const char*>();
+            time_t t = 0;
+            struct tm u = {};
+            if (sscanf(lr.c_str(), "%d-%d-%dT%d:%d", &u.tm_year, &u.tm_mon, &u.tm_mday, &u.tm_hour, &u.tm_min) == 5) {
+                u.tm_year -= 1900; u.tm_mon -= 1;
+                t = mktime(&u);   // UTC string, TZ-independent difference below
+                struct tm nowU; time_t now = time(nullptr); gmtime_r(&now, &nowU);
+                long ageMin = (long)difftime(mktime(&nowU), t) / 60;
+                String age = ageMin < 60 ? String(ageMin) + " min" : ageMin < 2880 ? String(ageMin / 60) + " h" : String(ageMin / 1440) + " days";
+                addRow(html, "Last rain", age + " ago");
+            }
+        }
     }
-    if (bme280Present) {
+    if (gSrc.tempValid)
         addRow(html, "Temperature",        String(doc["temp"].as<float>(), 1) + "&deg;" + doc["tempUnit"].as<const char*>());
+    if (gSrc.tempValid && gSrc.humValid)
         addRow(html, "Humidity",           String(doc["humidityPct"].as<float>(), 1) + " %");
+    if (bme280Present) {
         addRow(html, "Pressure (absolute)",String(doc["pressureAbs"].as<float>(), 1) + " " + doc["pressureUnit"].as<const char*>());
         addRow(html, "Pressure (QNH)",     String(doc["pressureQnh"].as<float>(), 1) + " " + doc["pressureUnit"].as<const char*>());
+        if (doc["pressureTrend3h"].is<float>()) {
+            float d3 = doc["pressureTrend3h"].as<float>();
+            addRow(html, "Pressure tendency (3 h)", String(d3 >= 0 ? "+" : "") + String(d3, gCfg.unitSystem == 1 ? 2 : 1) + " " +
+                   doc["pressureUnit"].as<const char*>() + " &middot; " + doc["pressureTendency"].as<const char*>() +
+                   " &middot; trend: <b>" + doc["weatherTrend"].as<const char*>() + "</b>");
+        } else {
+            addRow(html, "Pressure tendency (3 h)", "<span class='dim'>available 3 h after start</span>");
+        }
+    }
+    if (doc["dewPoint"].is<float>())
+        addRow(html, "Dew point",          String(doc["dewPoint"].as<float>(), 1) + "&deg;" + doc["tempUnit"].as<const char*>());
+    if (doc["feelsLike"].is<float>()) {
+        DerivedNow dn;
+        derivedNow(dn, windSpeedMs, windDirection);
+        addRow(html, "Feels like",         String(doc["feelsLike"].as<float>(), 1) + "&deg;" + doc["tempUnit"].as<const char*>() +
+               (dn.windChill ? " <span class='dim'>(wind chill)</span>" : dn.heatIndex ? " <span class='dim'>(heat index)</span>" : ""));
+    }
+    if (doc["tempTrend1h"].is<float>()) {
+        float t1 = doc["tempTrend1h"].as<float>();
+        addRow(html, "Temperature trend (1 h)", String(t1 >= 0 ? "+" : "") + String(t1, 1) + " K" +
+               (gCfg.unitSystem == 1 ? " <span class='dim'>(&deg;F)</span>" : ""));
+    }
+    if (doc["cloudBase"].is<long>())
+        addRow(html, "Cloud base",         String(doc["cloudBase"].as<long>()) + " " + doc["cloudBaseUnit"].as<const char*>() +
+               " <span class='dim'>(above the station, estimated)</span>");
+    if (doc["sunshineTodayMin"].is<long>()) {
+        long m = doc["sunshineTodayMin"].as<long>();
+        String v = String(m / 60) + " h " + String(m % 60) + " min";
+        if (doc["sunshineYesterdayMin"].is<long>()) {
+            long y = doc["sunshineYesterdayMin"].as<long>();
+            v += " <span class='dim'>&middot; yesterday " + String(y / 60) + " h " + String(y % 60) + " min</span>";
+        }
+        addRow(html, "Sunshine today", v);
+    }
+    if (doc["warnings"].is<JsonObject>()) {
+        JsonObject w = doc["warnings"];
+        String v;
+        if (w["frost"])  v += "frost ";
+        if (w["fog"])    v += "fog/dew ";
+        if (w["sultry"]) v += "sultry ";
+        if (v.length()) addRow(html, "Warnings", "<b>" + v + "</b>");
     }
     if (bus1Count > 0) {
         JsonArray ds18b20 = doc["ds18b20"].as<JsonArray>();
@@ -308,7 +386,9 @@ void handleStatusPage()
         }
     }
     if (gCfg.lipoEn) addRow(html, "Battery", String(doc["batteryVolt"].as<float>(), 3) + " V");
-    if (ioV2() && gCfg.uvEn) {
+    if (gSrc.uvRadio) addRow(html, "UV index", String(gSrc.uvIndexRadio, 1));
+    if (gSrc.lightValid) addRow(html, "Illuminance", String((long)lroundf(gSrc.lightLux)) + " lx");
+    if (ioV2() && gSrc.uvBoard) {
         if (doc["uvSensorVolts"].is<float>())
             addRow(html, "UV sensor voltage", String(doc["uvSensorVolts"].as<float>(), 3) + " V");
         addRow(html, "UV index calibration", gIo.uvIndexCalibrated ? "calibrated" : "not calibrated");
@@ -317,11 +397,11 @@ void handleStatusPage()
     }
     if (ioV2() && gCfg.wind2Mode) {
         const char* wu = windSpeedUnitLabel(gCfg);
-        if (gCfg.wind2Mode == 2) addRow(html, "Wind 2 direction", String(gIo.wind2DirDeg) + "&deg;");
+        if (ioWind2DirActive()) addRow(html, "Wind 2 direction", String(gIo.wind2DirDeg) + "&deg;");
         addRow(html, "Wind 2 speed", String(windSpeedForOutput(gIo.wind2SpeedMs, gCfg), 1) + " " + wu);
         addRow(html, "Wind 2 gust",  String(windSpeedForOutput(gIo.wind2GustMs,  gCfg), 1) + " " + wu);
     }
-    if (ioV2() && gCfg.auxAinEn && gCfg.wind2Mode != 2) addRow(html, "AUX analog input", String(gIo.auxAinV, 3) + " V");
+    if (ioV2() && ioAuxAinActive()) addRow(html, "AUX analog input", String(gIo.auxAinV, 3) + " V");
     if (ioV2() && gCfg.auxPulseEn && !gCfg.wind2Mode) addRow(html, "AUX pulses", String(gIo.auxPulsesCycle) + " (cycle) &middot; " +
                                           String(gIo.auxPulsesTotal) + " (total)");
     html += "</table></section>";
@@ -418,6 +498,77 @@ void handleStatusPage()
     addWeatherNetworkRows(html);
     html += "</table></section>";
 
+    if (gCfg.loraEn) {
+        html += "<section><h4>LoRaWAN</h4><table>";
+        const LoraDiag& ld = gLoraDiag;
+        if (!ld.haveUplink) {
+            addRow(html, "Uplinks", "<span class='dim'>none since start</span>");
+        } else {
+            // DR0-5 = SF12-SF7 at 125 kHz in EU868 and the other 1-channel-plan
+            // regions; US915/AU915 use a different table, show the DR only there.
+            String dr = "DR" + String(ld.dataRate);
+            bool euLike = strncmp(gCfg.region, "US", 2) != 0 && strncmp(gCfg.region, "AU", 2) != 0;
+            if (euLike && ld.dataRate <= 5) dr += " (SF" + String(12 - ld.dataRate) + ")";
+            dr += " &middot; " + String(ld.freqMHz, 1) + " MHz &middot; " + String(ld.txPowerDbm) + " dBm";
+            addRow(html, "Last uplink", dr);
+            unsigned long cfgMs = (unsigned long)gCfg.uplinkIntervalSec * 1000UL;
+            if (ld.intervalMs > cfgMs)
+                addRow(html, "Uplink interval", String(ld.intervalMs / 1000) + " s <span class='dim'>(set " +
+                       String(gCfg.uplinkIntervalSec) + " s, stretched to keep 1 % airtime at this data rate)</span>");
+            char addr[12];
+            snprintf(addr, sizeof(addr), "%08lX", (unsigned long)ld.devAddr);
+            addRow(html, "Device address / FCnt up", String(addr) + " &middot; " + String(ld.fCntUp));
+        }
+        if (ld.haveDownlink) {
+            unsigned long ago = (millis() - ld.lastDownlinkMs) / 1000;
+            String when = ago < 120 ? String(ago) + " s ago" : ago < 7200 ? String(ago / 60) + " min ago"
+                                                            : String(ago / 3600.0f, 1) + " h ago";
+            addRow(html, "Last downlink", when + " &middot; RSSI " + String(ld.lastDlRssi, 0) + " dBm &middot; SNR " +
+                                          String(ld.lastDlSnr, 1) + " dB");
+        } else {
+            addRow(html, "Last downlink", "<span class='dim'>none since start</span>");
+        }
+        if (ld.rejoinThreshold)
+            addRow(html, "Uplinks without downlink", String(ld.uplinksWithoutDownlink) + " / " + String(ld.rejoinThreshold) +
+                   " <span class='dim'>(rejoin at the limit)</span>");
+        addRow(html, "Rejoins since start", String(ld.rejoins));
+        html += "</table></section>";
+    }
+
+    if (gCfg.rfEn) {
+        html += "<section><h4>Wireless sensors (868 MHz)</h4><table>";
+        if (rfSensorsReceiving())
+            addStateRow(html, "ok", "Receiver", String("listening (") + rfSensorsListening() + ") between LoRaWAN uplinks &middot; " +
+                        String(rfSensorsPacketsTotal()) + " packets since start");
+        else if (rfSensorsLastError() == 0)   // LoRaWAN uses the chip right now (uplink + receive windows)
+            addStateRow(html, "ok", "Receiver", "paused for a LoRaWAN uplink &middot; " +
+                        String(rfSensorsPacketsTotal()) + " packets since start");
+        else
+            addStateRow(html, "bad", "Receiver", "not receiving (radio error " + String(rfSensorsLastError()) + ", retrying)");
+        bool any = false;
+        for (int i = 0; i < RF_MAX_SENSORS; i++) {
+            const RfSensorReading& r = gRfSensors[i];
+            if (!r.used) continue;
+            any = true;
+            char id[12];
+            snprintf(id, sizeof(id), "%08lX", (unsigned long)r.id);
+            unsigned long ago = (millis() - r.lastMs) / 1000;
+            String v = String(ago) + " s ago &middot; RSSI " + String(r.rssi, 0) + " dBm";
+            if (!r.batteryOk) v += " &middot; <b>battery low</b>";
+            if (r.hasTemp)     v += " &middot; " + String(temperatureForOutput(r.tempC, gCfg), 1) + "&deg;" + temperatureUnitLabel(gCfg);
+            if (r.hasHumidity) v += " &middot; " + String(r.humidity) + " %";
+            if (r.hasWind)     v += " &middot; wind " + String(windSpeedForOutput(r.windAvgMs, gCfg), 1) + " / gust " +
+                                    String(windSpeedForOutput(r.windGustMs, gCfg), 1) + " " + windSpeedUnitLabel(gCfg) +
+                                    " &middot; " + String((int)lroundf(r.windDirDeg)) + "&deg;";
+            if (r.hasRain)     v += " &middot; rain total " + String(rainForOutput(r.rainTotalMm, gCfg), 1) + " " + rainUnitLabel(gCfg);
+            if (r.hasUv)       v += " &middot; UV " + String(r.uvIndex, 1);
+            if (r.hasLight)    v += " &middot; " + String((long)lroundf(r.lightLux)) + " lx";
+            addRow(html, String("ID ") + id + " (" + (r.proto == RF_PROTO_BRESSER ? "type " + String(r.type) : String(rfProtoName(r.proto))) + ")", v);
+        }
+        if (!any) addRow(html, "Sensors", "<span class='dim'>none received yet (Bresser sensors send every 12&ndash;16 s, IT+ about every 4 s)</span>");
+        html += "</table></section>";
+    }
+
     html += "<section><h4>Device</h4><table>";
     if (gCfg.debugMode) addRow(html, "Measurement cycle", String(doc["cycle"].as<int>()));
     addRow(html, "Next measurement in", String(doc["nextCycleInSec"].as<uint32_t>()) + " s");
@@ -425,8 +576,17 @@ void handleStatusPage()
                                        : (gCfg.pcbVersion == PCB_REV_1_2 ? "Rev 1.2" : "Rev 1.3"));
     addRow(html, "BME280 sensor",      bme280Present ? "present" : "not detected");
     addRow(html, "DS18B20 sensors",    String(bus1Count));
+    addRow(html, "CPU temperature",    String(doc["cpuTemp"].as<float>(), 1) + "&deg;" + doc["cpuTempUnit"].as<const char*>() +
+                                       " <span class='dim'>(chip, above ambient)</span>");
     addRow(html, "Uptime",             String((float)millis() / 3600000.0f, 2) + " h");
-    addRow(html, "Free heap",          String((float)ESP.getFreeHeap() / 1024.0f, 1) + " KiB");
+    if (gCfg.updateCheckEn) {
+        char st[48]; wxUpdateStatus(st, sizeof(st));
+        char up[24]; wxUpdateAvailable(up, sizeof(up));
+        addRow(html, "Firmware update", up[0] ? "<b>" + String(up) + " available</b>" : String(st));
+    }
+    addRow(html, "Last restart",       gResetReason);
+    addRow(html, "Free heap",          String((float)ESP.getFreeHeap() / 1024.0f, 1) + " KiB &middot; minimum " +
+                                       String((float)ESP.getMinFreeHeap() / 1024.0f, 1) + " KiB");
     html += "</table></section>";
 
     html += "<p class='dim'><a href='/api/data'>Raw JSON</a></p></body></html>";
@@ -619,6 +779,9 @@ void renderSettings(const String& message, bool isError, int httpCode)
 {
     static const Option unitSystems[] = { { 0, "Metric (&deg;C, mm, hPa)" }, { 1, "Imperial (&deg;F, in, inHg, mph)" } };
     static const Option windUnits[]  = { { 1, "m/s" }, { 0, "km/h" } };
+    static const Option windSamples[] = { { 1, "1 s" }, { 3, "3 s (less wake-ups, low-power mode)" } };
+    static const Option windAggs[]   = { { WIND_AGG_INTERVAL, "Interval (since the last send) &ndash; for Grafana etc." },
+                                         { WIND_AGG_10MIN, "10 min (WMO) &ndash; ready-to-use values" } };
     static const Option cpuFreqs[]   = { { 80, "80 MHz (low power)" }, { 240, "240 MHz" } };
     static const Option dirTypes[]   = { { 0, "Potentiometer (Davis)" }, { 1, "Calibrated table (reed/resistor vane)" } };
     static const Option payFmts[]    = { { 1, "Compact binary (FPort 3, recommended)" }, { 0, "CayenneLPP (FPort 1, about twice the size)" } };
@@ -636,16 +799,87 @@ void renderSettings(const String& message, bool isError, int httpCode)
     pageStart(html, "settings", "/api/settings");
     html += "<p class='sub'><span class='tag live'>live</span> fields apply immediately. "
             "<span class='tag restart'>restart</span> fields save and restart the node (the in-RAM chart history is lost). "
-            "Passwords and keys are never displayed &mdash; leave empty to keep. The WiFi network itself and the "
+            "Passwords and keys are never displayed &mdash; leave empty to keep. Switching WiFi or the web API off and the "
             "wind-direction calibration wizard stay in the config portal (hold the button 3&nbsp;s, or downlink <code>0x03</code>).</p>";
     if (message.length()) {
         html += "<div class='banner "; html += isError ? "badb" : "okb"; html += "'>"; html += message; html += "</div>";
     }
+    if (wifiChangeBusy()) {
+        html += "<div class='banner okb'>Testing the new WiFi network &hellip;</div>";
+    } else {
+        String wr = wifiChangeResult();
+        if (wr.length()) {
+            html += "<div class='banner "; html += wr.startsWith("Could not") ? "badb" : "okb"; html += "'>";
+            appendEscaped(html, wr.c_str()); html += "</div>";
+        }
+    }
     html += "<form method='POST' action='/api/settings'><input type='hidden' name='form' value='1'>";
 
     sectionStart(html, "Measurement", false);
-    fieldText  (html, "uplinksec", "Measurement / uplink interval (s)", String(gCfg.uplinkIntervalSec), 5, "5&ndash;3600", "number");
-    fieldText  (html, "samplesec", "Sample interval (s)", String(gCfg.sampleSec), 5, "1 &ndash; measurement interval", "number");
+    fieldText  (html, "uplinksec", "LoRaWAN / measurement interval (s)", String(gCfg.uplinkIntervalSec), 5,
+                "5&ndash;3600; stretched automatically if the data rate would exceed 1 % airtime", "number");
+    fieldSelect(html, "samplesec", "Wind sample interval", windSampleSecNormalized(gCfg.sampleSec), OPTS(windSamples),
+                "gust = highest 3-s mean; other sensors every 10 s or each send");
+    fieldSelect(html, "lorawagg",  "LoRaWAN wind values", gCfg.loraWindAgg, OPTS(windAggs),
+                "Interval: mean, 3-s gust and direction since the last uplink. 10 min: the WMO values of the last "
+                "10 minutes &mdash; do not average those again downstream");
+    fieldText  (html, "mqttsec",   "MQTT interval (s)", String(gCfg.mqttIntervalSec), 5, "0 = like the LoRaWAN interval, else 2&ndash;3600", "number");
+    fieldSelect(html, "mqttwagg",  "MQTT wind values", gCfg.mqttWindAgg, OPTS(windAggs));
+    {
+        static const Option rfProtos[] = { { RF_PROTO_BRESSER, "Bresser (5/6/7-in-1 and others)" },
+                                           { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ (both data rates)" },
+                                           { RF_PROTO_ITPLUS17, "TFA / LaCrosse IT+ 17.241 kbit/s only" },
+                                           { RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ 9.579 kbit/s only" },
+                                           { RF_PROTO_ALL, "Bresser + TFA IT+ alternating (not recommended)" } };
+        int cur = gCfg.rfProto;
+        if (cur != 1 && cur != 2 && cur != 4 && cur != 6 && cur != 7) cur = RF_PROTO_BRESSER;   // 3/5: set by downlink
+        fieldSelect(html, "rfproto", "Wireless sensor type", cur, OPTS(rfProtos),
+                    "IT+: e.g. TFA 30.3143/3144/3147/3157/3159.IT (17.241 kbit/s), 30.3155/3156.WD (9.579 kbit/s); "
+                    "with both rates the receiver alternates every 5 s. Bresser + IT+: the receiver alternates "
+                    "(17 s Bresser, 5 s each IT+ rate) and misses packets of both &mdash; e.g. about every second "
+                    "Bresser wind packet; not recommended, choose one sensor family where possible");
+    }
+    fieldCheck (html, "rfen",      "Wireless sensors (868 MHz)", gCfg.rfEn,
+                "Bresser 5/6/7-in-1 and other Bresser sensors, received with the LoRa chip between uplinks; disables low-power mode");
+    {
+        // received sensors as a copy-and-paste hint ("learning" without extra buttons)
+        static char seen[160];
+        int n = snprintf(seen, sizeof(seen), "hex, comma-separated, max 4, order = wireless 1&ndash;4; empty = any sensor");
+        bool first = true;
+        for (int i = 0; i < RF_MAX_SENSORS && n < (int)sizeof(seen) - 24; i++) {
+            if (!gRfSensors[i].used) continue;
+            n += snprintf(seen + n, sizeof(seen) - n, "%s%08lX (type %u)", first ? ". Received: " : ", ",
+                          (unsigned long)gRfSensors[i].id, (unsigned)gRfSensors[i].type);
+            first = false;
+        }
+        fieldText  (html, "rfids",     "Wireless sensor IDs", gCfg.rfIds, sizeof(gCfg.rfIds) - 1, seen);
+    }
+    {
+        // value sources (sources.h): one select per group, wireless slots labelled with their ID
+        static char rfLabel[4][48];
+        for (int k = 0; k < 4; k++) {
+            int idx = rfSensorIndexForSlot(k);
+            std::vector<uint32_t> ids = rfParseIds(gCfg.rfIds);
+            if (idx >= 0)
+                snprintf(rfLabel[k], sizeof(rfLabel[k]), "Wireless %d (%08lX)", k + 1, (unsigned long)gRfSensors[idx].id);
+            else if (k < (int)ids.size())
+                snprintf(rfLabel[k], sizeof(rfLabel[k]), "Wireless %d (%08lX, not received)", k + 1, (unsigned long)ids[k]);
+            else
+                snprintf(rfLabel[k], sizeof(rfLabel[k]), "Wireless %d (not received)", k + 1);
+        }
+        const Option srcOpts[] = { { SRC_AUTO, "Auto (board first, then wireless 1&ndash;4)" }, { SRC_BOARD, "Board sensor" },
+                                   { SRC_RF1, rfLabel[0] }, { SRC_RF1 + 1, rfLabel[1] }, { SRC_RF1 + 2, rfLabel[2] },
+                                   { SRC_RF4, rfLabel[3] }, { SRC_OFF, "Off (not reported)" } };
+        static const char* const names[SG_COUNT]  = { "srcair", "srcwind", "srcrain", "srcuv", "srclight" };
+        static const char* const labels[SG_COUNT] = { "Source: temperature / humidity", "Source: wind",
+                                                      "Source: rain", "Source: UV", "Source: light" };
+        for (int g = 0; g < SG_COUNT; g++)
+            fieldSelect(html, names[g], labels[g], gCfg.srcSel[g], OPTS(srcOpts),
+                        g == SG_AIR   ? "used for LoRaWAN, MQTT, weather networks and history; a wireless sensor counts while "
+                                        "it sent within 5 min. Pressure always comes from the BME280" :
+                        g == SG_LIGHT ? "only wireless sensors (e.g. Bresser 7-in-1) measure light" :
+                        g == SG_RAIN  ? "switching keeps the rain totals continuous (only increases of the selected source count)" : nullptr);
+    }
     fieldCheck (html, "winden",    "Wind sensor", gCfg.windEn);
     fieldCheck (html, "rainen",    "Rain sensor", gCfg.rainEn);
     fieldCheck (html, "lipoen",    "LiPo battery measurement", gCfg.lipoEn);
@@ -663,7 +897,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
                     "V at terminal per V at pin: 1 = direct (ADC useful to ~3.1&nbsp;V; 3.3&nbsp;V limit), 1.66667 with R25 15k (0&ndash;5&nbsp;V); older boards: retain their calibration", "number");
         fieldCheck (html, "auxpulseen",  "AUX pulse counter (GPIO48)", gCfg.auxPulseEn);
         fieldSelect(html, "wind2",       "2nd wind sensor (AUX)", gCfg.wind2Mode, OPTS(wind2Modes),
-                    "uses the AUX PULSE (and AIN) terminals instead of the AUX counter/analog input; "
+                    "uses the AUX PULSE (and AIN) terminals instead of the AUX counter/analog input "
                     "same calibration as the main anemometer, vane 0&ndash;3.3&nbsp;V from AUX 3V3");
         fieldText  (html, "wind2off",    "2nd wind vane offset (&deg;)", String(gCfg.wind2DirOffsetDeg), 4, "&minus;180 to +180", "number");
         fieldSelect(html, "heatmode",    "Heater (J12)", gCfg.heaterMode, OPTS(heatModes));
@@ -727,6 +961,16 @@ void renderSettings(const String& message, bool isError, int httpCode)
     fieldText  (html, "wnpid",   "Wetternetzwerk.pro station ID", gCfg.wnetproId, sizeof(gCfg.wnetproId) - 1);
     fieldSecret(html, "wnpkey",  "Wetternetzwerk.pro station key", gCfg.wnetproKey[0], true, sizeof(gCfg.wnetproKey) - 1);
     fieldText  (html, "wnpint",  "Wetternetzwerk.pro interval (s)", String(gCfg.wnetproIntervalSec), 4, "60&ndash;3600", "number");
+    fieldText  (html, "windyid", "Windy station ID", gCfg.windyId, sizeof(gCfg.windyId) - 1, "stations.windy.com &rarr; My stations");
+    fieldSecret(html, "windypw", "Windy station password", gCfg.windyPass[0], true, sizeof(gCfg.windyPass) - 1);
+    fieldText  (html, "windyint","Windy interval (s)", String(gCfg.windyIntervalSec), 4, "300&ndash;3600", "number");
+    fieldText  (html, "osemid",  "openSenseMap senseBox ID", gCfg.osemBoxId, sizeof(gCfg.osemBoxId) - 1);
+    fieldSecret(html, "osemtok", "openSenseMap access token", gCfg.osemToken[0], true, sizeof(gCfg.osemToken) - 1,
+                "only for boxes with authentication (default for new boxes)");
+    fieldText  (html, "osemmap", "openSenseMap sensor IDs", gCfg.osemSensors, sizeof(gCfg.osemSensors) - 1,
+                "key=sensorId, comma-separated; keys: temp, hum, press, wind, gust, dir, rain (last hour), rainday, dew, uv, lux "
+                "&mdash; units &deg;C, %, hPa, m/s, &deg;, mm, lx");
+    fieldText  (html, "osemint", "openSenseMap interval (s)", String(gCfg.osemIntervalSec), 4, "60&ndash;3600", "number");
     html += "</section>";
 
     sectionStart(html, "Time", false);
@@ -735,6 +979,13 @@ void renderSettings(const String& message, bool isError, int httpCode)
     fieldText(html, "ntp", "NTP server", gCfg.ntpServer, sizeof(gCfg.ntpServer) - 1);
     html += "</section>";
     wxUploadUnlock();
+
+    sectionStart(html, "Firmware update check", false);
+    fieldCheck (html, "updchk", "Check daily for newer firmware", gCfg.updateCheckEn,
+                "shown on the status page and as <code>firmwareUpdate</code> in JSON; installing stays manual (OTA)");
+    fieldText  (html, "updurl", "Version list URL", gCfg.updateUrl, sizeof(gCfg.updateUrl) - 1,
+                "tags (Gitea) or releases (GitHub) API returning names like 2.0.0-beta.3");
+    html += "</section>";
 
     sectionStart(html, "Web access", false);
     fieldSecret  (html, "webadminpw", "Admin password", true, false, sizeof(gCfg.webAdminPass) - 1, "user name: admin");
@@ -761,7 +1012,14 @@ void renderSettings(const String& message, bool isError, int httpCode)
     html += "</section>";
 
     sectionStart(html, "Network &amp; MQTT", true);
-    fieldReadonly(html, "WiFi network", WiFi.SSID().length() ? WiFi.SSID() : String("&ndash;"), "change via the config portal");
+    fieldText  (html, "wifissid",   "WiFi network (SSID)", WiFi.SSID(), 32,
+                "a change is tested for 60&nbsp;s without restart; if the node cannot connect, it returns to the current network");
+    fieldSecret(html, "wifipass",   "WiFi password", true, true, 63,
+                "leave empty to keep the current one; &ldquo;remove&rdquo; = open network");
+    fieldCheck (html, "wifinotest", "Store WiFi without test (pre-provisioning)", false,
+                "for a network that is not in range yet: stored right away, the node leaves the current network "
+                "immediately and keeps trying the new one &mdash; reach it again via the new network, LoRaWAN "
+                "(downlink <code>0x03</code> opens the config portal) or the button");
     fieldText  (html, "devname",    "Device name", gCfg.deviceName, sizeof(gCfg.deviceName) - 1, "hostname, MQTT client ID, default topic prefix");
     fieldCheck (html, "staticipen", "Static IP", gCfg.staticIpEn, "off = DHCP");
     fieldText  (html, "staticip",   "IP address", gCfg.staticIp, 15);
@@ -898,7 +1156,18 @@ void handleSettingsPost()
     // ---- live: operational parameters (uplink before sample interval:
     // the sample interval is validated against the uplink interval) ----
     apply(PARAM_UPLINK_INTERVAL_SEC,  formArg("uplinksec").toInt(), "measurement interval (5-3600 s)");
-    apply(PARAM_SAMPLE_SEC,           formArg("samplesec").toInt(), "sample interval (1 s - measurement interval)");
+    apply(PARAM_SAMPLE_SEC,           formArg("samplesec").toInt(), "wind sample interval (1 or 3 s)");
+    apply(PARAM_MQTT_INTERVAL_SEC,    formArg("mqttsec").toInt(),   "MQTT interval (0 or 2-3600 s)");
+    apply(PARAM_LORA_WIND_AGG,        formArg("lorawagg").toInt(),  "LoRaWAN wind values");
+    apply(PARAM_MQTT_WIND_AGG,        formArg("mqttwagg").toInt(),  "MQTT wind values");
+    apply(PARAM_RF_EN,                checked("rfen"),              "wireless sensors");
+    apply(PARAM_RF_PROTO,             formArg("rfproto").toInt(),   "wireless sensor type");
+    {
+        static const char* const names[SG_COUNT] = { "srcair", "srcwind", "srcrain", "srcuv", "srclight" };
+        for (int g = 0; g < SG_COUNT; g++)
+            if (formArg(names[g]).length())
+                apply(PARAM_SRC_TEMP_HUM + g, formArg(names[g]).toInt(), "value source");
+    }
     apply(PARAM_WIND_EN,              checked("winden"),            "wind sensor");
     apply(PARAM_RAIN_EN,              checked("rainen"),            "rain sensor");
     apply(PARAM_LIPO_EN,              checked("lipoen"),            "LiPo measurement");
@@ -977,6 +1246,16 @@ void handleSettingsPost()
     storeText  (gCfg.wnetproId,    "wnpid",   ignored);
     storeSecret(gCfg.wnetproKey,   "wnpkey",  ignored);
     storeInt   (gCfg.wnetproIntervalSec, "wnpint", 60, 3600, "Wetternetzwerk.pro interval (60-3600 s)", rejected, ignored);
+    storeText  (gCfg.windyId,      "windyid", ignored);
+    storeSecret(gCfg.windyPass,    "windypw", ignored);
+    storeInt   (gCfg.windyIntervalSec, "windyint", 300, 3600, "Windy interval (300-3600 s)", rejected, ignored);
+    storeText  (gCfg.osemBoxId,    "osemid",  ignored);
+    storeSecret(gCfg.osemToken,    "osemtok", ignored);
+    storeText  (gCfg.osemSensors,  "osemmap", ignored);
+    storeInt   (gCfg.osemIntervalSec, "osemint", 60, 3600, "openSenseMap interval (60-3600 s)", rejected, ignored);
+    gCfg.updateCheckEn = server.hasArg("updchk");
+    if (formArg("updurl").startsWith("http")) storeText(gCfg.updateUrl, "updurl", ignored);
+    else if (gCfg.updateCheckEn) addRejected(rejected, "version list URL (http/https)");
     if (formArg("tz").isEmpty())  addRejected(rejected, "time zone");
     else                          storeText(gCfg.timeZone, "tz", timeChanged);
     if (formArg("ntp").isEmpty()) addRejected(rejected, "NTP server");
@@ -985,6 +1264,7 @@ void handleSettingsPost()
     if (timeChanged) timeSyncReconfigure();
     // Not clearable: an empty admin password would lock this page out.
     storeSecret(gCfg.webAdminPass, "webadminpw", ignored);
+    storeText(gCfg.rfIds, "rfids", ignored);   // rf_sensors.cpp picks up changes on its next loop
 
     // ---- restart: only read at boot. Collected into a copy (static: Config
     // is several KB, too big for this task's stack), so the running
@@ -1046,6 +1326,46 @@ void handleSettingsPost()
 
     String rejectedMsg = rejected.length() ? "Invalid, kept the stored value: " + rejected + "." : String();
 
+    // ---- WiFi network: tested with rollback (wifi_mqtt.cpp), not a restart field ----
+    bool wifiChange = false;
+    {
+        String ssid    = server.arg("wifissid");   // not trimmed: spaces may be part of an SSID
+        String pass    = server.arg("wifipass");
+        bool   clear   = server.hasArg("wifipass_clear");
+        String curSsid = WiFi.SSID(), curPass = wifiCurrentPassword();
+        String newPass = clear ? String() : (pass.length() ? pass : curPass);
+        if (ssid.length() && gCfg.wifiEn && !wifiChangeBusy() && (ssid != curSsid || newPass != curPass)) {
+            if (wifiRequestChange(ssid.c_str(), newPass.c_str(), !server.hasArg("wifinotest"))) wifiChange = true;
+            else addRejected(rejected, "WiFi (name 1-32 characters, password 8-63 characters or none)");
+        } else if (ssid.isEmpty()) {
+            addRejected(rejected, "WiFi network (empty)");
+        }
+    }
+    if (rejected.length()) rejectedMsg = "Invalid, kept the stored value: " + rejected + ".";
+
+    if (wifiChange) {
+        if (restart) { saveConfig(next); restartAtMs = millis() + 1000; if (restartAtMs == 0) restartAtMs = 1; }
+        else         saveConfig(gCfg);
+        String html;
+        pageStart(html, "settings", "/api/settings", 75);
+        if (server.hasArg("wifinotest")) {
+            html += "<div class='banner okb'>Saved. The new WiFi network is stored without a test; the node leaves "
+                    "this network now";
+            html += restart ? " and restarts to apply the other network/LoRaWAN settings" : "";
+            html += " and connects as soon as the new network is in range.</div>";
+        } else {
+            html += "<div class='banner okb'>Saved. The node now tries the new WiFi network for up to 60&nbsp;s";
+            html += restart ? " and then restarts to apply the other network/LoRaWAN settings" : "";
+            html += ". If it connects, it stays there &mdash; reach it again by its name or the IP on the display. "
+                    "Otherwise it returns to the current network and this page shows a notice. It reloads in 75&nbsp;s.</div>";
+        }
+        if (rejectedMsg.length()) { html += "<div class='banner badb'>"; appendEscaped(html, rejectedMsg.c_str()); html += "</div>"; }
+        html += "</body></html>";
+        server.send(200, "text/html; charset=utf-8", html);
+        dbgSerial.println("Web settings: WiFi network change requested");
+        return;
+    }
+
     if (restart) {
         saveConfig(next);
         String html;
@@ -1097,7 +1417,8 @@ void webApiTask(void*)
 
         // Deferred restart after a restart-requiring settings save (see
         // handleSettingsPost()) — the response has been sent by now.
-        if (restartAtMs && (long)(millis() - restartAtMs) >= 0) ESP.restart();
+        // A WiFi change test runs first (it would be cut short otherwise).
+        if (restartAtMs && (long)(millis() - restartAtMs) >= 0 && !wifiChangeBusy()) ESP.restart();
 
         vTaskDelay(5 / portTICK_PERIOD_MS);
     }

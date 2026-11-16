@@ -148,10 +148,48 @@ function testBinaryVersion1StillDecoded() {
   eq(d.rain_since_start_mm, 320, 'binary v1 rain since');
 }
 
+function testBinaryV2VictronBlockStillDecoded() {
+  const bytes = [0x02, 0x00, 0x00, 0x00, 0x04,         // bit 26: 14-byte VE.Direct block (v1-v3)
+    0x05, 0x30, 0xFF, 0x85, 0x0E, 0xA6, 0x00, 0x2D, 0x03, 0x00, 0x00, 0x0C, 0xFF, 0xFF];
+  const d = Decode(3, bytes);
+  eq(d.proto_version, 2, 'binary v2 version');
+  eq(d.victron_battery_v, 13.28, 'v2 Victron battery V');
+  eq(d.victron_battery_a, -1.23, 'v2 Victron battery A');
+  eq(d.victron_pv_v, 37.5, 'v2 Victron PV V');
+  eq(d.victron_pv_w, 45, 'v2 Victron PV W');
+  eq(d.victron_charge_state_text, 'bulk', 'v2 Victron CS');
+  eq(d.victron_yield_today_kwh, 0.12, 'v2 Victron yield');
+  eq(d.victron_soc_pct, undefined, 'v2 Victron SOC absent');
+}
+
+function testLppLightAndSources() {
+  const d = Decode(1, [
+    15, 100, 0x00, 0x01, 0x81, 0xCD,   // generic sensor: 98765 lx
+    16, 100, 0x00, 0x00, 0x82, 0x9A    // sources: tempHum wireless, wind wireless, rain board, UV wireless, light wireless, battery low
+  ]);
+  eq(d.light_lux, 98765, 'LPP illuminance');
+  eq(d.sources.temp_humidity, 'wireless', 'LPP source temp/hum');
+  eq(d.sources.rain, 'board', 'LPP source rain');
+  eq(d.sources.light, 'wireless', 'LPP source light');
+  eq(d.wireless_battery_low, true, 'LPP wireless battery low');
+}
+
 function testBinaryUnknownVersion() {
   const d = decodeUplink({ fPort: 3, bytes: [0x09, 0, 0, 0, 0] }).data;
   assert.ok(typeof d.error === 'string' && d.error.indexOf('unsupported binary protocol version') !== -1,
     'binary unknown version rejected');
+}
+
+function testDerivedValues() {
+  // v4 uplink from the field (Rev 1.2): 1.4 °C, 89 %, wind 47° 5.79 km/h
+  const hex = '04ff9e808020002f0243028c000000000000001601b2278524f7000e0015';
+  const d = decodeUplink({ fPort: 3, bytes: [...Buffer.from(hex, 'hex')] }).data;
+  eq(d.wind_direction_text, 'NE', 'derived compass text');
+  eq(d.dew_point, -0.2, 'derived dew point');
+  eq(d.feels_like, -0.3, 'derived wind chill');
+  eq(d.cloud_base_m, 202, 'derived cloud base');
+  eq(d.warnings.frost, false, 'derived frost warning');
+  eq(d.warnings.fog, false, 'derived fog warning');
 }
 
 testLppMetric();
@@ -161,5 +199,8 @@ testLppIoBlock();
 testUvLppChannels();
 testBinaryUvExtensionAndTruncation();
 testBinaryVersion1StillDecoded();
+testBinaryV2VictronBlockStillDecoded();
+testLppLightAndSources();
 testBinaryUnknownVersion();
+testDerivedValues();
 console.log('All decoder tests passed.');

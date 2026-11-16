@@ -74,7 +74,15 @@ void sensorsInit(const PinSet& pins);
 int      adcAverage(int pin, int samples = 8);
 float    readBatteryVoltage();
 uint16_t readWindDirection();
-float    readPulseCounters();   // updates windSpeedMs/windGustMs/rainMMSinceStart; returns this sub-sample's rain (mm)
+// One wind sample: raw pulses since the previous read. Aggregation (means,
+// 3-s gust, per-path windows) happens in wind_window.h / main.cpp.
+struct PulseSample {
+    bool     windValid  = false;   // wind enabled and the rate is plausible
+    uint16_t windPulses = 0;
+    uint16_t elapsedMs  = 0;       // time the pulses were counted over
+    float    rainMm     = 0.0f;    // also added to rainMMSinceStart
+};
+PulseSample readPulseCounters();
 bool     readBme280();          // updates bme280TempC/Humidity/PressAbs/PressSea; re-probes/re-inits if absent (hot-plug), false if no valid reading
 // Non-blocking DS18B20 read, split across two calls so loop() (button, WiFi/
 // MQTT poll, watchdog) stays responsive during the ~750 ms conversion time

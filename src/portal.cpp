@@ -1,4 +1,5 @@
 #include "portal.h"
+#include "wind_window.h"
 #include "globals.h"
 #include "sensors.h"
 #include "board_io.h"
@@ -78,7 +79,7 @@ Config runConfigPortal(const Config& cur)
     display.drawString(0, 0, "Starting config portal...");
     display.display();
 
-    char b_dev[17], b_join[17], b_key[33], b_region[8], b_pcb[4], b_alt[8], b_uplink[8], b_sample[4], b_windoff[6], b_windunit[2], b_debug[2], b_cpu[4], b_payfmt[2], b_unitsys[2];
+    char b_dev[17], b_join[17], b_key[33], b_region[8], b_pcb[4], b_alt[8], b_uplink[8], b_sample[4], b_mqttsec[8], b_lorawagg[2], b_mqttwagg[2], b_rfen[2], b_rfproto[2], b_windoff[6], b_windunit[2], b_debug[2], b_cpu[4], b_payfmt[2], b_unitsys[2];
     char b_rainmmtip[12], b_windmspp[12], b_winddirtyp[2];
     char b_loraen[2], b_lowpower[2], b_vanesave[2];
     itoa(cur.loraEn,          b_loraen,  10);
@@ -92,6 +93,14 @@ Config runConfigPortal(const Config& cur)
     itoa(cur.altitudeM,        b_alt,     10);
     itoa(cur.uplinkIntervalSec, b_uplink,  10);
     itoa(cur.sampleSec,        b_sample,  10);
+    itoa(cur.mqttIntervalSec,  b_mqttsec, 10);
+    itoa(cur.loraWindAgg,      b_lorawagg, 10);
+    itoa(cur.mqttWindAgg,      b_mqttwagg, 10);
+    itoa(cur.rfEn,             b_rfen,    10);
+    itoa(cur.rfProto,          b_rfproto, 10);
+    // value sources as one field: "air,wind,rain,uv,light" (0 auto, 1 board, 2-5 wireless 1-4, 6 off)
+    char b_srcs[16];
+    snprintf(b_srcs, sizeof(b_srcs), "%u,%u,%u,%u,%u", cur.srcSel[0], cur.srcSel[1], cur.srcSel[2], cur.srcSel[3], cur.srcSel[4]);
     itoa(cur.windDirOffsetDeg, b_windoff, 10);
     itoa(cur.windUnitMs,       b_windunit, 10);
     itoa(cur.debugMode,        b_debug,   10);
@@ -175,8 +184,15 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_region ("region",   "LoRaWAN region (EU868, US915, AU915, AS923, IN865, KR920, CN470, RU864)", b_region, 8);
     WiFiManagerParameter p_pcb    ("pcbver",   "PCB revision (12=Rev1.2, 13=Rev1.3, 20=v2.0; v2.0 is detected automatically)", b_pcb, 3);
     WiFiManagerParameter p_alt    ("altitude", "Altitude above sea level in m (0-4000)",       b_alt,     6);
-    WiFiManagerParameter p_uplink ("uplinksec","Uplink interval in s (5-3600 typical)",         b_uplink, 7);
-    WiFiManagerParameter p_sample ("samplesec","Sample interval in s (1 to uplink interval)",  b_sample, 4);
+    WiFiManagerParameter p_uplink ("uplinksec","LoRaWAN / measurement interval in s (5-3600)",  b_uplink, 7);
+    WiFiManagerParameter p_sample ("samplesec","Wind sample interval in s: 1 or 3",            b_sample, 4);
+    WiFiManagerParameter p_lorawagg("lorawagg","LoRaWAN wind values: 0 = interval since the last uplink, 1 = 10-min (WMO)", b_lorawagg, 2);
+    WiFiManagerParameter p_mqttsec ("mqttsec", "MQTT interval in s: 0 = like the LoRaWAN interval, else 2-3600", b_mqttsec, 7);
+    WiFiManagerParameter p_mqttwagg("mqttwagg","MQTT wind values: 0 = interval since the last publish, 1 = 10-min (WMO)", b_mqttwagg, 2);
+    WiFiManagerParameter p_rfen    ("rfen",    "Wireless sensors (868 MHz): 1 = receive with the LoRa chip between uplinks", b_rfen, 2);
+    WiFiManagerParameter p_rfproto ("rfproto", "Wireless sensor type: 1 = Bresser, 6 = TFA/LaCrosse IT+ (both rates), 2 = IT+ 17.241 kbit/s only, 4 = IT+ 9.579 kbit/s only, 7 = Bresser + IT+ alternating (misses packets, not recommended)", b_rfproto, 2);
+    WiFiManagerParameter p_rfids   ("rfids",   "Wireless sensor IDs (hex, comma-separated, max 4; empty = any)", cur.rfIds, sizeof(cur.rfIds) - 1);
+    WiFiManagerParameter p_srcs    ("srcs",    "Value sources temp/hum, wind, rain, UV, light (0 auto, 1 board, 2-5 wireless 1-4, 6 off)", b_srcs, 15);
     WiFiManagerParameter p_windoff("windoff",  "Wind direction offset in degrees (-180 to +180)", b_windoff, 5);
 
     // Grouped so the unit-related fields aren't scattered across the page:
@@ -424,8 +440,23 @@ Config runConfigPortal(const Config& cur)
         if (atoi(p_alt.getValue()) >= 0) c.altitudeM = atoi(p_alt.getValue());
         if (atoi(p_uplink.getValue()) > 0) c.uplinkIntervalSec = atoi(p_uplink.getValue());
         int ss = atoi(p_sample.getValue());
-        int uplinkIntervalSecVal = c.uplinkIntervalSec; // std::min can't deduce a common type across int/volatile int
-        c.sampleSec        = (ss > 0) ? min(ss, uplinkIntervalSecVal) : c.sampleSec;
+        c.sampleSec        = (ss > 0) ? windSampleSecNormalized(ss) : c.sampleSec;
+        c.loraWindAgg      = atoi(p_lorawagg.getValue()) == 1 ? 1 : 0;
+        c.mqttWindAgg      = atoi(p_mqttwagg.getValue()) == 1 ? 1 : 0;
+        int ms = atoi(p_mqttsec.getValue());
+        c.mqttIntervalSec  = (ms == 0 || (ms >= 2 && ms <= 3600)) ? ms : c.mqttIntervalSec;
+        { int v = atoi(p_rfen.getValue()); c.rfEn = v == RF_RADIO_SX1262 ? RF_RADIO_SX1262 : RF_RADIO_OFF; }
+        { int v = atoi(p_rfproto.getValue()); if (v >= 1 && v <= RF_PROTO_ALL) c.rfProto = v; }
+        strlcpy(c.rfIds, p_rfids.getValue(), sizeof(c.rfIds));
+        {
+            const char* p = p_srcs.getValue();
+            for (int i = 0; i < 5 && *p; i++) {
+                int v = atoi(p);
+                if (v >= 0 && v <= 6) c.srcSel[i] = (uint8_t)v;
+                while (*p && *p != ',') p++;
+                if (*p == ',') p++;
+            }
+        }
         c.windDirOffsetDeg = constrain(atoi(p_windoff.getValue()), -180, 180);
         c.windUnitMs       = (atoi(p_windunit.getValue()) == 0) ? 0 : 1;
         c.unitSystem       = (atoi(p_unitsys.getValue()) == 1) ? 1 : 0;
@@ -554,7 +585,8 @@ Config runConfigPortal(const Config& cur)
     wm.addParameter(&p_windoff);
     wm.addParameter(&p_general_section);
     wm.addParameter(&p_pcb);    wm.addParameter(&p_alt);    wm.addParameter(&p_uplink);
-    wm.addParameter(&p_sample);
+    wm.addParameter(&p_sample); wm.addParameter(&p_lorawagg);
+    wm.addParameter(&p_rfen);   wm.addParameter(&p_rfproto); wm.addParameter(&p_rfids);   wm.addParameter(&p_srcs);
     wm.addParameter(&p_winden);
     wm.addParameter(&p_rainen); wm.addParameter(&p_lipo);   wm.addParameter(&p_debug); wm.addParameter(&p_cpu);
 
@@ -575,6 +607,7 @@ Config runConfigPortal(const Config& cur)
     wm.addParameter(&p_webapien); wm.addParameter(&p_webadminpw);
     wm.addParameter(&p_mqtten);   wm.addParameter(&p_mqttctrlen);
     wm.addParameter(&p_mqtthost); wm.addParameter(&p_mqttport); wm.addParameter(&p_mqttuser);
+    wm.addParameter(&p_mqttsec);  wm.addParameter(&p_mqttwagg);
     wm.addParameter(&p_mqttpass); wm.addParameter(&p_mqtttopic);wm.addParameter(&p_mqtttls);
     wm.addParameter(&p_cacert_html);
 

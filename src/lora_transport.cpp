@@ -6,13 +6,33 @@
 // Defined by heltec_unofficial.h in main.cpp (that header owns definitions).
 extern SX1262 radio;
 LoRaWANNode* loRaNode = nullptr;
+void (*gLoraRadioTakenHook)() = nullptr;
+
+void loraRadioTaken()
+{
+    if (gLoraRadioTakenHook) gLoraRadioTakenHook();
+}
+LoraDiag gLoraDiag;
 
 namespace {
 bool radioInitialized = false;
 bool attempted = false;
 std::atomic<bool> joined{false};
 unsigned long lastAttemptMs = 0;
-constexpr unsigned long RETRY_MS = 60000;
+// Join retry backoff: 1, 2, 4, ... 64 min (capped at 60 min) between failed
+// attempts, back to 1 min after a successful join. Every attempt costs ~1.5 s
+// airtime at SF12 and one DevNonce (65536 per device): a fixed 1-min retry
+// during a network outage would exceed the join duty cycle LoRaWAN asks for
+// and use up the nonces within about 45 days.
+constexpr unsigned long RETRY_MIN_MS = 60000;
+constexpr unsigned long RETRY_MAX_MS = 3600000;
+unsigned long retryMs = RETRY_MIN_MS;
+void joinFailed()
+{
+    lastAttemptMs = millis();
+    dbgSerial.printf("LoRaWAN join failed; measurements/WiFi continue, retry in %lu min.\n", retryMs / 60000);
+    retryMs = retryMs * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : retryMs * 2;
+}
 }
 
 bool loraReady()
@@ -23,8 +43,9 @@ bool loraReady()
 void loraPoll()
 {
     if (!gCfg.loraEn || loraReady()) return;
-    if (attempted && millis() - lastAttemptMs < RETRY_MS) return;
+    if (attempted && millis() - lastAttemptMs < retryMs) return;
     attempted = true;
+    loraRadioTaken();   // join exchange: the transceiver leaves any other mode
 
     if (!radioInitialized) {
         int16_t state = radio.begin();
@@ -44,12 +65,13 @@ void loraPoll()
     }
     loRaNode = persist.manage(&radio);
     joined.store(loRaNode && loRaNode->isActivated());
-    lastAttemptMs = millis();
     if (!loraReady()) {
         delete loRaNode;
         loRaNode = nullptr;
-        dbgSerial.println("LoRaWAN join failed; measurements/WiFi continue, retry in 60 s.");
+        joinFailed();
     } else {
+        lastAttemptMs = millis();
+        retryMs = RETRY_MIN_MS;
         dbgSerial.println("LoRaWAN joined; uplinks resume at the next measurement cycle.");
     }
     loraSleep();
@@ -58,6 +80,7 @@ void loraPoll()
 void loraReconnect()
 {
     joined.store(false);
+    gLoraDiag.rejoins++;
     if (loRaNode) {
         loRaNode->clearSession();
         if (!persist.saveSession(loRaNode))
@@ -72,5 +95,6 @@ void loraReconnect()
 
 void loraSleep()
 {
+    loraRadioTaken();
     if (radioInitialized) radio.sleep();
 }

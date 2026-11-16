@@ -1,0 +1,528 @@
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// WeatherSensor.cpp
+//
+// Bresser 5-in-1/6-in-1/7-in1 868 MHz Weather Sensor Radio Receiver
+// based on CC1101 or SX1276/RFM95W, SX1262 or LR1121 and ESP32/ESP8266
+//
+// https://github.com/matthias-bs/BresserWeatherSensorReceiver
+//
+// Based on:
+// ---------
+// Bresser5in1-CC1101 by Sean Siford (https://github.com/seaniefs/Bresser5in1-CC1101)
+// RadioLib by Jan Gromeš (https://github.com/jgromes/RadioLib)
+// rtl433 by Benjamin Larsson (https://github.com/merbanan/rtl_433)
+//     - https://github.com/merbanan/rtl_433/blob/master/src/devices/bresser_5in1.c
+//     - https://github.com/merbanan/rtl_433/blob/master/src/devices/bresser_6in1.c
+//     - https://github.com/merbanan/rtl_433/blob/master/src/devices/bresser_7in1.c
+//
+// created: 05/2022
+//
+//
+// MIT License
+//
+// Copyright (c) 2026 Matthias Prinke
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// History:
+//
+// 20220523 Created from https://github.com/matthias-bs/Bresser5in1-CC1101
+// 20220524 Moved code to class WeatherSensor
+// 20220526 Implemented getData(), changed debug output to macros
+// 20220731 Updated decodeBresser5In1Payload()/decodeBresser6In1Payload() from rtl_433 project
+// 20220815 Added support of multiple sensors
+//          Moved windspeed_ms_to_bft() to WeatherUtils.h/.cpp
+// 20220905 Improved code quality and added Doxygen comments
+// 20221003 Fixed humidity decoding in decodeBresser5In1Payload()
+// 20221024 Modified WeatherSensorCfg.h/WeatherSensor.h handling
+// 20221227 Replaced DEBUG_PRINT/DEBUG_PRINTLN by Arduino logging functions
+// 20230111 Added additional digit for rain gauge in 5in1-decoder (maximum is now 999.9mm)
+// 20230114 Modified decodeBresser6In1Payload() to distinguish msg type based on 'flags' (msg[16])
+// 20230228 Added Bresser 7 in 1 decoder by Jorge Navarro-Ortiz (jorgenavarro@ugr.es)
+// 20230329 Fixed issue introduced with 7 in 1 decoder
+// 20230412 Added workaround for Professional Wind Gauge / Anemometer, P/N 7002531
+// 20230412 Fixed 7 in 1 decoder (valid/complete flags were not set)
+// 20230624 Added Bresser Lightning Sensor decoder
+// 20230613 Fixed rain value in 7 in 1 decoder
+// 20230708 Added startup flag in 6-in-1 and 7-in-1 decoder; added sensor type in 7-in-1 decoder
+// 20230710 Added verbose log message with de-whitened data (7-in-1 and lightning decoder)
+// 20230716 Added decodeMessage() to separate decoding function from receiving function
+// 20230804 Added Bresser Water Leakage Sensor (P/N 7009975) decoder
+// 20230814 Fixed receiver state handling in getMessage()
+// 20231006 Added crc16() from https://github.com/merbanan/rtl_433/blob/master/src/util.c
+//          Added CRC check in decodeBresserLeakagePayload()
+// 20231024 Added Pool / Spa Thermometer (P/N 7009973) to 6-in-1 decoder
+// 20231026 Added Air Quality Sensor (Particulate Matter, P/N 7009970) to 7-in-1 decoder
+//          Modified decoding of sensor type (to raw, non de-whitened data)
+// 20231028 Fixed startup flag polarity in 7-in-1, lightning and leakage decoder
+// 20231030 Refactored sensor data using a union to save memory
+// 20231101 Added radio transceiver SX1262
+// 20231112 Added setting of rain_ok in genMessage()
+// 20231130 Bresser 3-in-1 Professional Wind Gauge / Anemometer, PN 7002531: Replaced workaround
+//          for negative temperatures by fix (6-in-1 decoder)
+// 20231202 Changed reception to interrupt mode to fix issues with CC1101 and SX1262
+// 20231218 Fixed inadvertent end of reception due to transceiver sleep mode
+// 20231227 Added sleep()
+// 20240116 Fixed counter width and assignment to unknown1 in decodeBresserLightningPayload()
+// 20240117 Fixed counter decoding (changed from binary to BCD) in decodeBresserLightningPayload()
+// 20240208 Added sensors for CO2, P/N 7009977 and HCHO/VOC, P/N 7009978 to 7-in-1 decoder
+//          see https://github.com/merbanan/rtl_433/pull/2815
+//            & https://github.com/merbanan/rtl_433/pull/2817
+// 20240213 Added PM1.0 to air quality (PM) sensor decoder
+// 20240322 Added pin definitions for M5Stack Core2 with M5Stack Module LoRa868
+// 20240409 Added radioReset()
+// 20240416 Added enabling of 3.3V power supply for FeatherWing on ESP32-S3 PowerFeather
+// 20240417 Added sensor configuration at run time
+// 20240423 Implemented setting of sensor_ids_inc/sensor_ids_exc to empty if first value in
+//          Preferences is 0x00000000
+// 20240506 Changed sensor from array to std::vector, added getSensorsCfg() / setSensorsCfg()
+// 20240507 Added configuration of enabled decoders at run time
+// 20240508 Fixed configuration of enabled decoders at run time
+// 20240513 Refactoring: Split into 3 files
+//          - Reception/utility part (this file)
+//          - Sensor data decoding functions (WeatherSensorDecoders.cpp)
+//          - Run-time configuration functions (WeatherSensorConfig.cpp)
+// 20240528 Fixed channel comparison in findType()
+// 20240608 Modified implementation of maximum number of sensors
+// 20240609 Fixed implementation of maximum number of sensors
+// 20240714 Added option to skip initialization of include/exclude lists
+// 20241205 Added radio LR1121
+// 20241227 Added LilyGo T3 S3 LR1121 RF switch and TCXO configuration
+// 20250127 Added SENSOR_TYPE_WEATHER8 (8-in-1 Weather Sensor) to 7-in-1 decoder
+// 20250709 Fixed radio->readData() state check in getMessage()
+// 20260111 Fixed radio module initialization for LilyGo T3S3 boards using RadioLib 7.5.0
+// 20260114 Added RF switch configuration for Seeed Studio XIAO ESP32S3 with Wio-SX1262
+// 20260116 Changed TCXO voltage for Seeed Studio XIAO ESP32S3 with Wio-SX1262 to 3.0V
+// 20260119 Changed TCXO voltage for Seeed Studio XIAO ESP32S3 with Wio-SX1262 to 1.7V
+// 20260202 Moved radio object to separate namespace
+// 20260309 Fixed Static Initialization Order Fiasco (SIOF) for SPIClass on LilyGo T3S3 boards
+// 20260310 Added support for selecting SPI bus on ESP32 boards
+// 20260611 Added pin definitions for Heltec Wireless Stick Lite V3 (SX1262)
+// 20260514 Added RF switch and TCXO configuration for Heltec WiFi LoRa 32(V4)
+// 20260619 Added returning state in begin() in case of initialization failure
+// 20260620 Fixed SPI pin reset by RadioLib for CC1101 with LORA_SPI_BUS
+//          Changed radio initialization to new ConfigFSK_t structure in RadioLib 7.7.x
+// 20261108 Updated to RadioLib 8.0.0
+//
+// ToDo:
+// -
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+#include "WeatherSensorCfg.h"
+#include "WeatherSensor.h"
+
+namespace WeatherSensorReceiver
+{
+    // universal-weather-node fork: set by WeatherSensor::setRadio()
+    SX1262* radio = nullptr;
+}
+
+using namespace WeatherSensorReceiver;
+
+
+#if defined(ARDUINO_HELTEC_WIFI_LORA_32_V4)
+// Enable FEM (Front-End Module) power supply (VFEM_Ctrl, GPIO7) and FEM chip enable (CSD, GPIO2).
+// The RF path goes through the GC1109/KCT8103L FEM (RF power amplifier / LNA); without these
+// the signal path is blocked and reception does not work.
+// See: https://github.com/meshtastic/firmware/blob/master/variants/esp32s3/heltec_v4/variant.h
+static void femEnable(void)
+{
+    pinMode(7, OUTPUT);
+    digitalWrite(7, HIGH);
+    pinMode(2, OUTPUT);
+    digitalWrite(2, HIGH);
+}
+
+static void femDisable(void)
+{
+    digitalWrite(7, LOW);
+    digitalWrite(2, LOW);
+}
+#endif
+
+// Flag to indicate that a packet was received
+static volatile bool receivedFlag = false;
+
+// This function is called when a complete packet is received by the module
+// IMPORTANT: This function MUST be 'void' type and MUST NOT have any arguments!
+#if defined(ESP8266) || defined(ESP32)
+IRAM_ATTR
+#endif
+void setFlag(void)
+{
+    // We got a packet, set the flag
+    receivedFlag = true;
+}
+
+int16_t WeatherSensor::begin(uint8_t max_sensors_default, bool init_filters, int32_t frequency_offset)
+{
+    uint8_t maxSensors = max_sensors_default;
+    getSensorsCfg(maxSensors, rxFlags, enDecoders);
+    log_d("max_sensors: %u", maxSensors);
+    log_d("rx_flags: %u", rxFlags);
+    log_d("en_decoders: %u", enDecoders);
+    sensor.resize(maxSensors);
+
+    if (init_filters)
+    {
+        // List of sensor IDs to be excluded - can be empty
+        std::vector<uint32_t> sensor_ids_exc_def = SENSOR_IDS_EXC;
+        initList(sensor_ids_exc, sensor_ids_exc_def, "exc");
+
+        // List of sensor IDs to be included - if zero, handle all available sensors
+        std::vector<uint32_t> sensor_ids_inc_def = SENSOR_IDS_INC;
+        initList(sensor_ids_inc, sensor_ids_inc_def, "inc");
+    }
+
+    return startReceive(frequency_offset);
+}
+
+// universal-weather-node fork: FSK setup split out of begin() so it can be
+// repeated after LoRaWAN used the shared transceiver. RadioLib 7.x units
+// (MHz / kbps / kHz) instead of the RadioLib 8 Hz-based ConfigFSK_t.
+int16_t WeatherSensor::startReceive(int32_t frequency_offset)
+{
+    if (!radio)
+        return RADIOLIB_ERR_NULL_POINTER;
+
+    // https://github.com/RFD-FHEM/RFFHEM/issues/607#issuecomment-830818445
+    // Freq: 868.300 MHz, Bandwidth: 203 KHz, rAmpl: 33 dB, sens: 8 dB, DataRate: 8207.32 Baud
+    ConfigFSK_t config;
+    config.frequency = 868.3f + frequency_offset / 1000000.0f;  // MHz
+    config.bitRate = 8.21f;                                     // kbps
+    config.frequencyDeviation = 57.136417f;                     // kHz
+    config.power = 10;                                          // dBm
+    config.preambleLength = 32;                                 // bits
+    // RX bandwidth (double-side band), SX1262
+    config.receiverBandwidth = 234.3f;
+    if (!radio)
+        return RADIOLIB_ERR_NULL_POINTER;
+    int state = radio->beginFSK(config);
+    if (state == RADIOLIB_ERR_NONE) state = radio->fixedPacketLengthMode(MSG_BUF_SIZE);
+    if (state == RADIOLIB_ERR_NONE) state = radio->setCRC(0);
+    // Preamble: AA AA AA AA AA, sync: 2D D4. The sync is set to AA 2D (last
+    // preamble byte + first sync byte); the 2nd sync byte D4 is received as
+    // the 1st payload byte and checked in getMessage().
+    uint8_t sync_word[] = {0xAA, 0x2D};
+    if (state == RADIOLIB_ERR_NONE) state = radio->setSyncWord(sync_word, 2);
+    if (state != RADIOLIB_ERR_NONE)
+    {
+        log_e("%s FSK setup failed: [%d]", RECEIVER_CHIP, state);
+        return state;
+    }
+
+    rssi = radio->getRSSI();
+    receivedFlag = false;
+    radio->setPacketReceivedAction(setFlag);
+
+    state = radio->startReceive();
+    if (state != RADIOLIB_ERR_NONE)
+        log_e("%s startReceive() failed, code %d", RECEIVER_CHIP, state);
+    return state;
+}
+
+void WeatherSensor::radioReset(void)
+{
+    if (!radio) return;
+    radio->reset();
+}
+
+void WeatherSensor::sleep(void)
+{
+    if (!radio) return;
+    radio->sleep();
+#if defined(ARDUINO_HELTEC_WIFI_LORA_32_V4)
+    femDisable();
+#endif
+}
+
+bool WeatherSensor::getData(uint32_t timeout, uint8_t flags, uint8_t type, void (*func)())
+{
+    const uint32_t timestamp = millis();
+
+#if defined(ARDUINO_HELTEC_WIFI_LORA_32_V4)
+    femEnable();
+#endif
+    radio->startReceive();
+
+    while ((millis() - timestamp) < timeout)
+    {
+        int decode_status = getMessage();
+
+        // Callback function (see https://www.geeksforgeeks.org/callbacks-in-c/)
+        if (func)
+        {
+            (*func)();
+        }
+
+        if (decode_status == DECODE_OK)
+        {
+            bool all_slots_valid = true;
+            bool all_slots_complete = true;
+
+            for (size_t i = 0; i < sensor.size(); i++)
+            {
+                if (!sensor[i].valid)
+                {
+                    all_slots_valid = false;
+                    continue;
+                }
+
+                // No special requirements, one valid message is sufficient
+                if (flags == 0)
+                {
+                    radio->standby();
+                    return true;
+                }
+
+                // Specific sensor type required
+                if (((flags & DATA_TYPE) != 0) && (sensor[i].s_type == type))
+                {
+                    if (sensor[i].complete || !(flags & DATA_COMPLETE))
+                    {
+                        radio->standby();
+                        return true;
+                    }
+                }
+                // All slots required (valid AND complete) - must check all slots
+                else if (flags & DATA_ALL_SLOTS)
+                {
+                    all_slots_valid &= sensor[i].valid;
+                    all_slots_complete &= sensor[i].complete;
+                }
+                // At least one sensor valid and complete
+                else if (sensor[i].complete)
+                {
+                    radio->standby();
+                    return true;
+                }
+            } // for (size_t i=0; i<sensor.size(); i++)
+
+            // All slots required (valid AND complete)
+            if ((flags & DATA_ALL_SLOTS) && all_slots_valid && all_slots_complete)
+            {
+                radio->standby();
+                return true;
+            }
+
+        } // if (decode_status == DECODE_OK)
+    } //  while ((millis() - timestamp) < timeout)
+
+    // Timeout
+    radio->standby();
+    return false;
+}
+
+DecodeStatus WeatherSensor::getMessage(void)
+{
+    uint8_t recvData[MSG_BUF_SIZE];
+    DecodeStatus decode_res = DECODE_INVALID;
+
+    // Receive data
+    if (radio && receivedFlag)
+    {
+        receivedFlag = false;
+
+        int state = radio->readData(recvData, MSG_BUF_SIZE);
+        rssi = radio->getRSSI();
+        radio->startReceive();
+
+        if (state == RADIOLIB_ERR_NONE)
+        {
+            // Verify last syncword is 1st byte of payload (see setSyncWord() above)
+            if (recvData[0] == 0xD4)
+            {
+#if CORE_DEBUG_LEVEL == ARDUHAL_LOG_LEVEL_VERBOSE
+                char buf[128];
+                *buf = '\0';
+                for (size_t i = 0; (i < sizeof(recvData)) && (i < sizeof(buf) / 3); i++)
+                {
+                    sprintf(&buf[strlen(buf)], "%02X ", recvData[i]);
+                }
+                log_v("%s Data: %s", RECEIVER_CHIP, buf);
+#endif
+                log_d("%s R [%02X] RSSI: %0.1f", RECEIVER_CHIP, recvData[0], rssi);
+
+                decode_res = decodeMessage(&recvData[1], sizeof(recvData) - 1);
+            } // if (recvData[0] == 0xD4)
+        } // if (state == RADIOLIB_ERR_NONE)
+        else if (state == RADIOLIB_ERR_RX_TIMEOUT)
+        {
+            log_v("T");
+        }
+        else
+        {
+            // some other error occurred
+            log_d("%s Receive failed: [%d]", RECEIVER_CHIP, state);
+        }
+    }
+
+    return decode_res;
+}
+
+//
+// Generate sample data for testing
+//
+bool WeatherSensor::genMessage(int i, uint32_t id, uint8_t s_type, uint8_t channel, uint8_t startup)
+{
+    sensor[i].sensor_id = id;
+    sensor[i].s_type = s_type;
+    sensor[i].startup = startup;
+    sensor[i].chan = channel;
+    sensor[i].battery_ok = true;
+    sensor[i].rssi = 88.8;
+    sensor[i].valid = true;
+    sensor[i].complete = true;
+
+    if ((s_type == SENSOR_TYPE_WEATHER0) || (s_type == SENSOR_TYPE_WEATHER1))
+    {
+        sensor[i].w.temp_ok = true;
+        sensor[i].w.temp_c = 22.2f;
+        sensor[i].w.humidity_ok = true;
+        sensor[i].w.humidity = 55;
+#ifdef WIND_DATA_FLOATINGPOINT
+        sensor[i].w.wind_direction_deg = 111.1;
+        sensor[i].w.wind_gust_meter_sec = 4.4f;
+        sensor[i].w.wind_avg_meter_sec = 3.3f;
+#endif
+#ifdef WIND_DATA_FIXEDPOINT
+        sensor[i].w.wind_direction_deg_fp1 = 1111;
+        sensor[i].w.wind_gust_meter_sec_fp1 = 44;
+        sensor[i].w.wind_avg_meter_sec_fp1 = 33;
+#endif
+        sensor[i].w.wind_ok = true;
+        sensor[i].w.rain_ok = true;
+        sensor[i].w.rain_mm = 9.9f;
+    }
+    else if (s_type == SENSOR_TYPE_LIGHTNING)
+    {
+        sensor[i].lgt.strike_count = 42;
+        sensor[i].lgt.distance_km = 22;
+    }
+    else if (s_type == SENSOR_TYPE_LEAKAGE)
+    {
+        sensor[i].leak.alarm = 0;
+    }
+    else if (s_type == SENSOR_TYPE_SOIL)
+    {
+        sensor[i].soil.temp_c = 7.7f;
+        sensor[i].soil.moisture = 50;
+    }
+    else if (s_type == SENSOR_TYPE_AIR_PM)
+    {
+        sensor[i].pm.pm_2_5 = 1234;
+        sensor[i].pm.pm_10 = 1567;
+    }
+
+    return true;
+}
+
+//
+// Find required sensor data by ID
+//
+int WeatherSensor::findId(uint32_t id)
+{
+    for (size_t i = 0; i < sensor.size(); i++)
+    {
+        if (sensor[i].valid && (sensor[i].sensor_id == id))
+            return i;
+    }
+    return -1;
+}
+
+//
+// Find required sensor data by type and (optionally) channel
+//
+int WeatherSensor::findType(uint8_t type, uint8_t ch)
+{
+    for (size_t i = 0; i < sensor.size(); i++)
+    {
+        if (sensor[i].valid && (sensor[i].s_type == type) &&
+            ((ch == 0xFF) || (sensor[i].chan == ch)))
+            return i;
+    }
+    return -1;
+}
+
+//
+// From from rtl_433 project - https://github.com/merbanan/rtl_433/blob/master/src/util.c
+//
+uint16_t WeatherSensor::lfsr_digest16(uint8_t const message[], unsigned bytes, uint16_t gen, uint16_t key)
+{
+    uint16_t sum = 0;
+    for (unsigned k = 0; k < bytes; ++k)
+    {
+        uint8_t data = message[k];
+        for (int i = 7; i >= 0; --i)
+        {
+            // fprintf(stderr, "key at bit %d : %04x\n", i, key);
+            // if data bit is set then xor with key
+            if ((data >> i) & 1)
+                sum ^= key;
+
+            // roll the key right (actually the lsb is dropped here)
+            // and apply the gen (needs to include the dropped lsb as msb)
+            if (key & 1)
+                key = (key >> 1) ^ gen;
+            else
+                key = (key >> 1);
+        }
+    }
+    return sum;
+}
+
+//
+// From from rtl_433 project - https://github.com/merbanan/rtl_433/blob/master/src/util.c
+//
+int WeatherSensor::add_bytes(uint8_t const message[], unsigned num_bytes)
+{
+    int result = 0;
+    for (unsigned i = 0; i < num_bytes; ++i)
+    {
+        result += message[i];
+    }
+    return result;
+}
+
+//
+// From from rtl_433 project - https://github.com/merbanan/rtl_433/blob/master/src/util.c
+//
+uint16_t WeatherSensor::crc16(uint8_t const message[], unsigned nBytes, uint16_t polynomial, uint16_t init)
+{
+    uint16_t remainder = init;
+    unsigned byte, bit;
+
+    for (byte = 0; byte < nBytes; ++byte)
+    {
+        remainder ^= message[byte] << 8;
+        for (bit = 0; bit < 8; ++bit)
+        {
+            if (remainder & 0x8000)
+            {
+                remainder = (remainder << 1) ^ polynomial;
+            }
+            else
+            {
+                remainder = (remainder << 1);
+            }
+        }
+    }
+    return remainder;
+}

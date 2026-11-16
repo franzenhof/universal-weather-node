@@ -2,6 +2,7 @@
 #include "globals.h"
 #include "units.h"
 #include "board_io.h"
+#include "sources.h"
 #include "uv_calibration.h"
 #include <Arduino.h>
 #include <DallasTemperature.h>
@@ -33,7 +34,7 @@ struct HistorySample {
     int16_t  windGustX100;      // max over the bucket
     uint16_t windDirDeg;        // last valid reading in the bucket (not averaged — bearings wrap)
     int16_t  rainRateX100;      // average over the bucket
-    uint16_t rainAmountX10;     // *sum* over the bucket (mm accumulated, not a rate)
+    uint16_t rainAmountX100;    // *sum* over the bucket (mm accumulated, not a rate)
     int16_t  tempCx10;          // average over the bucket
     uint8_t  humidityX2;        // average over the bucket
     uint16_t pressureQnhX10;    // average over the bucket
@@ -47,13 +48,16 @@ constexpr uint8_t VALID_WIND   = 1 << 0;
 constexpr uint8_t VALID_RAIN   = 1 << 1;
 constexpr uint8_t VALID_BME280 = 1 << 2;
 constexpr uint8_t VALID_LIPO   = 1 << 3;
-constexpr uint8_t VALID_UV     = 1 << 4;
+constexpr uint8_t VALID_UV     = 1 << 4;   // UV index and/or voltage (see the two below)
+constexpr uint8_t VALID_HUM    = 1 << 5;   // humidity (VALID_BME280 = temperature; may come from a wireless sensor)
+constexpr uint8_t VALID_PRESS  = 1 << 6;   // pressure (BME280 only)
+constexpr uint8_t VALID_UVV    = 1 << 7;   // UV terminal voltage (board UV input only)
 
 // Defensive clamps before scaling to their fixed-width int fields, same
 // rationale as clampLppAnalog() in lora_payload.cpp — cheap insurance
 // against a silent wraparound rather than an actual expected case.
 constexpr float RAIN_RATE_LIMIT_MMH = 327.67f;
-constexpr float RAIN_AMOUNT_LIMIT_MM = 6553.5f;
+constexpr float RAIN_AMOUNT_LIMIT_MM = 655.35f;   // per bucket (x100 in a uint16)
 
 // -127.0°C x10 — DEVICE_DISCONNECTED_C itself, already well outside a
 // DS18B20's real -55..125°C range, reused as the "no reading" sentinel for
@@ -74,8 +78,9 @@ struct OpenBucket {
     uint16_t windDirLast = 0;
     float    rainRateSum = 0, rainAmountSum = 0;
     float    tempSum = 0, humiditySum = 0, pressureSum = 0, batterySum = 0;
+    uint16_t humCount = 0, pressCount = 0;
     float    uvVoltsSum = 0, uvIndexSum = 0;
-    uint16_t uvCount = 0, uvIndexCount = 0;
+    uint16_t uvCount = 0, uvIndexCount = 0;   // uvCount: board voltage samples
     float    ds18b20Sum[3] = {0, 0, 0};
     uint16_t ds18b20Count[3] = {0, 0, 0};
 };
@@ -102,28 +107,31 @@ void mergeIntoBucket(OpenBucket& b, unsigned long nowSec)
 {
     if (!b.started) { b.startSec = nowSec; b.started = true; }
 
-    if (gCfg.windEn) {
+    if (srcActive(SG_WIND)) {
         b.windGustMax = (b.windCount == 0) ? windGustMs : max(b.windGustMax, windGustMs);
         b.windSpeedSum += windSpeedMs;
         b.windDirLast   = windDirection;
         b.windCount++;
     }
-    if (gCfg.rainEn) {
+    if (srcActive(SG_RAIN)) {
         b.rainRateSum   += constrain(rainRateMmH, -RAIN_RATE_LIMIT_MMH, RAIN_RATE_LIMIT_MMH);
         b.rainAmountSum += constrain(rainMM, 0.0f, RAIN_AMOUNT_LIMIT_MM);
         b.rainCount++;
     }
-    if (bme280Present) {
-        b.tempSum     += bme280TempC;
-        b.humiditySum += bme280Humidity;
-        b.pressureSum += bme280PressSea;
+    if (gSrc.tempValid) {
+        b.tempSum     += gSrc.tempC;
         b.bmeCount++;
     }
+    if (gSrc.tempValid && gSrc.humValid) { b.humiditySum += gSrc.humidity; b.humCount++; }
+    if (bme280Present) { b.pressureSum += bme280PressSea; b.pressCount++; }
     if (gCfg.lipoEn) {
         b.batterySum += batteryVolt;
         b.lipoCount++;
     }
-    if (ioV2() && gCfg.uvEn && isfinite(gIo.uvSensorVolts)) {
+    if (gSrc.uvRadio) {
+        b.uvIndexSum += gSrc.uvIndexRadio;
+        b.uvIndexCount++;
+    } else if (gSrc.uvBoard && ioV2() && isfinite(gIo.uvSensorVolts)) {
         b.uvVoltsSum += gIo.uvSensorVolts;
         b.uvCount++;
         if (gIo.uvIndexCalibrated && isfinite(gIo.uvIndex)) {
@@ -149,7 +157,7 @@ void mergeIntoBucket(OpenBucket& b, unsigned long nowSec)
 bool sampleFromBucket(const OpenBucket& b, unsigned long endSec, HistorySample& out)
 {
     bool anyDs18b20 = b.ds18b20Count[0] || b.ds18b20Count[1] || b.ds18b20Count[2];
-    if (!(b.windCount || b.rainCount || b.bmeCount || b.lipoCount || b.uvCount || anyDs18b20)) return false;
+    if (!(b.windCount || b.rainCount || b.bmeCount || b.pressCount || b.lipoCount || b.uvCount || b.uvIndexCount || anyDs18b20)) return false;
 
     out = HistorySample{};
     out.bucketEndSec = endSec;
@@ -167,21 +175,28 @@ bool sampleFromBucket(const OpenBucket& b, unsigned long endSec, HistorySample& 
     if (b.rainCount) {
         out.validMask     |= VALID_RAIN;
         out.rainRateX100   = (int16_t)roundf(b.rainRateSum / b.rainCount * 100.0f);
-        out.rainAmountX10  = (uint16_t)roundf(b.rainAmountSum * 10.0f);
+        out.rainAmountX100 = (uint16_t)roundf(fminf(b.rainAmountSum, RAIN_AMOUNT_LIMIT_MM) * 100.0f);
     }
     if (b.bmeCount) {
         out.validMask      |= VALID_BME280;
         out.tempCx10        = (int16_t)roundf(b.tempSum / b.bmeCount * 10.0f);
-        out.humidityX2      = (uint8_t)roundf(b.humiditySum / b.bmeCount * 2.0f);
-        out.pressureQnhX10  = (uint16_t)roundf(b.pressureSum / b.bmeCount * 10.0f);
+    }
+    if (b.humCount) {
+        out.validMask      |= VALID_HUM;
+        out.humidityX2      = (uint8_t)roundf(b.humiditySum / b.humCount * 2.0f);
+    }
+    if (b.pressCount) {
+        out.validMask      |= VALID_PRESS;
+        out.pressureQnhX10  = (uint16_t)roundf(b.pressureSum / b.pressCount * 10.0f);
     }
     if (b.lipoCount) {
         out.validMask       |= VALID_LIPO;
         out.batteryVoltX100  = (uint16_t)roundf(b.batterySum / b.lipoCount * 100.0f);
     }
-    if (b.uvCount) {
+    if (b.uvCount || b.uvIndexCount) {
         out.validMask |= VALID_UV;
-        out.uvVoltsX1000 = (uint16_t)constrain(lroundf(b.uvVoltsSum / b.uvCount * 1000.0f), 0L, 5500L);
+        if (b.uvCount) out.validMask |= VALID_UVV;
+        out.uvVoltsX1000 = b.uvCount ? (uint16_t)constrain(lroundf(b.uvVoltsSum / b.uvCount * 1000.0f), 0L, 5500L) : 0;
         out.uvIndexX100 = b.uvIndexCount
             ? (uint16_t)constrain(lroundf(fminf(b.uvIndexSum / b.uvIndexCount, UV_INDEX_REPORT_MAX) * 100.0f), 0L, 32767L)
             : 0xFFFF;
@@ -246,27 +261,25 @@ void serializeTier(JsonDocument& doc, unsigned long nowSec, const HistorySample*
         }
         if (s.validMask & VALID_RAIN) {
             rainRate.add(rainRateForOutput(s.rainRateX100 / 100.0f, gCfg));
-            rainMm.add(rainForOutput(s.rainAmountX10 / 10.0f, gCfg));
+            rainMm.add(rainForOutput(s.rainAmountX100 / 100.0f, gCfg));
         } else {
             rainRate.add(nullptr);
             rainMm.add(nullptr);
         }
-        if (s.validMask & VALID_BME280) {
-            temp.add(temperatureForOutput(s.tempCx10 / 10.0f, gCfg));
-            humidityPct.add(s.humidityX2 / 2.0f);
-            pressureQnh.add(pressureForOutput(s.pressureQnhX10 / 10.0f, gCfg));
-        } else {
-            temp.add(nullptr);
-            humidityPct.add(nullptr);
-            pressureQnh.add(nullptr);
-        }
+        if (s.validMask & VALID_BME280) temp.add(temperatureForOutput(s.tempCx10 / 10.0f, gCfg));
+        else temp.add(nullptr);
+        if (s.validMask & VALID_HUM) humidityPct.add(s.humidityX2 / 2.0f);
+        else humidityPct.add(nullptr);
+        if (s.validMask & VALID_PRESS) pressureQnh.add(pressureForOutput(s.pressureQnhX10 / 10.0f, gCfg));
+        else pressureQnh.add(nullptr);
         if (s.validMask & VALID_LIPO) {
             batteryVolt.add(s.batteryVoltX100 / 100.0f);
         } else {
             batteryVolt.add(nullptr);
         }
         if (s.validMask & VALID_UV) {
-            uvSensorVolts.add(s.uvVoltsX1000 / 1000.0f);
+            if (s.validMask & VALID_UVV) uvSensorVolts.add(s.uvVoltsX1000 / 1000.0f);
+            else uvSensorVolts.add(nullptr);
             if (s.uvIndexX100 != 0xFFFF) uvIndex.add(s.uvIndexX100 / 100.0f);
             else uvIndex.add(nullptr);
         } else {
@@ -335,4 +348,53 @@ void buildHistoryJson(JsonDocument& doc, bool coarse)
     if (coarse) serializeTier(doc, nowSec, coarseRing, HISTORY_COARSE_CAPACITY, coarseHead, coarseCount, coarseOpen);
     else        serializeTier(doc, nowSec, fineRing,   HISTORY_FINE_CAPACITY,   fineHead,   fineCount,   fineOpen);
     xSemaphoreGive(historyMutex);
+}
+
+namespace {
+// Fine-tier sample whose end is closest to ageSec ago (at most 10 min off).
+// Caller holds historyMutex.
+const HistorySample* fineSampleAgo(unsigned long nowSec, uint32_t ageSec, uint8_t needMask)
+{
+    const HistorySample* best = nullptr;
+    long bestDiff = 601;
+    for (size_t i = 0; i < fineCount; i++) {
+        const HistorySample& s = fineRing[i];
+        if (!(s.validMask & needMask)) continue;
+        long diff = labs((long)(nowSec - s.bucketEndSec) - (long)ageSec);
+        if (diff < bestDiff) { bestDiff = diff; best = &s; }
+    }
+    return best;
+}
+} // namespace
+
+bool historyPressureAgo(uint32_t ageSec, float& qnhHpa)
+{
+    xSemaphoreTake(historyMutex, portMAX_DELAY);
+    const HistorySample* s = fineSampleAgo(uptimeSec(), ageSec, VALID_PRESS);
+    if (s) qnhHpa = s->pressureQnhX10 / 10.0f;
+    xSemaphoreGive(historyMutex);
+    return s != nullptr;
+}
+
+bool historyTempAgo(uint32_t ageSec, float& tempC)
+{
+    xSemaphoreTake(historyMutex, portMAX_DELAY);
+    const HistorySample* s = fineSampleAgo(uptimeSec(), ageSec, VALID_BME280);
+    if (s) tempC = s->tempCx10 / 10.0f;
+    xSemaphoreGive(historyMutex);
+    return s != nullptr;
+}
+
+float historyRainSum(uint32_t windowSec)
+{
+    unsigned long nowSec = uptimeSec();
+    float mm = 0.0f;
+    xSemaphoreTake(historyMutex, portMAX_DELAY);
+    for (size_t i = 0; i < fineCount; i++) {
+        const HistorySample& s = fineRing[i];
+        if ((s.validMask & VALID_RAIN) && nowSec - s.bucketEndSec < windowSec) mm += s.rainAmountX100 / 100.0f;
+    }
+    if (fineOpen.rainCount) mm += fineOpen.rainAmountSum;
+    xSemaphoreGive(historyMutex);
+    return mm;
 }

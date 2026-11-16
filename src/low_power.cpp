@@ -13,7 +13,8 @@ static constexpr int PIN_BUTTON = 0;     // PRG button, LOW = pressed
 
 bool lowPowerActive()
 {
-    return gCfg.lowPowerEn && gCfg.loraEn && !gCfg.wifiEn
+    // Wireless-sensor reception keeps the SX1262 in receive mode: no light sleep.
+    return gCfg.lowPowerEn && gCfg.loraEn && !gCfg.wifiEn && !gCfg.rfEn
         && !gIo.heaterOn && !gIo.fanOn;
 }
 

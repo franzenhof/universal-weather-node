@@ -1,6 +1,8 @@
 #include "json_payload.h"
 #include "globals.h"
 #include "board_io.h"
+#include "rf_sensors.h"
+#include "sources.h"
 #include <cassert>
 #include <string>
 #include <vector>
@@ -21,6 +23,7 @@ int main()
     gIo.heaterOn=gIo.fanOn=true;gIo.heaterDuty=60;gIo.fanDuty=100;
     gIo.fanRpm=2950;gIo.veValid=true;
     gIo.ve={13.28f,-1.23f,37.5f,45.0f,.12f,NAN,.31f,3,0};
+    srcUpdateCycle();
     JsonDocument doc;buildJsonPayload(doc);
     size_t n=measureJson(doc);
     assert(n>1024);
@@ -31,7 +34,44 @@ int main()
     assert(parsed["victron"]["batteryV"].as<float>()==gIo.ve.battV);
     assert(parsed["status"]["pcbRev"].as<int>()==20);
     assert(parsed["uvIndex"].as<float>()==gIo.uvIndex);
-    gCfg.uvEn=gCfg.auxAinEn=gCfg.auxPulseEn=0;gCfg.wind2Mode=2;
+    assert(parsed["cpuTemp"].as<float>()==42.3f && parsed["resetReason"].as<std::string>()=="unknown");
+    gCfg.debugMode=0;buildJsonPayload(doc);   // CPU temperature and restart cause also without debug mode
+    assert(doc["cpuTemp"].as<float>()==42.3f && !doc["resetReason"].isNull() && doc["freeHeapKiB"].isNull());
+    gCfg.debugMode=1;
+    // wireless sensors: only with rfEn, only the groups the sensor sent
     buildJsonPayload(doc);
+    assert(doc["rfSensors"].isNull());
+    gCfg.rfEn=1;
+    RfSensorReading& r=gRfSensors[0];
+    r.used=true;r.id=0x2A5B;r.type=1;r.rssi=-71.4f;r.lastMs=millis();r.batteryOk=false;
+    r.hasTemp=r.hasHumidity=r.hasWind=r.hasRain=r.hasUv=r.hasLight=true;
+    r.tempC=4.5f;r.humidity=88;r.windAvgMs=3.1f;r.windGustMs=6.2f;r.windDirDeg=247.4f;r.rainTotalMm=123.4f;r.uvIndex=1.2f;r.lightLux=5321.6f;
+    buildJsonPayload(doc);
+    JsonObject rf=doc["rfSensors"][0];
+    assert(rf["id"].as<std::string>()=="00002A5B" && rf["rssi"].as<int>()==-71 && rf["batteryOk"].as<bool>()==false);
+    assert(rf["temp"].as<float>()==4.5f && rf["humidityPct"].as<int>()==88 && rf["windDirDeg"].as<int>()==247);
+    assert(rf["lightLux"].as<long>()==5322 && !rf["rainTotal"].isNull() && doc["rfSensors"].size()==1);
+    // value sources: Auto keeps the board BME280, explicit wireless 1 takes the sensor
+    srcUpdateCycle();buildJsonPayload(doc);
+    assert(doc["sources"]["tempHum"].as<std::string>()=="board" && doc["sources"]["light"].as<std::string>()=="radio:00002A5B");
+    assert(doc["lightLux"].as<float>()==5321.6f && doc["radioBatteryLow"].as<bool>());
+    gCfg.srcSel[SG_AIR]=SRC_RF1;srcUpdateCycle();buildJsonPayload(doc);
+    assert(doc["temp"].as<float>()==4.5f && doc["humidityPct"].as<float>()==88 && !doc["pressureQnh"].isNull());
+    gCfg.srcSel[SG_AIR]=SRC_OFF;srcUpdateCycle();buildJsonPayload(doc);
+    assert(doc["temp"].isNull() && doc["sources"]["tempHum"].as<std::string>()=="none");
+    // rain: only increases of the selected source reach the running total
+    gCfg.rainEn=1;gCfg.srcSel[SG_RAIN]=SRC_AUTO;float before=rainMMSinceStart;
+    srcBoardRain(0.2f);srcRfPacket(0,false,1.0f);
+    assert(rainMMSinceStart-before>0.19f && rainMMSinceStart-before<0.21f);
+    gCfg.srcSel[SG_RAIN]=SRC_RF1;before=rainMMSinceStart;
+    srcBoardRain(0.2f);srcRfPacket(0,false,1.0f);
+    assert(rainMMSinceStart-before>0.99f && rainMMSinceStart-before<1.01f);
+    gCfg.srcSel[SG_AIR]=gCfg.srcSel[SG_RAIN]=SRC_AUTO;
+    gRfSensors[1].used=true;gRfSensors[1].id=0x99;   // a thermo-only sensor: no weather groups
+    buildJsonPayload(doc);
+    assert(doc["rfSensors"].size()==2 && doc["rfSensors"][1]["windSpeed"].isNull());
+    gCfg.rfEn=0;
+    gCfg.uvEn=gCfg.auxAinEn=gCfg.auxPulseEn=0;gCfg.wind2Mode=2;
+    srcUpdateCycle();buildJsonPayload(doc);
     assert(!doc["wind2"].isNull() && doc["uvIndex"].isNull());
 }

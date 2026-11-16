@@ -17,6 +17,8 @@ extern float    rainMMSinceStart;
 extern uint16_t windDirection;
 extern float    batteryVolt;
 extern float    cpuTemperature;
+extern const char* gResetReason;   // cause of the last restart, set once in setup()
+extern unsigned long gBaseCycleMs; // current base cycle (shortest send interval), set by loop()
 
 extern bool     bme280Present;
 extern float    bme280TempC;

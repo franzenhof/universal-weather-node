@@ -1,4 +1,5 @@
 #include "config.h"
+#include "wind_window.h"
 #include "serial_log.h"
 #include <Preferences.h>
 
@@ -98,7 +99,19 @@ Config loadConfig()
     c.pcbVersion       = prefs.getInt    ("pcbver",   c.pcbVersion);
     c.altitudeM        = prefs.getInt    ("altitude", c.altitudeM);
     c.uplinkIntervalSec = prefs.getInt   ("uplinksec", prefs.getInt("delay", c.uplinkIntervalSec));
-    c.sampleSec        = prefs.getInt    ("samplesec", c.sampleSec);
+    c.sampleSec        = windSampleSecNormalized(prefs.getInt("samplesec", c.sampleSec));
+    c.mqttIntervalSec  = prefs.getInt    ("mqttsec",   c.mqttIntervalSec);
+    c.loraWindAgg      = prefs.getInt    ("lorawagg",  c.loraWindAgg);
+    c.mqttWindAgg      = prefs.getInt    ("mqttwagg",  c.mqttWindAgg);
+    c.rfEn             = prefs.getInt    ("rfen",      c.rfEn);
+    c.rfProto          = prefs.getInt    ("rfproto",   c.rfProto);
+    if (c.rfProto < 1 || c.rfProto > RF_PROTO_ALL) c.rfProto = RF_PROTO_BRESSER;
+    prefs.getString("rfids", c.rfIds, sizeof(c.rfIds));
+    for (int i = 0; i < 5; i++) {
+        char key[8]; snprintf(key, sizeof(key), "src%d", i);
+        int v = prefs.getInt(key, c.srcSel[i]);
+        c.srcSel[i] = (uint8_t)((v >= 0 && v <= 6) ? v : 0);
+    }
     c.windDirOffsetDeg = prefs.getInt    ("windoff",  c.windDirOffsetDeg);
     c.windUnitMs       = prefs.getInt    ("windunit", c.windUnitMs);
     c.windEn           = prefs.getInt    ("winden",   c.windEn);
@@ -158,6 +171,15 @@ Config loadConfig()
     prefs.getString("wnpid",      c.wnetproId,    sizeof(c.wnetproId));
     prefs.getString("wnpkey",     c.wnetproKey,   sizeof(c.wnetproKey));
     c.wnetproIntervalSec = prefs.getInt("wnpint", c.wnetproIntervalSec);
+    prefs.getString("windyid",    c.windyId,      sizeof(c.windyId));
+    prefs.getString("windypw",    c.windyPass,    sizeof(c.windyPass));
+    c.windyIntervalSec   = prefs.getInt("windyint", c.windyIntervalSec);
+    prefs.getString("osemid",     c.osemBoxId,    sizeof(c.osemBoxId));
+    prefs.getString("osemtok",    c.osemToken,    sizeof(c.osemToken));
+    prefs.getString("osemmap",    c.osemSensors,  sizeof(c.osemSensors));
+    c.osemIntervalSec    = prefs.getInt("osemint", c.osemIntervalSec);
+    c.updateCheckEn      = prefs.getBool("updchk", c.updateCheckEn);
+    if (prefs.isKey("updurl")) prefs.getString("updurl", c.updateUrl, sizeof(c.updateUrl));
 
     c.auxAinEn         = prefs.getInt    ("auxainen",   c.auxAinEn);
     c.auxAinScale      = prefs.getFloat  ("auxainscale", c.auxAinScale);
@@ -202,6 +224,16 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("altitude",    prefs.putInt    ("altitude", c.altitudeM), 4);
     ok &= checkWrite   ("uplinksec",   prefs.putInt    ("uplinksec", c.uplinkIntervalSec), 4);
     ok &= checkWrite   ("samplesec",   prefs.putInt    ("samplesec", c.sampleSec), 4);
+    ok &= checkWrite   ("mqttsec",     prefs.putInt    ("mqttsec",   c.mqttIntervalSec), 4);
+    ok &= checkWrite   ("lorawagg",    prefs.putInt    ("lorawagg",  c.loraWindAgg), 4);
+    ok &= checkWrite   ("mqttwagg",    prefs.putInt    ("mqttwagg",  c.mqttWindAgg), 4);
+    ok &= checkWrite   ("rfen",        prefs.putInt    ("rfen",      c.rfEn), 4);
+    ok &= checkWrite   ("rfproto",     prefs.putInt    ("rfproto",   c.rfProto), 4);
+    ok &= checkWriteStr("rfids",       prefs.putString ("rfids",     c.rfIds), c.rfIds);
+    for (int i = 0; i < 5; i++) {
+        char key[8]; snprintf(key, sizeof(key), "src%d", i);
+        ok &= checkWrite(key, prefs.putInt(key, c.srcSel[i]), 4);
+    }
     ok &= checkWrite   ("windoff",     prefs.putInt    ("windoff",  c.windDirOffsetDeg), 4);
     ok &= checkWrite   ("windunit",    prefs.putInt    ("windunit", c.windUnitMs), 4);
     ok &= checkWrite   ("winden",      prefs.putInt    ("winden",   c.windEn), 4);
@@ -260,6 +292,15 @@ void saveConfig(const Config& c)
     ok &= checkWriteStr("wnpid",       prefs.putString ("wnpid",      c.wnetproId), c.wnetproId);
     ok &= checkWriteStr("wnpkey",      prefs.putString ("wnpkey",     c.wnetproKey), c.wnetproKey);
     ok &= checkWrite   ("wnpint",      prefs.putInt    ("wnpint",     c.wnetproIntervalSec), 4);
+    ok &= checkWriteStr("windyid",     prefs.putString ("windyid",    c.windyId), c.windyId);
+    ok &= checkWriteStr("windypw",     prefs.putString ("windypw",    c.windyPass), c.windyPass);
+    ok &= checkWrite   ("windyint",    prefs.putInt    ("windyint",   c.windyIntervalSec), 4);
+    ok &= checkWriteStr("osemid",      prefs.putString ("osemid",     c.osemBoxId), c.osemBoxId);
+    ok &= checkWriteStr("osemtok",     prefs.putString ("osemtok",    c.osemToken), c.osemToken);
+    ok &= checkWriteStr("osemmap",     prefs.putString ("osemmap",    c.osemSensors), c.osemSensors);
+    ok &= checkWrite   ("osemint",     prefs.putInt    ("osemint",    c.osemIntervalSec), 4);
+    ok &= checkWrite   ("updchk",      prefs.putBool   ("updchk",     c.updateCheckEn), 1);
+    ok &= checkWriteStr("updurl",      prefs.putString ("updurl",     c.updateUrl), c.updateUrl);
 
     ok &= checkWrite   ("auxainen",    prefs.putInt    ("auxainen",   c.auxAinEn), 4);
     ok &= checkWrite   ("auxainscale", prefs.putFloat  ("auxainscale", c.auxAinScale), 4);

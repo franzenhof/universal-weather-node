@@ -9,6 +9,7 @@
 #include "payload.h"
 #include "board_io.h"
 #include "uv_calibration.h"
+#include "sources.h"
 
 CayenneLPP lpp(200);
 uint8_t    binBuf[BIN_MAX_SIZE];
@@ -34,35 +35,46 @@ static uint8_t computeStatusByte()
     return status;
 }
 
-static Measurements currentMeasurements()
+static Measurements currentMeasurements(const PathValues* pv)
 {
+    // Wind/rain of this path's own window (main.cpp); the globals hold the
+    // base cycle's values and are only the fallback.
+    PathValues g;
+    if (!pv) {
+        g.windSpeedMs = windSpeedMs; g.windGustMs = windGustMs; g.windDirDeg = windDirection;
+        g.rainMm = rainMM; g.rainRateMmH = rainRateMmH;
+        pv = &g;
+    }
     Measurements m;
     m.status = computeStatusByte();
-    m.hasWind = gCfg.windEn;
-    m.windDirDeg = windDirection;
-    m.windSpeed  = windSpeedForOutput(windSpeedMs, gCfg);
-    m.windGust   = windSpeedForOutput(windGustMs,  gCfg);
-    m.hasRain = gCfg.rainEn;
-    m.rainRate       = rainRateForOutput(rainRateMmH, gCfg);
-    m.rainCycle      = rainForOutput(rainMM, gCfg);
+    m.hasWind = srcActive(SG_WIND);
+    m.windDirDeg = pv->windDirDeg;
+    m.windSpeed  = windSpeedForOutput(pv->windSpeedMs, gCfg);
+    m.windGust   = windSpeedForOutput(pv->windGustMs,  gCfg);
+    m.hasRain = srcActive(SG_RAIN);
+    m.rainRate       = rainRateForOutput(pv->rainRateMmH, gCfg);
+    m.rainCycle      = rainForOutput(pv->rainMm, gCfg);
     m.rainSinceStart = rainForOutput(rainMMSinceStart, gCfg);
     m.hasBattery = gCfg.lipoEn;
     m.batteryV   = batteryVolt;
-    m.hasBme = bme280Present;
-    m.humidityPct = bme280Humidity;
+    // temperature/humidity from the selected source; pressure only from the BME280
+    m.hasBme = gSrc.tempValid;
+    m.hasHumidity = gSrc.humValid;
+    m.humidityPct = gSrc.humidity;
+    m.hasPressure = bme280Present;
     m.pressureQnh = pressureForOutput(bme280PressSea, gCfg);
     m.pressureAbs = pressureForOutput(bme280PressAbs, gCfg);
-    m.bmeTemp     = temperatureForOutput(bme280TempC, gCfg);
+    m.bmeTemp     = temperatureForOutput(gSrc.tempC, gCfg);
     for (int i = 0; i < 3; i++) {
         m.hasDs18b20[i] = (i < bus1Count) && bus1Temps[i] != DEVICE_DISCONNECTED_C;
         m.ds18b20[i]    = temperatureForOutput(bus1Temps[i], gCfg);
     }
     if (ioAnyEnabled()) {
         m.hasIoStatus  = true;               m.ioStatus = ioStatusByte();
-        m.hasAuxAin    = gCfg.auxAinEn;      m.auxAinV = gIo.auxAinV;
+        m.hasAuxAin    = ioAuxAinActive();      m.auxAinV = gIo.auxAinV;
         m.hasAuxPulses = gCfg.auxPulseEn && !gCfg.wind2Mode;  m.auxPulses = gIo.auxPulsesCycle;  m.auxPulsesTotal = gIo.auxPulsesTotal;
         m.hasAuxAin    = m.hasAuxAin && gCfg.wind2Mode != 2;
-        m.hasWind2     = gCfg.wind2Mode != 0;  m.hasWind2Dir = gCfg.wind2Mode == 2;
+        m.hasWind2     = gCfg.wind2Mode != 0;  m.hasWind2Dir = ioWind2DirActive();
         m.wind2DirDeg  = gIo.wind2DirDeg;
         m.wind2Speed   = windSpeedForOutput(gIo.wind2SpeedMs, gCfg);
         m.wind2Gust    = windSpeedForOutput(gIo.wind2GustMs,  gCfg);
@@ -74,12 +86,20 @@ static Measurements currentMeasurements()
         m.veYieldKwh = gIo.ve.yieldTodayKwh;  m.veSocPct = gIo.ve.socPct;  m.veLoadA = gIo.ve.loadA;
         m.veChargeState = gIo.ve.chargeState; m.veError = gIo.ve.error;
     }
-    m.hasUv = ioV2() && gCfg.uvEn && isfinite(gIo.uvSensorVolts) &&
-              gIo.uvSensorVolts >= 0.0f && gIo.uvSensorVolts <= 5.5f;
-    if (m.hasUv) {
-        m.uvSensorVolts = gIo.uvSensorVolts;
-        if (gIo.uvIndexCalibrated && isfinite(gIo.uvIndex)) m.uvIndex = gIo.uvIndex;
+    if (gSrc.uvBoard) {
+        m.hasUv = ioV2() && ioUvActive() && isfinite(gIo.uvSensorVolts) &&
+                  gIo.uvSensorVolts >= 0.0f && gIo.uvSensorVolts <= 5.5f;
+        if (m.hasUv) {
+            m.uvSensorVolts = gIo.uvSensorVolts;
+            if (gIo.uvIndexCalibrated && isfinite(gIo.uvIndex)) m.uvIndex = gIo.uvIndex;
+        }
+    } else if (gSrc.uvRadio) {   // wireless sensor: index only, no terminal voltage
+        m.hasUv = true;
+        m.uvSensorVolts = NAN;
+        m.uvIndex = gSrc.uvIndexRadio;
     }
+    m.hasLight = gSrc.lightValid;  m.lightLux = gSrc.lightLux;
+    m.hasSources = gCfg.rfEn != 0;  m.sources = srcBits();
     m.debug = gCfg.debugMode;
     m.dbgCycle    = loopCount;
     m.dbgSendFail = (uint8_t)min(sendFailCount, 255);
@@ -128,16 +148,16 @@ static void encodeLpp(const Measurements& m)
 
     lpp.addDigitalInput(2, m.status);
     if (m.hasBattery) lpp.addVoltage(1, lppPrep(m.batteryV, 100.0f, 0.0f, 655.35f));
-    if (m.hasBme) {
-        lpp.addRelativeHumidity(1, lppPrep(m.humidityPct, 2.0f, 0.0f, 127.5f));
+    if (m.hasBme && m.hasHumidity) lpp.addRelativeHumidity(1, lppPrep(m.humidityPct, 2.0f, 0.0f, 127.5f));
+    if (m.hasPressure) {
         // Barometric is uint16 x10. In imperial mode the value is sent x10
         // (field holds inHg x100) - 0.1 inHg would be 3.4 hPa resolution;
         // the decoder divides by 10 again when the imperial bit is set.
         const float pScale = m.imperial() ? 10.0f : 1.0f;
         lpp.addBarometricPressure(1, lppPrep(m.pressureQnh * pScale, 10.0f, 0.0f, 6553.5f));
         lpp.addBarometricPressure(2, lppPrep(m.pressureAbs * pScale, 10.0f, 0.0f, 6553.5f));
-        lppTemp(1, m.bmeTemp);
     }
+    if (m.hasBme) lppTemp(1, m.bmeTemp);
     for (int i = 0; i < 3; i++)
         if (m.hasDs18b20[i]) lppTemp(2 + i, m.ds18b20[i]);
 
@@ -151,11 +171,14 @@ static void encodeLpp(const Measurements& m)
         lppAnalog(7, m.wind2Gust);
     }
     if (m.hasUv) {
-        lpp.addVoltage(12, lppPrep(m.uvSensorVolts, 100.0f, 0.0f, 655.35f));
+        const bool volts = isfinite(m.uvSensorVolts);   // absent for a wireless UV sensor
+        if (volts) lpp.addVoltage(12, lppPrep(m.uvSensorVolts, 100.0f, 0.0f, 655.35f));
         if (isfinite(m.uvIndex) && m.uvIndex >= 0.0f)
             lppAnalog(13, fminf(m.uvIndex, UV_INDEX_REPORT_MAX));
-        lpp.addDigitalInput(14, (uint8_t)(0x01 | (isfinite(m.uvIndex) ? 0x02 : 0x00)));
+        lpp.addDigitalInput(14, (uint8_t)((volts ? 0x01 : 0x00) | (isfinite(m.uvIndex) ? 0x02 : 0x00)));
     }
+    if (m.hasLight)   lppUInt(15, m.lightLux);
+    if (m.hasSources) lppUInt(16, m.sources);
     if (m.hasOutputs)   { lpp.addDigitalOutput(20, m.heaterDuty); lpp.addDigitalOutput(21, m.fanDuty); }
     if (m.hasFanRpm)    lppUInt(22, m.fanRpm);
     if (m.hasVe) {
@@ -192,9 +215,9 @@ static void noteDropped(const char* format, size_t len, size_t limit)
         dbgSerial.printf("Payload (%s): %u bytes (limit %u)\n", format, (unsigned)len, (unsigned)limit);
 }
 
-void buildLppPacket(size_t limit)
+void buildLppPacket(size_t limit, const PathValues* pv)
 {
-    Measurements m = currentMeasurements();
+    Measurements m = currentMeasurements(pv);
     lastPayloadDropped[0] = '\0';
     size_t used = 0;
     encodeLpp(m);
@@ -211,8 +234,8 @@ void buildLppPacket(size_t limit)
 // ============================================================================
 // COMPACT BINARY (FPort 3) - layout and encoder: payload.h / payload_binary.cpp
 // ============================================================================
-void buildBinaryPacket(size_t limit)
+void buildBinaryPacket(size_t limit, const PathValues* pv)
 {
-    binLen = encodeBinaryFitted(currentMeasurements(), binBuf, limit, lastPayloadDropped, sizeof(lastPayloadDropped));
+    binLen = encodeBinaryFitted(currentMeasurements(pv), binBuf, limit, lastPayloadDropped, sizeof(lastPayloadDropped));
     noteDropped("binary", binLen, limit);
 }

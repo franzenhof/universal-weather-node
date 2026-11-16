@@ -159,6 +159,7 @@ var I18N = {
         gust:'Gust', speed:'Speed', min:'Min', max:'Max', records:'Records (min · avg · max)',
         noData:'No data yet', noDataShort:'no data', from:'from',
         failedLoad:'Failed to load history: ',
+        feelsLike:'Feels like', dewPoint:'Dew point', today:'today', per3h:'/ 3 h',
         direction:'Direction', dirs:['N','E','S','W'] },
   de: { navStatus:'Status', navLog:'Protokoll', navSettings:'Einstellungen', navHelp:'Hilfe / Dokumentation',
         heading:'Messverlauf', buffered:'Verlauf gespeichert', loading:'Lädt...',
@@ -175,6 +176,7 @@ var I18N = {
         gust:'Böe', speed:'Geschwindigkeit', min:'Min', max:'Max', records:'Rekorde (Min · Ø · Max)',
         noData:'Noch keine Daten', noDataShort:'keine Daten', from:'aus',
         failedLoad:'Verlauf konnte nicht geladen werden: ',
+        feelsLike:'Gefühlt', dewPoint:'Taupunkt', today:'heute', per3h:'/ 3 h',
         direction:'Richtung', dirs:['N','O','S','W'] },
   fr: { navStatus:'État', navLog:'Journal', navSettings:'Paramètres', navHelp:'Aide / Documentation',
         heading:'Historique des mesures', buffered:"d'historique en mémoire", loading:'Chargement...',
@@ -191,6 +193,7 @@ var I18N = {
         gust:'Rafale', speed:'Vitesse', min:'Min', max:'Max', records:'Records (min · moy · max)',
         noData:'Pas encore de données', noDataShort:'aucune donnée', from:'de',
         failedLoad:"Échec du chargement de l'historique : ",
+        feelsLike:'Ressenti', dewPoint:'Point de rosée', today:'aujourd\'hui', per3h:'/ 3 h',
         direction:'Direction', dirs:['N','E','S','O'] },
   es: { navStatus:'Estado', navLog:'Registro', navSettings:'Ajustes', navHelp:'Ayuda / Documentación',
         heading:'Historial de mediciones', buffered:'de historial almacenado', loading:'Cargando...',
@@ -207,6 +210,7 @@ var I18N = {
         gust:'Racha', speed:'Velocidad', min:'Mín', max:'Máx', records:'Récords (mín · media · máx)',
         noData:'Aún no hay datos', noDataShort:'sin datos', from:'desde',
         failedLoad:'No se pudo cargar el historial: ',
+        feelsLike:'Sensación', dewPoint:'Punto de rocío', today:'hoy', per3h:'/ 3 h',
         direction:'Dirección', dirs:['N','E','S','O'] },
   pt: { navStatus:'Estado', navLog:'Registro', navSettings:'Configurações', navHelp:'Ajuda / Documentação',
         heading:'Histórico de medições', buffered:'de histórico armazenado', loading:'Carregando...',
@@ -223,6 +227,7 @@ var I18N = {
         gust:'Rajada', speed:'Velocidade', min:'Mín', max:'Máx', records:'Registros (mín · média · máx)',
         noData:'Ainda sem dados', noDataShort:'sem dados', from:'de',
         failedLoad:'Falha ao carregar histórico: ',
+        feelsLike:'Sensação', dewPoint:'Ponto de orvalho', today:'hoje', per3h:'/ 3 h',
         direction:'Direção', dirs:['N','E','S','O'] }
 };
 var SUPPORTED_LANGS = ['en', 'de', 'fr', 'es', 'pt'];
@@ -322,6 +327,8 @@ function applyUnitPref(raw) {
     out.ds18b20_0 = convField(raw.ds18b20_0, raw.tempUnit, target.tempUnit, convTemp);
     out.ds18b20_1 = convField(raw.ds18b20_1, raw.tempUnit, target.tempUnit, convTemp);
     out.ds18b20_2 = convField(raw.ds18b20_2, raw.tempUnit, target.tempUnit, convTemp);
+    out.dewPoint  = convField(raw.dewPoint,  raw.tempUnit, target.tempUnit, convTemp);
+    out.feelsLike = convField(raw.feelsLike, raw.tempUnit, target.tempUnit, convTemp);
     out.tempUnit = target.tempUnit;
   }
   // /api/data's `ds18b20` array has its own ds18b20Unit sibling (set
@@ -347,10 +354,13 @@ function applyUnitPref(raw) {
     // points at) — same unit, different field name, both need converting.
     out.rainMm = convField(raw.rainMm, raw.rainUnit, target.rainUnit, convMm);
     out.rain   = convField(raw.rain,   raw.rainUnit, target.rainUnit, convMm);
+    out.rain1h    = convField(raw.rain1h,    raw.rainUnit, target.rainUnit, convMm);
+    out.rainToday = convField(raw.rainToday, raw.rainUnit, target.rainUnit, convMm);
     out.rainUnit = target.rainUnit;
   }
   if (raw.pressureUnit && raw.pressureUnit !== target.pressureUnit) {
     out.pressureQnh = convField(raw.pressureQnh, raw.pressureUnit, target.pressureUnit, convPressure);
+    out.pressureTrend3h = convField(raw.pressureTrend3h, raw.pressureUnit, target.pressureUnit, convPressure);   // linear
     out.pressureUnit = target.pressureUnit;
   }
   return out;
@@ -911,6 +921,27 @@ function render(rawHist, rawCurrent) {
     }
     drawSpark(ref.spark, arr, c.color);
   });
+
+  // Derived values (/api/data) in the card sub-lines.
+  function has(v) { return v !== undefined && v !== null; }
+  var tRef = cardRefs.temp;
+  if (tRef && has(current.feelsLike)) {
+    tRef.sub.textContent = t('feelsLike') + ' ' + current.feelsLike.toFixed(1) + '\u00b0' +
+      (has(current.dewPoint) ? ' \u00b7 ' + t('dewPoint') + ' ' + current.dewPoint.toFixed(1) + '\u00b0' : '');
+  }
+  var pRef = cardRefs.pressureQnh;
+  if (pRef && has(current.pressureTrend3h)) {
+    var dp = current.pressureTrend3h, pin = (current.pressureUnit || '').indexOf('in') === 0;
+    var thr = pin ? 0.003 : 0.1;
+    pRef.sub.textContent = (dp >= thr ? '\u2197 ' : dp <= -thr ? '\u2198 ' : '\u2192 ') + (dp >= 0 ? '+' : '') +
+      dp.toFixed(pin ? 2 : 1) + ' ' + (current.pressureUnit || '') + ' ' + t('per3h');
+  }
+  var rRef = cardRefs.rainMm;
+  if (rRef && rRef.sub.textContent && (has(current.rain1h) || has(current.rainToday))) {
+    var rin = (current.rainUnit || '').indexOf('in') === 0;
+    if (has(current.rain1h)) rRef.sub.textContent += ' \u00b7 1 h ' + current.rain1h.toFixed(rin ? 2 : 1);
+    if (has(current.rainToday)) rRef.sub.textContent += ' \u00b7 ' + t('today') + ' ' + current.rainToday.toFixed(rin ? 2 : 1);
+  }
 
   drawCompass(data, current);
   buildRecords(data);

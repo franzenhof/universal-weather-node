@@ -4,32 +4,94 @@
 #include <Arduino.h>
 #include <DallasTemperature.h>
 #include "board_io.h"
+#include "sources.h"
+#include "rf_sensors.h"
+#include "derived_now.h"
+#include <time.h>
+
+const char* gResetReason = "unknown";
+unsigned long gBaseCycleMs = 0;   // base cycle length, set by loop() (0 = not yet known)
 
 // Unit-neutral field names (temp, pressureAbs, ...) — the actual unit used
 // depends on gCfg.unitSystem and is always given by a sibling "*Unit" field
 // (same pattern as the pre-existing windUnit), so consumers don't need to
 // hardcode an assumption about which system is active.
-void buildJsonPayload(JsonDocument& doc)
+// Derived values (derived_now.h): dew point, feels-like, cloud base, trends,
+// rolling and daily rain, sunshine, warnings, firmware update.
+static void addDerivedJson(JsonDocument& doc, float windMs, int dirDeg)
+{
+    DerivedNow d;
+    derivedNow(d, windMs, dirDeg);
+    bool imperial = gCfg.unitSystem == 1;
+    if (d.dewValid)   doc["dewPoint"]  = roundf(temperatureForOutput(d.dewPointC, gCfg) * 10.0f) / 10.0f;
+    if (d.feelsValid) doc["feelsLike"] = roundf(temperatureForOutput(d.feelsLikeC, gCfg) * 10.0f) / 10.0f;
+    if (d.cloudValid) {
+        doc["cloudBase"]     = (long)lroundf(imperial ? d.cloudBaseM * 3.28084f : d.cloudBaseM);
+        doc["cloudBaseUnit"] = imperial ? "ft" : "m";
+    }
+    if (d.windDirText) doc["windDirText"] = d.windDirText;
+    if (d.pressTrendValid) {
+        doc["pressureTrend3h"]  = roundf(pressureForOutput(d.pressDelta3hHpa, gCfg) * 100.0f) / 100.0f;   // linear: fine for a difference
+        doc["pressureTendency"] = pressureTendencyText(d.tendency);
+        doc["weatherTrend"]     = d.weatherTrend;
+    }
+    if (d.tempTrendValid) doc["tempTrend1h"] = roundf(d.tempDelta1hC * (imperial ? 1.8f : 1.0f) * 10.0f) / 10.0f;
+    if (d.rainValid) {
+        doc["rain1h"]  = rainForOutput(d.rain1hMm, gCfg);
+        doc["rain24h"] = rainForOutput(d.rain24hMm, gCfg);
+        if (d.daily.valid) doc["rainToday"] = rainForOutput(d.daily.rainTodayMm, gCfg);
+        if (d.daily.yesterdayValid) doc["rainYesterday"] = rainForOutput(d.daily.rainYesterdayMm, gCfg);
+        if (d.daily.lastRainEpoch > 0) {
+            time_t t = (time_t)d.daily.lastRainEpoch;
+            struct tm u; gmtime_r(&t, &u);
+            char iso[24]; strftime(iso, sizeof(iso), "%Y-%m-%dT%H:%M:%SZ", &u);
+            doc["lastRain"] = iso;
+        }
+    }
+    if (d.sunValid && d.daily.valid) {
+        doc["sunshineTodayMin"] = (long)(d.daily.sunTodaySec / 60.0f);
+        if (d.daily.yesterdayValid) doc["sunshineYesterdayMin"] = (long)(d.daily.sunYesterdaySec / 60.0f);
+    }
+    if (d.warnValid) {
+        JsonObject w = doc["warnings"].to<JsonObject>();
+        w["frost"]  = (d.warnings & WARN_FROST) != 0;
+        w["fog"]    = (d.warnings & WARN_FOG) != 0;
+        w["sultry"] = (d.warnings & WARN_SULTRY) != 0;
+    }
+    char upd[24];
+    wxUpdateAvailable(upd, sizeof(upd));
+    if (upd[0]) doc["firmwareUpdate"] = upd;
+}
+
+void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
 {
     doc.clear();
+    PathValues g;
+    if (!pv) {   // REST/status page: the base cycle's values (globals)
+        g.windSpeedMs = windSpeedMs; g.windGustMs = windGustMs; g.windDirDeg = windDirection;
+        g.rainMm = rainMM; g.rainRateMmH = rainRateMmH;
+        pv = &g;
+    }
 
-    if (gCfg.windEn) {
-        doc["windDirDeg"] = windDirection;
-        doc["windSpeed"]  = windSpeedForOutput(windSpeedMs, gCfg);
-        doc["windGust"]   = windSpeedForOutput(windGustMs,  gCfg);
+    if (srcActive(SG_WIND)) {
+        doc["windDirDeg"] = pv->windDirDeg;
+        doc["windSpeed"]  = windSpeedForOutput(pv->windSpeedMs, gCfg);
+        doc["windGust"]   = windSpeedForOutput(pv->windGustMs,  gCfg);
         doc["windUnit"]   = windSpeedUnitLabel(gCfg);
     }
-    if (gCfg.rainEn) {
-        doc["rainRate"]        = rainRateForOutput(rainRateMmH, gCfg);
+    if (srcActive(SG_RAIN)) {
+        doc["rainRate"]        = rainRateForOutput(pv->rainRateMmH, gCfg);
         doc["rainRateUnit"]    = rainRateUnitLabel(gCfg);
-        doc["rain"]            = rainForOutput(rainMM, gCfg);
+        doc["rain"]            = rainForOutput(pv->rainMm, gCfg);
         doc["rainSinceStart"]  = rainForOutput(rainMMSinceStart, gCfg);
         doc["rainUnit"]        = rainUnitLabel(gCfg);
     }
-    if (bme280Present) {
-        doc["temp"]         = temperatureForOutput(bme280TempC, gCfg);
+    if (gSrc.tempValid) {   // selected source (BME280 or wireless sensor)
+        doc["temp"]         = temperatureForOutput(gSrc.tempC, gCfg);
         doc["tempUnit"]     = temperatureUnitLabel(gCfg);
-        doc["humidityPct"]  = bme280Humidity;
+        if (gSrc.humValid) doc["humidityPct"] = gSrc.humidity;
+    }
+    if (bme280Present) {
         doc["pressureAbs"]  = pressureForOutput(bme280PressAbs, gCfg);
         doc["pressureQnh"]  = pressureForOutput(bme280PressSea, gCfg);
         doc["pressureUnit"] = pressureUnitLabel(gCfg);
@@ -55,7 +117,7 @@ void buildJsonPayload(JsonDocument& doc)
 
     // PCB v2.0 I/O block - each object only while its function is enabled.
     if (ioV2()) {
-        if (gCfg.uvEn) {
+        if (gSrc.uvBoard) {
             doc["uvEnabled"] = true;
             doc["uvIndexCalibrated"] = gIo.uvIndexCalibrated;
             if (isfinite(gIo.uvSensorVolts)) {
@@ -67,12 +129,12 @@ void buildJsonPayload(JsonDocument& doc)
                 doc["uvIndexUnit"] = "index";
             }
         }
-        if (gCfg.auxAinEn && gCfg.wind2Mode != 2) doc["auxAnalogV"] = gIo.auxAinV;
+        if (ioAuxAinActive()) doc["auxAnalogV"] = gIo.auxAinV;
         if (gCfg.wind2Mode) {
             JsonObject w2 = doc["wind2"].to<JsonObject>();
             w2["speed"] = windSpeedForOutput(gIo.wind2SpeedMs, gCfg);
             w2["gust"]  = windSpeedForOutput(gIo.wind2GustMs,  gCfg);
-            if (gCfg.wind2Mode == 2) w2["dirDeg"] = gIo.wind2DirDeg;
+            if (ioWind2DirActive()) w2["dirDeg"] = gIo.wind2DirDeg;
         }
         if (gCfg.auxPulseEn && !gCfg.wind2Mode) {
             doc["auxPulses"]      = gIo.auxPulsesCycle;
@@ -112,26 +174,72 @@ void buildJsonPayload(JsonDocument& doc)
         }
     }
 
+    if (gSrc.uvRadio) {
+        doc["uvIndex"]     = gSrc.uvIndexRadio;
+        doc["uvIndexUnit"] = "index";
+    }
+    if (gSrc.lightValid) doc["lightLux"] = gSrc.lightLux;
+    if (gCfg.rfEn) {
+        JsonObject src = doc["sources"].to<JsonObject>();
+        char d[24];
+        for (int g = 0; g < SG_COUNT; g++) { srcDescribe((SrcGroup)g, d, sizeof(d)); src[srcGroupKey((SrcGroup)g)] = d; }
+        if (gSrc.rfBatteryLow) doc["radioBatteryLow"] = true;
+    }
+
+    addDerivedJson(doc, pv->windSpeedMs, pv->windDirDeg);
+
     JsonObject status       = doc["status"].to<JsonObject>();
     status["bme280Present"] = bme280Present;
     status["bus1Present"]   = bus1Count > 0;
     status["sendFailCount"] = sendFailCount;
     status["pcbRev"]        = gCfg.pcbVersion;
-    status["uvEnabled"]     = ioV2() && (gCfg.uvEn != 0);
-    status["uvIndexCalibrated"] = ioV2() && gCfg.uvEn && gIo.uvIndexCalibrated;
+    status["uvEnabled"]     = ioV2() && ioUvActive();
+    status["uvIndexCalibrated"] = ioV2() && ioUvActive() && gIo.uvIndexCalibrated;
     if (gIo.battLockout) status["batteryLowLockout"] = true;
 
     // Time left until the current measurement cycle completes and the next
     // transmit/publish happens (clamped to 0 — a cycle boundary can be
     // crossed between millis() here and the next loop() iteration).
-    unsigned long sendTargetMs = (unsigned long)gCfg.uplinkIntervalSec * 1000UL;
+    unsigned long sendTargetMs = gBaseCycleMs ? gBaseCycleMs : (unsigned long)gCfg.uplinkIntervalSec * 1000UL;
     unsigned long elapsedMs    = millis() - lastSendMs;
     doc["nextCycleInSec"] = (elapsedMs < sendTargetMs) ? (sendTargetMs - elapsedMs) / 1000 : 0;
 
+    // ESP32-S3 die temperature (typically 10-20 K above ambient) - for
+    // spotting an overheating enclosure, not an air temperature.
+    doc["cpuTemp"]     = temperatureForOutput(cpuTemperature, gCfg);
+    doc["cpuTempUnit"] = temperatureUnitLabel(gCfg);
+    doc["resetReason"] = gResetReason;
+
+    // Wireless sensors (rf_sensors.cpp): latest values per sensor, units as configured.
+    if (gCfg.rfEn) {
+        JsonArray rf = doc["rfSensors"].to<JsonArray>();
+        for (int i = 0; i < RF_MAX_SENSORS; i++) {
+            const RfSensorReading& r = gRfSensors[i];
+            if (!r.used) continue;
+            JsonObject o = rf.add<JsonObject>();
+            char id[11];
+            snprintf(id, sizeof(id), "%08lX", (unsigned long)r.id);
+            o["id"]        = id;
+            o["type"]      = r.type;
+            o["protocol"]  = rfProtoName(r.proto);
+            o["rssi"]      = (int)lroundf(r.rssi);
+            o["ageSec"]    = (millis() - r.lastMs) / 1000;
+            o["batteryOk"] = r.batteryOk;
+            if (r.hasTemp)     o["temp"]     = temperatureForOutput(r.tempC, gCfg);
+            if (r.hasHumidity) o["humidityPct"] = r.humidity;
+            if (r.hasWind) {
+                o["windSpeed"]  = windSpeedForOutput(r.windAvgMs, gCfg);
+                o["windGust"]   = windSpeedForOutput(r.windGustMs, gCfg);
+                o["windDirDeg"] = (int)lroundf(r.windDirDeg);
+            }
+            if (r.hasRain)  o["rainTotal"] = rainForOutput(r.rainTotalMm, gCfg);
+            if (r.hasUv)    o["uvIndex"]   = r.uvIndex;
+            if (r.hasLight) o["lightLux"]  = (long)lroundf(r.lightLux);
+        }
+    }
+
     if (gCfg.debugMode) {
         doc["cycle"]       = loopCount;
-        doc["cpuTemp"]     = temperatureForOutput(cpuTemperature, gCfg);
-        doc["cpuTempUnit"] = temperatureUnitLabel(gCfg);
         doc["freeHeapKiB"] = (float)ESP.getFreeHeap() / 1024.0f;
         doc["uptimeH"]     = (float)millis() / 3600000.0f;
     }

@@ -47,6 +47,17 @@ enum ParamId : uint8_t {
     PARAM_UV_CALIBRATED         = 38,   // explicit calibration-valid flag
     PARAM_UV_INDEX_SLOPE_X1000  = 39,   // UV index / V, x1000
     PARAM_UV_INDEX_OFFSET_X1000 = 40,   // UV index offset, x1000
+    PARAM_MQTT_INTERVAL_SEC     = 41,   // 0 = same as the LoRaWAN interval, else 2..3600 s
+    PARAM_LORA_WIND_AGG         = 42,   // 0 = interval, 1 = 10-min (WMO)
+    PARAM_MQTT_WIND_AGG         = 43,   // 0 = interval, 1 = 10-min (WMO)
+    PARAM_RF_EN                 = 44,   // 0 = off, 1 = Bresser 868 MHz sensors on the shared SX1262
+    // value sources (sources.h): 0 auto, 1 board, 2-5 wireless sensor 1-4, 6 off
+    PARAM_SRC_TEMP_HUM          = 45,
+    PARAM_SRC_WIND              = 46,
+    PARAM_SRC_RAIN              = 47,
+    PARAM_SRC_UV                = 48,
+    PARAM_SRC_LIGHT             = 49,
+    PARAM_RF_PROTO              = 50,   // wireless protocols, bit mask 1..7: 1 Bresser, 2 IT+ 17.241k, 4 IT+ 9.579k
 };
 
 // Applies a single (paramId, value) pair to the live Config + hardware

@@ -32,7 +32,7 @@
  *   0x05 → disable debug mode (persistent)
  *   0x06 → reset AUX pulse total (PCB v2.0)
  *   0x10 → set parameter(s): [0x10, paramId, valueMSB, valueLSB, ...]
- *           paramId 1..40 (signed 16-bit values, validated — see ParamId in
+ *           paramId 1..43 (signed 16-bit values, validated — see ParamId in
  *           params.h, also reachable via MQTT and the web settings page)
  *   0xFF → factory reset: wipe all config (NVS) and restart into the
  *           first-boot config portal
@@ -73,6 +73,9 @@
 #include "board_io.h"
 #include "low_power.h"
 #include "lora_transport.h"
+#include "wind_window.h"
+#include "rf_sensors.h"
+#include "sources.h"
 
 // ============================================================================
 // DISPLAY MANAGEMENT
@@ -231,28 +234,54 @@ RTC_DATA_ATTR uint8_t loopCount = 0;
 int  sendFailCount            = 0;
 bool portalRequestedViaDownlink = false;
 
+// Uplinks in a row without any downlink. With ADR on (RadioLib default), the
+// node sets ADRACKReq after 64 silent uplinks and the network server must
+// answer within 32 more, so a working session never stays silent this long.
+// After 3 x (64 + 32) silent uplinks the session is assumed broken (ADR has
+// long since backed off to SF12) and a fresh join is scheduled - LoRaWAN 1.0.4
+// recommends a rejoin once the ADR backoff is exhausted. Observed in the field:
+// a session that never received a downlink again, while uplinks kept working.
+// If a rejoin does not help (still no downlink at all), the threshold doubles
+// each time up to 8x (2304 uplinks, 8 days at 300 s); any downlink resets it.
+static constexpr uint32_t NO_DOWNLINK_REJOIN = 3 * (64 + 32);
+static constexpr uint8_t  NO_DOWNLINK_MAX_SHIFT = 3;
+static uint32_t uplinksWithoutDownlink = 0;
+static uint8_t  noDownlinkShift = 0;
+
 // ============================================================================
-// SAMPLING ACCUMULATORS
-// A sub-sample is taken every sampleSec seconds (max. uplinkIntervalSec).
-// At the end of the uplink interval accumulators are reduced to final values.
-// Wind direction: vector averaging (sin/cos) so that 350°+10° → 0° is correct.
+// SAMPLING AND AGGREGATION
+// Wind is sampled every sampleSec (1 or 3 s): raw pulses + one vane reading
+// go into the 10-min wind ring (3-s gust, WMO values) and into one WindAcc
+// per path. Slow sensors (BME280) are read every SLOW_SAMPLE_MS, at least
+// once per base cycle. The base cycle is the shortest send interval
+// (LoRaWAN, or MQTT if faster); at its end the globals (status page,
+// history, display, weather-network feed) get the base window's values,
+// and each path that is due sends its own window's values:
+//   - LoRaWAN / MQTT: "interval" (since this path's last send) or "10 min"
+//     (WMO values from the ring), see loraWindAgg / mqttWindAgg;
+//   - weather networks: always the WMO 10-min wind (wx_upload.cpp).
+// Rain: one running total (rainMMSinceStart); every path reports the
+// difference since its own last send (RainWindow).
 // ============================================================================
-static float         windDirSinSum    = 0.0f;
-static float         windDirCosSum    = 0.0f;
-static float         windSpeedSum     = 0.0f;
+enum PathIdx { PATH_BASE = 0, PATH_LORA = 1, PATH_MQTT = 2, PATH_COUNT = 3 };
+static WindRing      windRing;
+static WindAcc       windAcc[PATH_COUNT];
+static RainWindow    rainWin[PATH_COUNT];
+static unsigned long pathLastMs[PATH_COUNT];
+static constexpr unsigned long SLOW_SAMPLE_MS = 10000;   // BME280: slow-changing values
+
 static float         bme280TempSum    = 0.0f;
 static float         bme280PressAbsSum = 0.0f;
 static float         bme280PressSeaSum = 0.0f;
 static float         bme280HumSum     = 0.0f;
-static float         rainCycleMm      = 0.0f;
-static int           subSampleCount   = 0;
-static int           bme280SampleCount = 0;   // < subSampleCount if the BME280 was (un)plugged mid-cycle
-static unsigned long lastSampleMs     = 0;
-unsigned long        lastSendMs       = 0;
+static int           windSampleCount  = 0;   // wind samples in the current base cycle (log only)
+static int           bme280SampleCount = 0;
+static unsigned long lastWindSampleMs = 0;
+static unsigned long lastSlowSampleMs = 0;
+unsigned long        lastSendMs       = 0;   // end of the last base cycle (json_payload: nextCycleInSec)
 
 // Set while a send cycle is waiting on the non-blocking DS18B20 conversion
-// (see loop()) — sampling/next-cycle checks are frozen during this window,
-// exactly like they were while readOneWire() used to block for it.
+// (see loop()) - sampling/next-cycle checks are frozen during this window.
 static bool          sendPending      = false;
 static bool          vaneOffForMode   = false;   // true while low-power mode keeps the vane supply off
 static unsigned long sendElapsedMs    = 0;
@@ -261,39 +290,19 @@ static unsigned long sendElapsedMs    = 0;
 // SAMPLING FUNCTIONS
 // ============================================================================
 
-// Reset accumulators (call after each transmission)
-static void resetAccumulators()
+static void resetPath(int idx, unsigned long now)
 {
-    windDirSinSum     = 0.0f;
-    windDirCosSum     = 0.0f;
-    windSpeedSum      = 0.0f;
-    bme280TempSum     = 0.0f;
-    bme280PressAbsSum = 0.0f;
-    bme280PressSeaSum = 0.0f;
-    bme280HumSum      = 0.0f;
-    rainCycleMm       = 0.0f;
-    subSampleCount    = 0;
-    bme280SampleCount = 0;
-    loopCount++;   // increment cycle counter after transmission
-    // windGustMs is intentionally left untouched here (see takeSample()):
-    // resetting it eagerly would make it read 0 — while windSpeedMs still
-    // shows the just-finished cycle's average — for however long it takes
-    // the new cycle's first sub-sample to arrive. Live consumers (Wi-Fi
-    // status page, REST API, MQTT) read these globals at arbitrary moments,
-    // not just right after a transmission, so that gap was directly
-    // observable as "wind speed has a value, gust is still 0".
+    windAcc[idx].reset();
+    srcRfWindReset(idx);
+    rainWin[idx].reset(rainMMSinceStart, now);
+    pathLastMs[idx] = now;
 }
 
-// Take one sub-sample (called every sampleMs)
-static void takeSample()
+// One wind sample (every sampleSec). Also collects the rain pulses and
+// runs the PCB v2.0 I/O sampling (AUX analog, 2nd anemometer, outputs).
+static void takeWindSample()
 {
-    // Reset the gust baseline for the new cycle right before its first real
-    // reading overwrites it (see resetAccumulators() above for why this
-    // can't just happen there), so windGustMs never sits at a stale 0 while
-    // windSpeedMs still reflects the previous cycle.
-    if (subSampleCount == 0) windGustMs = 0.0f;
-
-    float subSampleRainMm = readPulseCounters();   // also updates windSpeedMs, windGustMs, rainMMSinceStart
+    PulseSample ps = readPulseCounters();   // also adds rain to rainMMSinceStart
 
     if (gCfg.windEn) {
         // Low-power mode: the vane supply is only on around the reading; the
@@ -305,14 +314,18 @@ static void takeSample()
         else windVaneSupply(true);
         uint16_t dir = readWindDirection();
         if (vaneSwitched) windVaneSupply(false);
-        float rad     = dir * DEG_TO_RAD;
-        windDirSinSum += sinf(rad);
-        windDirCosSum += cosf(rad);
-        windSpeedSum  += windSpeedMs;
+        if (ps.windValid) {
+            float gust = windRing.push(ps.windPulses, ps.elapsedMs, dir, true, gCfg.windMsPerPps);
+            for (int i = 0; i < PATH_COUNT; i++) windAcc[i].add(ps.windPulses, ps.elapsedMs, dir, true, gust);
+        }
     }
-    if (gCfg.rainEn)
-        rainCycleMm += subSampleRainMm;
+    ioSample();   // PCB v2.0: AUX analog input, 2nd anemometer, fan state for the stall check
+    windSampleCount++;
+}
 
+// Slow sensors (every SLOW_SAMPLE_MS, at least once per base cycle).
+static void takeSlowSample()
+{
     if (readBme280()) {
         bme280TempSum     += bme280TempC;
         bme280PressAbsSum += bme280PressAbs;
@@ -320,32 +333,42 @@ static void takeSample()
         bme280HumSum      += bme280Humidity;
         bme280SampleCount++;
     }
-    ioSample();   // PCB v2.0: AUX analog input, fan state for the stall check
-    subSampleCount++;
 }
 
-// Calculate final values from accumulators (once per send cycle)
-static void computeFinalValues(unsigned long elapsedMs)
+// Wind/rain values of one path at the moment it sends.
+static PathValues pathValues(int idx, int aggMode, unsigned long now)
 {
-    if (subSampleCount == 0) return;
-
-    if (gCfg.windEn) {
-        // Vector-average wind direction: circular arithmetic correct (350°+10° → 0°)
-        float avgSin  = windDirSinSum / subSampleCount;
-        float avgCos  = windDirCosSum / subSampleCount;
-        int   angleDeg = (int)roundf(atan2f(avgSin, avgCos) * RAD_TO_DEG);
-        windDirection = (uint16_t)((angleDeg % 360 + 360) % 360);
-        windSpeedMs   = windSpeedSum / subSampleCount;
-        // Gust should not be lower than the cycle average, otherwise some
-        // dashboard queries may treat gust as missing at very short sample windows.
-        if (windGustMs < windSpeedMs) windGustMs = windSpeedMs;
+    PathValues v;
+    v.windSpeedMs = windSpeedMs; v.windGustMs = windGustMs; v.windDirDeg = windDirection;   // fallback
+    // wind from the selected source (board anemometer or a wireless sensor)
+    WindStats w = srcIsRadio(SG_WIND) ? srcRfWind(idx, aggMode == WIND_AGG_10MIN)
+                : (aggMode == WIND_AGG_10MIN) ? windRing.stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps)
+                                              : windAcc[idx].result(gCfg.windMsPerPps);
+    if (w.valid) {
+        v.windSpeedMs = w.meanMs;
+        v.windGustMs  = w.gustMs;
+        if (w.dirValid) v.windDirDeg = w.dirDeg;
     }
-    if (gCfg.rainEn) {
-        rainMM      = rainCycleMm;
-        // Guard: avoid astronomically high rate on very short first cycle
-        rainRateMmH = (elapsedMs >= 1000)
-                      ? rainCycleMm / ((float)elapsedMs / 3600000.0f)
-                      : 0.0f;
+    if (srcActive(SG_RAIN)) {
+        v.rainMm      = rainWin[idx].amount(rainMMSinceStart);
+        v.rainRateMmH = rainWin[idx].rateMmH(rainMMSinceStart, now);
+    }
+    return v;
+}
+
+// End of a base cycle: the base window's values become the globals
+// (status page, REST, history, display, weather-network feed).
+static void computeFinalValues(unsigned long elapsedMs, unsigned long now)
+{
+    if (srcActive(SG_WIND)) {
+        PathValues b = pathValues(PATH_BASE, WIND_AGG_INTERVAL, now);
+        windSpeedMs   = b.windSpeedMs;
+        windGustMs    = b.windGustMs;
+        windDirection = b.windDirDeg;
+    }
+    if (srcActive(SG_RAIN)) {
+        rainMM      = rainWin[PATH_BASE].amount(rainMMSinceStart);
+        rainRateMmH = rainWin[PATH_BASE].rateMmH(rainMMSinceStart, now);
     }
     if (bme280Present && bme280SampleCount > 0) {
         bme280TempC    = bme280TempSum    / bme280SampleCount;
@@ -353,15 +376,26 @@ static void computeFinalValues(unsigned long elapsedMs)
         bme280PressSea = bme280PressSeaSum / bme280SampleCount;
         bme280Humidity = bme280HumSum     / bme280SampleCount;
     }
+    srcUpdateCycle();   // temperature/humidity, UV, light from the selected sources
+    bme280TempSum = bme280PressAbsSum = bme280PressSeaSum = bme280HumSum = 0.0f;
+    bme280SampleCount = 0;
 
     cpuTemperature = heltec_temperature();
     batteryVolt    = gCfg.lipoEn ? readBatteryVoltage() : 0.0f;
     ioFinishCycle(elapsedMs);
 
-    dbgSerial.printf("[Cycle %d samples] Wind: %d°, %.1f m/s (gust %.1f) | "
+    dbgSerial.printf("[Cycle %d wind samples] Wind: %d°, %.1f m/s (gust %.1f) | "
                   "Rain: %.1f mm @ %.1f mm/h | Batt: %.2fV | CPU: %.1f°C\n",
-                  subSampleCount, windDirection, windSpeedMs, windGustMs,
+                  windSampleCount, windDirection, windSpeedMs, windGustMs,
                   rainMM, rainRateMmH, batteryVolt, cpuTemperature);
+    windSampleCount = 0;
+}
+
+// A path is due once its interval has passed; half a base cycle of slack so
+// a base cycle ending a few ms early does not push the send a whole cycle.
+static bool pathDue(int idx, unsigned long now, unsigned long intervalMs, unsigned long baseMs)
+{
+    return now - pathLastMs[idx] + baseMs / 2 >= intervalMs;
 }
 
 // Thin LoRaWAN-specific parser: byte-frame commands map onto the shared,
@@ -435,7 +469,25 @@ static void sendLoRa()
         txBuf = (const uint8_t*)lpp.getBuffer(); txLen = lpp.getSize(); txPort = 1;
     }
 
-    int16_t state = loRaNode->sendReceive(txBuf, txLen, txPort, downlinkData, &lenDown);
+    LoRaWANEvent_t evUp = {}, evDown = {};
+    loraRadioTaken();   // wireless-sensor reception pauses for the uplink + RX windows
+    int16_t state = loRaNode->sendReceive(txBuf, txLen, txPort, downlinkData, &lenDown, false, &evUp, &evDown);
+
+    // status-page diagnostics (read by the web task)
+    if (state >= RADIOLIB_ERR_NONE) {
+        gLoraDiag.haveUplink = true;
+        gLoraDiag.dataRate   = evUp.datarate;
+        gLoraDiag.freqMHz    = evUp.freq;
+        gLoraDiag.txPowerDbm = evUp.power;
+        gLoraDiag.fCntUp     = loRaNode->getFCntUp();
+        gLoraDiag.devAddr    = loRaNode->getDevAddr();
+    }
+    if (state > 0) {
+        gLoraDiag.haveDownlink   = true;
+        gLoraDiag.lastDownlinkMs = millis();
+        gLoraDiag.lastDlRssi     = radio.getRSSI();
+        gLoraDiag.lastDlSnr      = radio.getSNR();
+    }
 
     char buf[64];
     if (state == RADIOLIB_ERR_NONE) {
@@ -443,10 +495,23 @@ static void sendLoRa()
         sendFailCount = 0;
         display.drawString(0, 44, "Uplink sent");
         display.drawString(0, 55, "no downlink");
+        if (++uplinksWithoutDownlink >= (NO_DOWNLINK_REJOIN << noDownlinkShift)) {
+            dbgSerial.printf("No downlink for %lu uplinks - session assumed broken, rejoining.\n",
+                             (unsigned long)uplinksWithoutDownlink);
+            uplinksWithoutDownlink = 0;
+            if (noDownlinkShift < NO_DOWNLINK_MAX_SHIFT) noDownlinkShift++;
+            loraReconnect();
+        }
+        gLoraDiag.uplinksWithoutDownlink = uplinksWithoutDownlink;
+        gLoraDiag.rejoinThreshold = NO_DOWNLINK_REJOIN << noDownlinkShift;
     } else if (state > 0) {
         dbgSerial.printf("Uplink + Downlink (%d bytes), SNR: %.1f dB, RSSI: %.1f dBm\n",
                       lenDown, radio.getSNR(), radio.getRSSI());
         sendFailCount = 0;
+        uplinksWithoutDownlink = 0;
+        noDownlinkShift = 0;
+        gLoraDiag.uplinksWithoutDownlink = 0;
+        gLoraDiag.rejoinThreshold = NO_DOWNLINK_REJOIN;
         processDownlink(downlinkData, lenDown);
         display.drawString(0, 44, "Uplink + Downlink");
         snprintf(buf, sizeof(buf), "SNR %.1f  RSSI %.1f", radio.getSNR(), radio.getRSSI());
@@ -471,7 +536,7 @@ static void drawDisplay()
     char buf[64];
     display.clear();
 
-    if (gCfg.windEn) {
+    if (srcActive(SG_WIND)) {
         snprintf(buf, sizeof(buf), "D%03d S%.1f G%.1f %s",
                  windDirection,
                  windSpeedForOutput(windSpeedMs, gCfg),
@@ -480,18 +545,21 @@ static void drawDisplay()
         display.drawString(0,  0, buf);
     }
 
-    if (gCfg.rainEn)
+    if (srcActive(SG_RAIN))
         snprintf(buf, sizeof(buf), "#%d  Rain: %.1f%s", loopCount,
                  rainForOutput(rainMMSinceStart, gCfg), rainUnitLabel(gCfg));
     else
         snprintf(buf, sizeof(buf), "#%d", loopCount);
     display.drawString(0, 11, buf);
 
-    if (bme280Present)
+    if (gSrc.tempValid && bme280Present)
         snprintf(buf, sizeof(buf), "%.1f%s  %.1f%%rH  %.0f%s",
-                 temperatureForOutput(bme280TempC, gCfg), temperatureUnitLabel(gCfg),
-                 bme280Humidity,
+                 temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg),
+                 gSrc.humidity,
                  pressureForOutput(bme280PressAbs, gCfg), pressureUnitLabel(gCfg));
+    else if (gSrc.tempValid)
+        snprintf(buf, sizeof(buf), "%.1f%s  %.1f%%rH (radio)",
+                 temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg), gSrc.humidity);
     else
         snprintf(buf, sizeof(buf), "no BME280");
     display.drawString(0, 22, buf);
@@ -527,8 +595,26 @@ size_t getArduinoLoopTaskStackSize(void)
 // ============================================================================
 // SETUP
 // ============================================================================
+static const char* resetReasonText(esp_reset_reason_t r)
+{
+    switch (r) {
+        case ESP_RST_POWERON:   return "power-on";
+        case ESP_RST_EXT:       return "external reset";
+        case ESP_RST_SW:        return "software restart";
+        case ESP_RST_PANIC:     return "crash (panic)";
+        case ESP_RST_INT_WDT:   return "watchdog (interrupt)";
+        case ESP_RST_TASK_WDT:  return "watchdog (task)";
+        case ESP_RST_WDT:       return "watchdog";
+        case ESP_RST_DEEPSLEEP: return "deep-sleep wake";
+        case ESP_RST_BROWNOUT:  return "brownout (supply voltage dip)";
+        case ESP_RST_SDIO:      return "SDIO reset";
+        default:                return "unknown";
+    }
+}
+
 void setup()
 {
+    gResetReason = resetReasonText(esp_reset_reason());
     // Watchdog: 120 s timeout – catches hanging joins and blocked sends
     esp_task_wdt_init(120, true);
 
@@ -621,8 +707,11 @@ void setup()
     sensorsInit(pins);
     ioInit();   // PCB v2.0 I/O block (outputs off, enabled inputs started)
 
-    lastSampleMs = millis();
-    lastSendMs   = millis();
+    {
+        unsigned long t = millis();
+        lastWindSampleMs = lastSlowSampleMs = lastSendMs = t;
+        for (int i = 0; i < PATH_COUNT; i++) resetPath(i, t);
+    }
 
     // Parallel WiFi + MQTT transport (fully optional, see wifiMqttPoll() in
     // loop() for the non-blocking connect state machine).
@@ -633,7 +722,8 @@ void setup()
     // Setup done - normal operation. Take a first sub-sample right away so
     // the 20 s boot display shows real readings instead of zeros (the first
     // full cycle only completes after uplinkIntervalSec).
-    takeSample();
+    takeWindSample();
+    takeSlowSample();
     activateDisplay(20000);
 
     // Enable WDT for the loop task from here
@@ -656,62 +746,92 @@ void loop()
     // see web_api.cpp's webApiTask for why (mainly: so an HTTP request isn't
     // stuck waiting behind sendLoRa()'s blocking airtime).
 
-    const unsigned long now           = millis();
-    const unsigned long sendTargetMs  = (unsigned long)gCfg.uplinkIntervalSec * 1000UL;
-    // Sample interval from config; never larger than uplink interval
-    const unsigned long sampleMs      = min((unsigned long)gCfg.sampleSec * 1000UL, sendTargetMs);
+    const unsigned long now = millis();
+    // Intervals: wind sample (1 or 3 s), LoRaWAN, MQTT (0 = like LoRaWAN) and
+    // the base cycle = the shortest active send interval, never shorter than
+    // one wind sample.
+    const unsigned long windSampleMs = (unsigned long)windSampleSecNormalized(gCfg.sampleSec) * 1000UL;
+    const unsigned long loraMs       = (unsigned long)gCfg.uplinkIntervalSec * 1000UL;
+    const bool          mqttOn       = gCfg.wifiEn && gCfg.mqttEn;
+    unsigned long       mqttMs       = gCfg.mqttIntervalSec > 0 ? (unsigned long)gCfg.mqttIntervalSec * 1000UL : loraMs;
+    mqttMs = max(mqttMs, windSampleMs);
+    unsigned long baseMs = mqttOn ? min(loraMs, mqttMs) : loraMs;
+    baseMs = max(baseMs, windSampleMs);
+    const unsigned long slowMs = min(SLOW_SAMPLE_MS, baseMs);
+    gBaseCycleMs = baseMs;
+    // LoRaWAN duty cycle: never more than 1 % airtime - with a slow data rate
+    // (e.g. SF12, ~1.5 s per uplink) the interval is stretched (here ~150 s).
+    unsigned long loraEffMs = loraMs;
+    if (loRaNode) loraEffMs = max(loraMs, (unsigned long)loRaNode->getLastToA() * 100UL);
+    gLoraDiag.intervalMs = loraEffMs;
 
-    // ── Take sub-sample ────────────────────────────────────────────────────
-    if (!sendPending && now - lastSampleMs >= sampleMs) {
-        lastSampleMs = now;
-        takeSample();
+    // ── Samples ────────────────────────────────────────────────────────────
+    if (!sendPending && now - lastWindSampleMs >= windSampleMs) {
+        lastWindSampleMs = now;
+        takeWindSample();
+    }
+    if (!sendPending && now - lastSlowSampleMs >= slowMs) {
+        lastSlowSampleMs = now;
+        takeSlowSample();
     }
 
-    // ── Uplink when target interval reached ───────────────────────────────
-    if (!sendPending && now - lastSendMs >= sendTargetMs) {
+    // ── End of a base cycle ────────────────────────────────────────────────
+    if (!sendPending && now - lastSendMs >= baseMs) {
         sendElapsedMs = now - lastSendMs;
         lastSendMs    = now;
 
-        computeFinalValues(sendElapsedMs);
+        computeFinalValues(sendElapsedMs, now);
         startOneWireConversion();   // non-blocking; finished off below once ready
         sendPending = true;
     }
 
-    // ── Finish the pending send once the DS18B20 conversion is ready ──────
+    // ── Finish the pending cycle once the DS18B20 conversion is ready ──────
     // pollOneWireConversion() returns false immediately if the ~750 ms
     // conversion isn't done yet, so loop() (button, WiFi/MQTT poll, watchdog)
-    // keeps running normally in the meantime instead of stalling on it —
-    // matters most at short cycle times (WiFi/MQTT-only nodes can go down to
-    // a few seconds, where a blocking 750 ms wait would be a large fraction
-    // of the whole cycle).
+    // keeps running normally in the meantime.
     if (sendPending && pollOneWireConversion()) {
         sendPending = false;
+        const unsigned long cycleEnd = lastSendMs;
 
-        if (loraReady()) {
-            // Largest payload the current data rate allows (ADR can switch to
-            // SF12 = 51 bytes on EU868); the builders leave out the least
-            // important fields until the packet fits.
-            size_t limit = loRaNode->getMaxPayloadLen();
-            if (gCfg.payloadFormat == 1) buildBinaryPacket(limit);
-            else                          buildLppPacket(limit);
-        }
-
-        // Display update and LoRa send are independent conditions - keep
-        // them as separate statements rather than duplicating the loraEn
-        // check across both display-state branches.
         if (displayActive) drawDisplay();
-        if (loraReady()) sendLoRa();
-        else if (gCfg.loraEn) dbgSerial.println("LoRa uplink skipped: not joined (measurements/WiFi continue).");
-        // Low-power mode: SX1262 into sleep (warm start, config kept) until
-        // the next uplink - RadioLib wakes it again on the next command.
-        if (gCfg.loraEn && lowPowerActive()) loraSleep();
+
+        // LoRaWAN: its own window, values as configured (interval / 10 min)
+        if (gCfg.loraEn && pathDue(PATH_LORA, cycleEnd, loraEffMs, baseMs)) {
+            if (loraReady()) {
+                PathValues lv = pathValues(PATH_LORA, gCfg.loraWindAgg, cycleEnd);
+                // Largest payload the current data rate allows (ADR can switch to
+                // SF12 = 51 bytes on EU868); the builders leave out the least
+                // important fields until the packet fits.
+                size_t limit = loRaNode->getMaxPayloadLen();
+                if (gCfg.payloadFormat == 1) buildBinaryPacket(limit, &lv);
+                else                          buildLppPacket(limit, &lv);
+                sendLoRa();
+            } else {
+                dbgSerial.println("LoRa uplink skipped: not joined (measurements/WiFi continue).");
+            }
+            resetPath(PATH_LORA, cycleEnd);
+            // Low-power mode: SX1262 into sleep (warm start, config kept) until
+            // the next uplink - RadioLib wakes it again on the next command.
+            if (lowPowerActive()) loraSleep();
+        }
         if (displayActive) display.display();
 
-        mqttPublishTelemetry();   // no-op unless wifiEn+mqttEn and currently connected
-        pushHistorySample();      // record this cycle's finished values for /chart
-        wxUploadPushCycle();      // feed AWEKAS/WU/... windows + daily rain total
+        // MQTT: its own window and interval
+        if (mqttOn && pathDue(PATH_MQTT, cycleEnd, mqttMs, baseMs)) {
+            PathValues mv = pathValues(PATH_MQTT, gCfg.mqttWindAgg, cycleEnd);
+            mqttPublishTelemetry(&mv);   // no-op unless currently connected
+            resetPath(PATH_MQTT, cycleEnd);
+        }
 
-        resetAccumulators();
+        // A disabled path keeps no window (it would only grow until re-enabled).
+        if (!gCfg.loraEn) resetPath(PATH_LORA, cycleEnd);
+        if (!mqttOn)      resetPath(PATH_MQTT, cycleEnd);
+
+        pushHistorySample();   // base cycle values for the dashboard history
+        wxUploadPushCycle(srcIsRadio(SG_WIND) ? srcRfWind(PATH_BASE, true)
+                                              : windRing.stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps));
+        resetPath(PATH_BASE, cycleEnd);
+        loopCount++;
 
         if (portalRequestedViaDownlink) {
             portalRequestedViaDownlink = false;
@@ -722,6 +842,9 @@ void loop()
     // RadioLib's individual join exchange is synchronous (several seconds),
     // but no retry loop can hold setup/measurement service indefinitely.
     if (!sendPending) loraPoll();
+    // Wireless sensors: restart FSK reception after LoRaWAN used the SX1262,
+    // decode received packets (non-blocking; no-op unless rfEn).
+    rfSensorsLoop();
 
     // Low-power mode: light sleep until the next sub-sample / uplink (VE.Direct
     // needs ~2.5 s awake before an uplink to catch a frame); otherwise a short yield.
@@ -729,8 +852,10 @@ void loop()
         if (gCfg.vanePowerSave && !vaneOffForMode) { windVaneSupply(false); vaneOffForMode = true; }
         if (!gCfg.vanePowerSave && vaneOffForMode)  { windVaneSupply(true);  vaneOffForMode = false; }
         unsigned long t = millis();
-        unsigned long toSample = sampleMs - min(sampleMs, t - lastSampleMs);
-        unsigned long toSend   = sendTargetMs - min(sendTargetMs, t - lastSendMs);
+        unsigned long toSample = windSampleMs - min(windSampleMs, t - lastWindSampleMs);
+        unsigned long toSlow   = slowMs - min(slowMs, t - lastSlowSampleMs);
+        unsigned long toSend   = baseMs - min(baseMs, t - lastSendMs);
+        toSample = min(toSample, toSlow);
         if (gCfg.veDirectEn) toSend = (toSend > 2500) ? toSend - 2500 : 0;
         lowPowerSleep(min(toSample, toSend));
     } else {

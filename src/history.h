@@ -32,3 +32,12 @@ void pushHistorySample();
 // units.h at serialize time — same convention as buildJsonPayload().
 // coarse=false -> fine/24h tier, coarse=true -> coarse/7-day tier.
 void buildHistoryJson(JsonDocument& doc, bool coarse);
+
+// Lookups in the fine tier (5-min buckets, 24 h) for trends and rolling sums.
+// Value about ageSec ago (closest bucket, at most 10 min off); false = no data
+// that old yet (e.g. less than 3 h since start for the pressure tendency).
+bool historyPressureAgo(uint32_t ageSec, float& qnhHpa);   // QNH, hPa
+bool historyTempAgo(uint32_t ageSec, float& tempC);        // selected temperature source, °C
+// Rain of the selected source over roughly the last windowSec (finished
+// buckets plus the open one), mm. Since start if the node runs shorter.
+float historyRainSum(uint32_t windowSec);

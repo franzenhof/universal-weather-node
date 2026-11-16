@@ -65,6 +65,11 @@ bool detectPcbV2();
 
 // True when the board is v2.0 (detected or set manually).
 bool ioV2();
+// Measurements that really run (one place for the conditions, used by the
+// status page, JSON, LoRaWAN, Home Assistant and history).
+bool ioUvActive();
+bool ioAuxAinActive();       // also false while the 2nd vane (wind2Mode 2) uses AIN
+bool ioWind2DirActive();
 
 // Puts the outputs into a safe state (off) and starts whatever is enabled.
 // Call once after sensorsInit(); no-op on Rev 1.2/1.3.

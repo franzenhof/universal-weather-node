@@ -11,10 +11,12 @@ int main()
     for (int mode=1;mode<=2;mode++) {
         gCfg.wind2Mode=mode;
         buildBinaryPacket(BIN_MAX_SIZE);
-        uint32_t mask=binBuf[1] | (uint32_t)binBuf[2]<<8 | (uint32_t)binBuf[3]<<16 | (uint32_t)binBuf[4]<<24;
-        assert(mask & (1u<<BIN_WIND2_SPEED));
-        assert(mask & (1u<<BIN_WIND2_GUST));
-        assert((bool)(mask & (1u<<BIN_WIND2_DIR))==(mode==2));
+        assert(binBuf[0]==BIN_PROTO_VERSION);
+        uint64_t mask=0;int k=1,sh=0;   // variable-length mask: 7 bits per byte
+        do { mask|=(uint64_t)(binBuf[k]&0x7F)<<sh; sh+=7; } while(binBuf[k++]&0x80);
+        assert(mask & (1ull<<BIN_WIND2_SPEED));
+        assert(mask & (1ull<<BIN_WIND2_GUST));
+        assert((bool)(mask & (1ull<<BIN_WIND2_DIR))==(mode==2));
         buildLppPacket(200);
         auto b=lpp.getBuffer();
         assert(b[0]==2 && b[1]==LPP_DIGITAL_INPUT);

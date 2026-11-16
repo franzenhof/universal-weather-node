@@ -1,0 +1,11 @@
+{
+  "name": "TfaWeatherSensorReceiver",
+  "version": "0.1.0",
+  "description": "Receiver/decoder for TFA Dostmann / LaCrosse IT+ 868 MHz temperature/humidity sensors with an SX1262 (RadioLib), sharing the transceiver with other users such as LoRaWAN",
+  "keywords": "tfa, lacrosse, it+, weather, sensor, 868mhz, sx1262, radiolib",
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "dependencies": { "jgromes/RadioLib": ">=7.0.0" },
+  "build": { "srcDir": "src" }
+}

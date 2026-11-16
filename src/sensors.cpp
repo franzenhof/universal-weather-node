@@ -1,6 +1,7 @@
 #include "sensors.h"
 #include "globals.h"
 #include "serial_log.h"
+#include "sources.h"
 
 #include "driver/pcnt.h"
 #include <Wire.h>
@@ -287,13 +288,14 @@ uint16_t readWindDirection()
 // units are not clocked then, so those edges are counted in software.
 volatile uint32_t sleepPulsesWind = 0, sleepPulsesRain = 0;
 
-float readPulseCounters()
+PulseSample readPulseCounters()
 {
     int16_t       curWind = 0, curRain = 0;
     unsigned long now     = millis();
     unsigned long elapsed = now - previousMillis;
     previousMillis = now;
-    float subSampleRainMm = 0.0f;
+    PulseSample out;
+    out.elapsedMs = (uint16_t)(elapsed > 65535 ? 65535 : elapsed);
 
     if (gCfg.windEn) {
         pcnt_get_counter_value(PCNT_UNIT_WINDSPEED, &curWind);
@@ -304,17 +306,16 @@ float readPulseCounters()
         // gCfg.windMsPerPps: sensor-specific calibration (Davis default: 1.00584,
         // derived from "2.25 mph per Hz"); configurable for other anemometers.
         float newSpeedMs = pps * gCfg.windMsPerPps;
-        if (newSpeedMs > MAX_PLAUSIBLE_WIND_SPEED_MS || newSpeedMs < 0.0f) {
+        if (newSpeedMs > MAX_PLAUSIBLE_WIND_SPEED_MS || newSpeedMs < 0.0f || elapsed > 65535) {
             // Reed-switch contact bounce / EMI burst on the pulse line can
             // produce a short, physically impossible pulse rate on a single
-            // sub-sample. Drop the sample entirely so neither windSpeedMs nor
-            // windGustMs ever sees it (see MAX_PLAUSIBLE_WIND_SPEED_MS).
-            dbgSerial.printf("Wind: %ld pulses → %.1f m/s REJECTED (implausible, gust stays %.1f)\n",
-                          (long)pulsesWind, newSpeedMs, windGustMs);
+            // sub-sample. Drop the sample entirely so neither the means nor
+            // the gust ever see it (see MAX_PLAUSIBLE_WIND_SPEED_MS).
+            dbgSerial.printf("Wind: %ld pulses → %.1f m/s REJECTED (implausible)\n", (long)pulsesWind, newSpeedMs);
         } else {
-            windSpeedMs = newSpeedMs;
-            if (windSpeedMs > windGustMs) windGustMs = windSpeedMs;
-            dbgSerial.printf("Wind: %ld pulses → %.1f m/s (gust %.1f)\n", (long)pulsesWind, windSpeedMs, windGustMs);
+            out.windValid  = true;
+            out.windPulses = (uint16_t)pulsesWind;
+            dbgSerial.printf("Wind: %ld pulses in %lu ms → %.1f m/s\n", (long)pulsesWind, elapsed, newSpeedMs);
         }
     }
 
@@ -325,15 +326,15 @@ float readPulseCounters()
         sleepPulsesRain = 0;
         // gCfg.rainMmPerTip: sensor-specific calibration (Davis default: 0.2mm/tip);
         // configurable for other tipping-bucket rain gauges.
-        subSampleRainMm  = (float)pulsesRain * gCfg.rainMmPerTip;
-        rainMMSinceStart += subSampleRainMm;
-        dbgSerial.printf("Rain: %ld pulses → %.1f mm\n", (long)pulsesRain, subSampleRainMm);
+        out.rainMm        = (float)pulsesRain * gCfg.rainMmPerTip;
+        srcBoardRain(out.rainMm);   // into rainMMSinceStart only while the board gauge is the rain source
+        if (pulsesRain) dbgSerial.printf("Rain: %ld pulses → %.1f mm\n", (long)pulsesRain, out.rainMm);
     }
     // rainMM/rainRateMmH are deliberately NOT written here: they are the
     // finished cycle's values (computeFinalValues() in main.cpp) and are read
     // by the web UI/API at any time - a 3 s sub-sample would show 0 most of
     // the time, or 240 mm/h for a single tip.
-    return subSampleRainMm;
+    return out;
 }
 
 bool readBme280()

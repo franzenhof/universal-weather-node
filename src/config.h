@@ -29,6 +29,12 @@ constexpr int PCB_REV_2_0 = 20;
 // ============================================================================
 // CONFIGURATION (persistent via NVS / Preferences)
 // ============================================================================
+constexpr int RF_RADIO_OFF = 0, RF_RADIO_SX1262 = 1;
+// Wireless protocols (gCfg.rfProto bit mask): Bresser 5/6/7-in-1 etc. (8.21 kbit/s),
+// LaCrosse / TFA IT+ at 17.241 kbit/s (TX29-IT, TFA 30.3159.IT, ...) and at
+// 9.579 kbit/s (TX35-IT, TFA 30.3155.WD, ...). Several = the receiver alternates.
+constexpr int RF_PROTO_BRESSER = 1, RF_PROTO_ITPLUS17 = 2, RF_PROTO_ITPLUS9 = 4, RF_PROTO_ALL = 7;
+
 struct Config {
     // Set once the config portal has been completed the first time. Used
     // instead of devEui==0 to detect "needs first-time setup", since a
@@ -51,8 +57,13 @@ struct Config {
     // deliberately doesn't use std::atomic, since Config is copied by value
     // throughout (loadConfig() return, portal.cpp's `Config c = cur`), and
     // atomics aren't copyable.
-    volatile int uplinkIntervalSec = 300;  // target uplink interval (s)
-    volatile int sampleSec         = 3;    // sub-sample interval (s); <= uplinkIntervalSec
+    volatile int uplinkIntervalSec = 300;  // LoRaWAN uplink / measurement interval (s)
+    volatile int sampleSec         = 1;    // wind sample interval (s): 1 or 3 (see wind_window.h)
+    volatile int mqttIntervalSec   = 0;    // MQTT publish interval (s); 0 = same as uplinkIntervalSec
+    volatile int loraWindAgg       = 0;    // LoRaWAN wind values: 0 = interval since last uplink, 1 = 10-min (WMO)
+    volatile int mqttWindAgg       = 0;    // MQTT wind values: 0 = interval since last publish, 1 = 10-min (WMO)
+    volatile int rfProto           = 1;    // wireless protocols, bit mask RF_PROTO_* (rf_sensors.cpp); several = time-shared
+    volatile int rfEn              = 0;    // Bresser 868 MHz sensors (rf_sensors.cpp): 0 = off, RF_RADIO_SX1262 = shared LoRa chip
     volatile int windDirOffsetDeg  = 0;   // north offset (added to raw value, mod 360)
     volatile int windUnitMs        = 1;   // 1 = transmit wind in m/s, 0 = transmit in km/h
     volatile int windEn            = 1;   // 1 = Davis wind sensor enabled (direction + speed)
@@ -101,6 +112,8 @@ struct Config {
     char     mqttTopic[65]     = "";  // optional topic prefix override; falls back to deviceName
     int      mqttTlsMode       = 0;   // MqttTlsMode (see above)
     char     mqttCaCert[2048]  = "";  // PEM root CA, only used when mqttTlsMode == MQTT_TLS_VERIFY
+    uint8_t  srcSel[5]         = { 0, 0, 0, 0, 0 };   // value sources (sources.h): air, wind, rain, UV, light; 0 = auto
+    char     rfIds[48]         = "";  // wireless sensor IDs to accept (hex, comma-separated, max 4); empty = any
     char     webAdminPass[33]  = "";  // gates write access to the web settings page
 
     // ------------------------------------------------------------------
@@ -127,6 +140,15 @@ struct Config {
     char     wnetproId[33]     = "";
     char     wnetproKey[33]    = "";
     int      wnetproIntervalSec = 60;
+    char     windyId[33]       = "";   // Windy station ID (stations.windy.com, API v2)
+    char     windyPass[81]     = "";   // Windy station password
+    int      windyIntervalSec  = 300;
+    char     osemBoxId[33]     = "";   // openSenseMap senseBox ID
+    char     osemToken[81]     = "";   // box access token (Authorization header)
+    char     osemSensors[321]  = "";   // "temp=<sensorId>,hum=<id>,..." (see wx_upload.cpp)
+    int      osemIntervalSec   = 300;
+    bool     updateCheckEn     = false;   // daily check for newer firmware (tags/releases API)
+    char     updateUrl[161]    = "https://git.lb.franzenhof.com/api/v1/repos/esp32/universal-weather-node/tags?limit=20";
 
     // ------------------------------------------------------------------
     // PCB v2.0 I/O block (board_io.cpp) - all off by default, ignored on

@@ -5,12 +5,15 @@ const os = require('node:os');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'weathernode-runtime-'));
-const common = ['src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'test/host/runtime.cpp'];
+const common = ['src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/derived.cpp', 'src/derived_now.cpp', 'test/host/runtime.cpp'];
 try {
   for (const [name, sources] of [
     ['sensors', common],
     ['io', [...common, 'src/params.cpp']],
     ['lora', ['src/lora_transport.cpp', 'test/host/runtime.cpp']],
+    ['windows', ['src/wind_window.cpp']],
+    ['derived', ['src/derived.cpp']],
+    ['itplus', ['lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp']],
     ['telemetry', [...common, 'src/json_payload.cpp', 'src/units.cpp']],
     ['payload', [...common, 'src/lora_payload.cpp', 'src/payload_binary.cpp', 'src/units.cpp',
       '.pio/libdeps/heltec_wifi_lora_32_V3/CayenneLPP/src/CayenneLPP.cpp',
@@ -19,7 +22,7 @@ try {
     const exe = path.join(tmp, name);
     execFileSync(process.env.CXX || 'c++', [
       '-std=c++11', '-Wall', '-Wextra', '-Werror',
-      '-I', 'test/host', '-I', 'src',
+      '-I', 'test/host', '-I', 'src', '-I', 'lib/TfaWeatherSensorReceiver/src',
       '-I', '.pio/libdeps/heltec_wifi_lora_32_V3/ArduinoJson/src',
       '-I', '.pio/libdeps/heltec_wifi_lora_32_V3/CayenneLPP/src',
       ...sources, `test/firmware_${name}.cpp`, '-o', exe,

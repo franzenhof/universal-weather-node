@@ -1,4 +1,5 @@
 #pragma once
+#include "wind_window.h"   // PathValues: wind/rain of the sending path
 
 #include <CayenneLPP.h>
 #include <stdint.h>
@@ -18,8 +19,8 @@ extern size_t     binLen;
 extern char lastPayloadDropped[128];
 
 // Populates `lpp` from the current sensor globals (see globals.h).
-void buildLppPacket(size_t limit);
+void buildLppPacket(size_t limit, const PathValues* pv = nullptr);
 
 // Populates binBuf/binLen — compact binary alternative to CayenneLPP (layout
 // in payload.h), see chirpstack/decoder.js (parseBin) for the decoder.
-void buildBinaryPacket(size_t limit);
+void buildBinaryPacket(size_t limit, const PathValues* pv = nullptr);
