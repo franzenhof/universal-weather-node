@@ -43,7 +43,7 @@ int main()
     assert(doc["rfSensors"].isNull());
     gCfg.rfEn=1;
     RfSensorReading& r=gRfSensors[0];
-    r.used=true;r.id=0x2A5B;r.type=1;r.rssi=-71.4f;r.lastMs=millis();r.batteryOk=false;
+    r.used=true;r.id=0x2A5B;r.type=1;r.rssi=-71.4f;r.lastMs=millis();r.batteryOk=false;r.tempMs=r.humMs=r.windMs=r.rainMs=r.uvMs=r.lightMs=millis();
     r.hasTemp=r.hasHumidity=r.hasWind=r.hasRain=r.hasUv=r.hasLight=true;
     r.tempC=4.5f;r.humidity=88;r.windAvgMs=3.1f;r.windGustMs=6.2f;r.windDirDeg=247.4f;r.rainTotalMm=123.4f;r.uvIndex=1.2f;r.lightLux=5321.6f;
     buildJsonPayload(doc);
@@ -70,6 +70,20 @@ int main()
     gRfSensors[1].used=true;gRfSensors[1].id=0x99;   // a thermo-only sensor: no weather groups
     buildJsonPayload(doc);
     assert(doc["rfSensors"].size()==2 && doc["rfSensors"][1]["windSpeed"].isNull());
+    // per-value freshness: the station keeps sending wind, the temperature/
+    // humidity part fails -> after 5 min only temperature/humidity drop out
+    gCfg.srcSel[SG_AIR]=SRC_RF1;gCfg.srcSel[SG_WIND]=SRC_RF1;gCfg.windEn=0;
+    srcUpdateCycle();assert(gSrc.tempValid && gSrc.humValid && srcIsRadio(SG_WIND));
+    delay(SRC_RF_FRESH_MS+1000);
+    r.windMs=r.lastMs=millis();                       // only wind packets arrived meanwhile
+    srcUpdateCycle();buildJsonPayload(doc);
+    assert(!gSrc.tempValid && !gSrc.humValid && srcIsRadio(SG_WIND) && !srcActive(SG_AIR));
+    assert(doc["temp"].isNull() && doc["sources"]["tempHum"].as<std::string>()=="none");
+    JsonArray st=doc["rfSensors"][0]["stale"];
+    assert(!st.isNull() && st[0].as<std::string>()=="temp" && st[1].as<std::string>()=="humidity");
+    gCfg.srcSel[SG_AIR]=SRC_AUTO;srcUpdateCycle();   // Auto falls back to the board BME280
+    assert(gSrc.tempValid && srcResolve(SG_AIR)==SRC_IS_BOARD);
+    gCfg.srcSel[SG_WIND]=SRC_AUTO;
     gCfg.rfEn=0;
     gCfg.uvEn=gCfg.auxAinEn=gCfg.auxPulseEn=0;gCfg.wind2Mode=2;
     srcUpdateCycle();buildJsonPayload(doc);

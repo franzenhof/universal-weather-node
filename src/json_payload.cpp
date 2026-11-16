@@ -235,6 +235,15 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
             if (r.hasRain)  o["rainTotal"] = rainForOutput(r.rainTotalMm, gCfg);
             if (r.hasUv)    o["uvIndex"]   = r.uvIndex;
             if (r.hasLight) o["lightLux"]  = (long)lroundf(r.lightLux);
+            // values not received for more than 5 min (the sensor still sends others)
+            const bool has[6] = { r.hasTemp, r.hasHumidity, r.hasWind, r.hasRain, r.hasUv, r.hasLight };
+            static const char* const keys[6] = { "temp", "humidity", "wind", "rain", "uv", "light" };
+            JsonArray stale;
+            for (int k = 0; k < 6; k++)
+                if (has[k] && !srcRfValueFresh(i, keys[k])) {
+                    if (stale.isNull()) stale = o["stale"].to<JsonArray>();
+                    stale.add(keys[k]);
+                }
         }
     }
 

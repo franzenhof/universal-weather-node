@@ -29,7 +29,11 @@ struct RfSensorReading {
     uint8_t       proto = 1;         // RF_PROTO_* (config.h) it was received with
     float         rssi = 0.0f;
     bool          batteryOk = true;
-    unsigned long lastMs = 0;        // millis() of the last packet
+    unsigned long lastMs = 0;        // millis() of the last packet (any content)
+    // millis() of the last packet that actually carried each value: a sensor
+    // can keep sending (e.g. wind) while one of its measurements fails, so the
+    // freshness of every value is judged on its own (sources.cpp)
+    unsigned long tempMs = 0, humMs = 0, windMs = 0, rainMs = 0, uvMs = 0, lightMs = 0;
     uint32_t      packets = 0;       // received since start
     // weather values (only the *_ok groups the sensor sends)
     bool  hasTemp = false, hasHumidity = false, hasWind = false, hasRain = false, hasUv = false, hasLight = false;

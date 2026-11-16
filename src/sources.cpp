@@ -25,17 +25,19 @@ bool boardHas(SrcGroup g)
     }
 }
 
+bool fresh(unsigned long t) { return millis() - t <= SRC_RF_FRESH_MS; }
+
 bool radioHas(int idx, SrcGroup g)
 {
     if (idx < 0 || idx >= RF_MAX_SENSORS || !gCfg.rfEn) return false;
     const RfSensorReading& r = gRfSensors[idx];
-    if (!r.used || millis() - r.lastMs > SRC_RF_FRESH_MS) return false;
-    switch (g) {
-        case SG_AIR:   return r.hasTemp;
-        case SG_WIND:  return r.hasWind;
-        case SG_RAIN:  return r.hasRain;
-        case SG_UV:    return r.hasUv;
-        case SG_LIGHT: return r.hasLight;
+    if (!r.used) return false;
+    switch (g) {   // the last packet carrying *this* value, not just any packet
+        case SG_AIR:   return r.hasTemp  && fresh(r.tempMs);
+        case SG_WIND:  return r.hasWind  && fresh(r.windMs);
+        case SG_RAIN:  return r.hasRain  && fresh(r.rainMs);
+        case SG_UV:    return r.hasUv    && fresh(r.uvMs);
+        case SG_LIGHT: return r.hasLight && fresh(r.lightMs);
         default:       return false;
     }
 }
@@ -135,7 +137,7 @@ void srcUpdateCycle()
         v.tempC = bme280TempC; v.humidity = bme280Humidity;
     } else if (r >= 0) {
         v.tempValid = true;  v.tempC = gRfSensors[r].tempC;
-        v.humValid  = gRfSensors[r].hasHumidity;  v.humidity = gRfSensors[r].humidity;
+        v.humValid  = gRfSensors[r].hasHumidity && fresh(gRfSensors[r].humMs);  v.humidity = gRfSensors[r].humidity;
     }
     r = srcResolve(SG_UV);
     if (r == SRC_IS_BOARD) v.uvBoard = true;
@@ -214,4 +216,14 @@ WindStats srcRfWind(int path, bool tenMin)
 void srcRfWindReset(int path)
 {
     if (path >= 0 && path < SRC_PATHS) acc[path] = RfWindAcc();
+}
+
+bool srcRfValueFresh(int idx, const char* value)
+{
+    if (idx < 0 || idx >= RF_MAX_SENSORS) return false;
+    const RfSensorReading& r = gRfSensors[idx];
+    unsigned long t = !strcmp(value, "temp") ? r.tempMs : !strcmp(value, "humidity") ? r.humMs :
+                      !strcmp(value, "wind") ? r.windMs : !strcmp(value, "rain") ? r.rainMs :
+                      !strcmp(value, "uv")   ? r.uvMs   : r.lightMs;
+    return fresh(t);
 }

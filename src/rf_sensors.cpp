@@ -84,8 +84,8 @@ void readItPlus()
     r.lastMs    = millis();
     r.packets++;
     packetsTotal++;
-    r.hasTemp = true;  r.tempC = f.tempC;
-    if (f.hasHumidity) { r.hasHumidity = true; r.humidity = f.humidity; }
+    r.hasTemp = true;  r.tempC = f.tempC;  r.tempMs = r.lastMs;
+    if (f.hasHumidity) { r.hasHumidity = true; r.humidity = f.humidity; r.humMs = r.lastMs; }
     srcRfPacket(idx, false, 0.0f, false);
     dbgSerial.printf("RF sensor 0x%08lX (IT+): %.1f C%s, RSSI %.0f dBm%s%s\n", (unsigned long)id, f.tempC,
                      f.hasHumidity ? (String(", ") + f.humidity + " %").c_str() : "", rssi,
@@ -128,10 +128,12 @@ void copySlot(int slot)
     if (!weather) return;
     const auto& w = s.w;
     // 6-in-1 sends two alternating messages: keep values not in this one.
-    if (w.temp_ok)     { r.hasTemp = true;     r.tempC = w.temp_c; }
-    if (w.humidity_ok) { r.hasHumidity = true; r.humidity = w.humidity; }
+    const unsigned long now = r.lastMs;
+    if (w.temp_ok)     { r.hasTemp = true;     r.tempC = w.temp_c;      r.tempMs = now; }
+    if (w.humidity_ok) { r.hasHumidity = true; r.humidity = w.humidity; r.humMs = now; }
     if (w.wind_ok) {
         r.hasWind    = true;
+        r.windMs     = now;
         r.windAvgMs  = w.wind_avg_meter_sec;
         r.windGustMs = w.wind_gust_meter_sec;
         r.windDirDeg = w.wind_direction_deg;
@@ -140,10 +142,10 @@ void copySlot(int slot)
     if (w.rain_ok) {
         // increase since the previous packet; a smaller total = sensor reset (battery change)
         if (r.hasRain) rainDelta = w.rain_mm >= r.rainTotalMm ? w.rain_mm - r.rainTotalMm : w.rain_mm;
-        r.hasRain = true;  r.rainTotalMm = w.rain_mm;
+        r.hasRain = true;  r.rainTotalMm = w.rain_mm;  r.rainMs = now;
     }
-    if (w.uv_ok)    { r.hasUv = true;    r.uvIndex = w.uv; }
-    if (w.light_ok) { r.hasLight = true; r.lightLux = w.light_lux; }
+    if (w.uv_ok)    { r.hasUv = true;    r.uvIndex = w.uv;           r.uvMs = now; }
+    if (w.light_ok) { r.hasLight = true; r.lightLux = w.light_lux;   r.lightMs = now; }
 
     srcRfPacket(idx, w.wind_ok, rainDelta, w.light_ok);
 

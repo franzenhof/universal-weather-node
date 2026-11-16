@@ -555,14 +555,15 @@ void handleStatusPage()
             unsigned long ago = (millis() - r.lastMs) / 1000;
             String v = String(ago) + " s ago &middot; RSSI " + String(r.rssi, 0) + " dBm";
             if (!r.batteryOk) v += " &middot; <b>battery low</b>";
-            if (r.hasTemp)     v += " &middot; " + String(temperatureForOutput(r.tempC, gCfg), 1) + "&deg;" + temperatureUnitLabel(gCfg);
-            if (r.hasHumidity) v += " &middot; " + String(r.humidity) + " %";
+            auto stale = [i](const char* key) { return srcRfValueFresh(i, key) ? String() : String(" <span class='dim'>(stale)</span>"); };
+            if (r.hasTemp)     v += " &middot; " + String(temperatureForOutput(r.tempC, gCfg), 1) + "&deg;" + temperatureUnitLabel(gCfg) + stale("temp");
+            if (r.hasHumidity) v += " &middot; " + String(r.humidity) + " %" + stale("humidity");
             if (r.hasWind)     v += " &middot; wind " + String(windSpeedForOutput(r.windAvgMs, gCfg), 1) + " / gust " +
                                     String(windSpeedForOutput(r.windGustMs, gCfg), 1) + " " + windSpeedUnitLabel(gCfg) +
-                                    " &middot; " + String((int)lroundf(r.windDirDeg)) + "&deg;";
-            if (r.hasRain)     v += " &middot; rain total " + String(rainForOutput(r.rainTotalMm, gCfg), 1) + " " + rainUnitLabel(gCfg);
-            if (r.hasUv)       v += " &middot; UV " + String(r.uvIndex, 1);
-            if (r.hasLight)    v += " &middot; " + String((long)lroundf(r.lightLux)) + " lx";
+                                    " &middot; " + String((int)lroundf(r.windDirDeg)) + "&deg;" + stale("wind");
+            if (r.hasRain)     v += " &middot; rain total " + String(rainForOutput(r.rainTotalMm, gCfg), 1) + " " + rainUnitLabel(gCfg) + stale("rain");
+            if (r.hasUv)       v += " &middot; UV " + String(r.uvIndex, 1) + stale("uv");
+            if (r.hasLight)    v += " &middot; " + String((long)lroundf(r.lightLux)) + " lx" + stale("light");
             addRow(html, String("ID ") + id + " (" + (r.proto == RF_PROTO_BRESSER ? "type " + String(r.type) : String(rfProtoName(r.proto))) + ")", v);
         }
         if (!any) addRow(html, "Sensors", "<span class='dim'>none received yet (Bresser sensors send every 12&ndash;16 s, IT+ about every 4 s)</span>");

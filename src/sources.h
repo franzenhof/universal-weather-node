@@ -30,6 +30,10 @@ int  srcResolve(SrcGroup g);
 inline bool srcActive(SrcGroup g)  { return srcResolve(g) != SRC_NONE; }
 inline bool srcIsRadio(SrcGroup g) { return srcResolve(g) >= 0; }
 
+// false = the value ("temp", "humidity", "wind", "rain", "uv", "light") of
+// gRfSensors[idx] was last received more than SRC_RF_FRESH_MS ago (stale).
+bool srcRfValueFresh(int idx, const char* value);
+
 // gRfSensors[] index of wireless sensor slot 0..3 (see above), -1 = none
 int rfSensorIndexForSlot(int slot);
 
