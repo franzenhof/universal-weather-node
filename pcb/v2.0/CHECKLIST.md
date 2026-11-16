@@ -1,5 +1,7 @@
 # PCB v2.0 – Assembly and Bring-up Checklist
 
+Step-by-step ordering (board settings, assembly options, THT parts): [README – Ordering the PCB (JLCPCB)](../../README.md#ordering-the-pcb-jlcpcb).
+
 Nothing on this board has been tested on real hardware yet. Use this list for the
 JLCPCB order and for the first prototypes (order 5, test, then more). Current layout:
 100 × 100 mm, with a 92 × 92 mm mounting-hole pattern (M3 holes, centres 4 mm
@@ -145,7 +147,7 @@ Upload the newly generated files; J3 and JP8 now have different footprints.
 |------|-----|
 | [JLCPCB CPL](production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | 135 top-side SMD parts; Q4 and C31 corrections preview-confirmed |
 | [JLCPCB BOM](production/universal-weather-node-v2.0-bom-jlcpcb.csv) | SMD parts only (47 lines); THT parts are hand-soldered |
-| [THT parts (LCSC)](production/universal-weather-node-v2.0-tht-lcsc.csv) | 8 LCSC articles for terminals, RJ11, sockets, JST and headers, quantity per board; add jumper shunts separately |
+| [THT parts (LCSC)](production/universal-weather-node-v2.0-tht-lcsc.csv) | 9 LCSC articles for terminals, RJ11, sockets, JST, headers and the optional DC jack J18, quantity per board; add jumper shunts separately |
 
 Offsets: U1-U5/Q3 **+270 degrees**, Q1/Q2/Q5/Q6/Q8 and the selected
 BAT54S/PESD5V0S2BT SOT-23 diodes **+180 degrees**. C6, Q7 and
@@ -190,6 +192,7 @@ polarized parts, connectors and less common packages. Check every line in the
 | J5, J7 (right edge) | Wire openings face the **right** board edge |
 | J17 (UV sensor, right edge above mounting hole) | Pin 1 is at (94.5, 81) mm from the top-left board corner, 19 mm above the bottom edge. Wire opening faces the **right** board edge; pin order by terminal number is GND, SIGNAL, 3V3, 5V (top-to-bottom on the board: 5V, 3V3, SIGNAL, GND) |
 | J14 (left edge) | Wire opening faces the **left** board edge |
+| J18 DC jack (optional, lower left corner, THT list C381116) | Opening faces the **left** board edge, front about 0.45 mm beyond it. Pin 1 (centre) = VIN_IN, pins 2/3 (sleeve/switch) = GND. Footprint is KiCad `BarrelJack_Horizontal`; the XKB DC-005-5A-2.0 drawing differs by 0.1 mm (pin 1–2 5.9 vs 6.0 mm, pin 3 2.9 vs 3.0 mm), within the 1.0 × 3.0 mm slots — check the first part fits. 24 V contact rating: J3 only for 8s LiFePO4. Never feed J3 and J18 at the same time |
 | J4, J6 (RJ11) | Plug opening flush with the right edge, both plastic pegs in their holes |
 | J15 (JST-PH) | Latch side as on the silkscreen outline |
 | F7 Littelfuse 045106.3MRL (C178982), F5 SETsafe SCT6125T4A250V (C19712551), F6 (2920 PTC) | F7 is an actual SMD fuse, not the former incorrectly mapped 5×20 mm cartridge. F5/F7 use the NANO2-451/453 land pattern: 6.86 mm overall, 1.96×2.95 mm pads; this also closely matches F5's recommended 6.9 mm overall / 2.0×3.0 mm pads. Check the actual parts and JLCPCB preview; the footprint name does not substitute a Littelfuse part for F5 |

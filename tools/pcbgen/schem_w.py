@@ -22,7 +22,7 @@ LABEL_ONLY_NETS = {"BUCK_FB", "BUCK_VCC", "FB_LOW", "FAN_SUPPLY", "FAN_G", "FAN_
                    "TACH", "TACH_PU"}
 FLAG_AT = (66, 56)
 # connectors: every signal pin gets its own label (no long wires through the sheet)
-LABEL_PARTS = ["J1", "J2", "J3", "J4", "J5", "J6", "J7", "J9", "J10", "J11", "J12", "J13", "J14", "J15", "J16", "J17"]
+LABEL_PARTS = ["J1", "J2", "J3", "J4", "J5", "J6", "J7", "J9", "J10", "J11", "J12", "J13", "J14", "J15", "J16", "J17", "J18"]
 LABEL_AT = {("C10", "1"): True, ("D12", "3"): True, ("D13", "3"): True, ("D15", "3"): True, ("D16", "1"): True,
             ("C15", "1"): True, ("R21", "1"): True, ("D24", "1"): True, ("D22", "2"): True, ("F6", "2"): True,
             ("R37", "1"): True, ("F7", "2"): True}
@@ -58,7 +58,7 @@ BLOCKS = [
                (76, 39, "USB mode: remove JP8 and disconnect VIN before connecting USB-C.\nHeltec VBUS connects to the module 5 V pin; no automatic isolation."),
                (33, 32, "3.3 V sensor rail: own LDO U7 from 5 V,\nPTC 250 mA + TVS for the external cables;\nthe Heltec 3.3 V rail powers only the module")]),
     dict(title="VIN reverse / transient protection", x=235, y=2, w=64, h=32, parts=[
-        ("J3", 5, 11, M), ("F7", 14, 9, H), ("D1", 19, 10.5, DK),
+        ("J3", 5, 11, M), ("J18", 5, 16, M), ("F7", 14, 9, H), ("D1", 19, 10.5, DK),
         ("Q7", 26, 11), ("D31", 33, 13, DK), ("R45", 37, 15, H), ("C31", 46, 14, V)],
         notes=[(3, 25, "VIN 6-29.2 V battery max. Q7 drain=input, source=protected rail.\nD31 is the 12 V VGS clamp; bidirectional D1: 48.4 V max clamp, no reverse crowbar.\nC31 is 47 uF/63 V on protected +VLOAD; source-dependent inrush.")]),
     dict(title="LMR36520 feedback divider", x=235, y=40, w=55, h=24, parts=[

@@ -49,6 +49,7 @@ LCSC = {
     "PTC 1.6A 30V": ("C32404", "SMD1812P150TF/24 (1.5A, 24V)", False),
     "SOCK18": ("C2905422", "Kinghelm KH-2.54FH-1X18P-H8.5", False),
     "TB2": ("C466970", "DB125-3.5-2P-GN-S", False),
+    "DCJACK": ("C381116", "XKB DC-005-5A-2.0 (5.5x2.1 mm, 5 A, 24 V, THT)", False),
     "TB3": ("C466971", "DB125-3.5-3P-GN-S", False),
     "TB4": ("C2757925", "DB125-3.5-4P-GN-S", False),
     "TB6": ("C5290323", "DB125-3.5-6P-GN-S", False),

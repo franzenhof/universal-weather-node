@@ -63,6 +63,10 @@ MOUNTING_COPPER_RADIUS = 3.75
 FIXED["JP1"] = (63.09, 73.20, 90)
 FIXED["JP11"] = (63.09, 78.28, 90)
 FIXED["JP8"] = (23.5, 37.6, 0)
+FIXED["J18"] = (13.3, 79.0, 0)        # DC jack (THT, optional), opening at the left edge
+FIXED["F7"] = (17.3, 81.5, 90)        # moved right of J18 for the jack
+FIXED["D1"] = (21.6, 84.0, -90)
+FIXED["R45"] = (21.3, 74.9, 0)
 FIXED["D32"] = (88.75, 82.0, 180)
 # Retain the checked fan footprint angles.
 FIXED.update({

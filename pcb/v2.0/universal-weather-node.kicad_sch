@@ -1771,6 +1771,136 @@
               (font
                 (size 1.27 1.27))))))
       (embedded_fonts no))
+    (symbol "Connector_Generic:Conn_01x03"
+      (pin_names
+        (offset 1.016)
+        (hide yes))
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (in_pos_files yes)
+      (duplicate_pin_numbers_are_jumpers no)
+      (property "Reference" "J"
+        (at 0 5.08 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Value" "Conn_01x03"
+        (at 0 -5.08 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Footprint" ""
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Datasheet" ""
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "Description" "Generic connector, single row, 01x03, script generated (kicad-library-utils/schlib/autogen/connector/)"
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "ki_keywords" "connector"
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (property "ki_fp_filters" "Connector*:*_1x??_*"
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font
+            (size 1.27 1.27))))
+      (symbol "Conn_01x03_1_1"
+        (rectangle
+          (start -1.27 3.81)
+          (end 1.27 -3.81)
+          (stroke
+            (width 0.254)
+            (type default))
+          (fill
+            (type background)))
+        (rectangle
+          (start -1.27 2.667)
+          (end 0 2.413)
+          (stroke
+            (width 0.1524)
+            (type default))
+          (fill
+            (type none)))
+        (rectangle
+          (start -1.27 0.127)
+          (end 0 -0.127)
+          (stroke
+            (width 0.1524)
+            (type default))
+          (fill
+            (type none)))
+        (rectangle
+          (start -1.27 -2.413)
+          (end 0 -2.667)
+          (stroke
+            (width 0.1524)
+            (type default))
+          (fill
+            (type none)))
+        (pin passive line
+          (at -5.08 2.54 0)
+          (length 3.81)
+          (name "Pin_1"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "1"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -5.08 0 0)
+          (length 3.81)
+          (name "Pin_2"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "2"
+            (effects
+              (font
+                (size 1.27 1.27)))))
+        (pin passive line
+          (at -5.08 -2.54 0)
+          (length 3.81)
+          (name "Pin_3"
+            (effects
+              (font
+                (size 1.27 1.27))))
+          (number "3"
+            (effects
+              (font
+                (size 1.27 1.27))))))
+      (embedded_fonts no))
     (symbol "Device:Fuse"
       (pin_numbers
         (hide yes))
@@ -3298,136 +3428,6 @@
               (font
                 (size 1.27 1.27))))
           (number "5"
-            (effects
-              (font
-                (size 1.27 1.27))))))
-      (embedded_fonts no))
-    (symbol "Connector_Generic:Conn_01x03"
-      (pin_names
-        (offset 1.016)
-        (hide yes))
-      (exclude_from_sim no)
-      (in_bom yes)
-      (on_board yes)
-      (in_pos_files yes)
-      (duplicate_pin_numbers_are_jumpers no)
-      (property "Reference" "J"
-        (at 0 5.08 0)
-        (show_name no)
-        (do_not_autoplace no)
-        (effects
-          (font
-            (size 1.27 1.27))))
-      (property "Value" "Conn_01x03"
-        (at 0 -5.08 0)
-        (show_name no)
-        (do_not_autoplace no)
-        (effects
-          (font
-            (size 1.27 1.27))))
-      (property "Footprint" ""
-        (at 0 0 0)
-        (show_name no)
-        (do_not_autoplace no)
-        (hide yes)
-        (effects
-          (font
-            (size 1.27 1.27))))
-      (property "Datasheet" ""
-        (at 0 0 0)
-        (show_name no)
-        (do_not_autoplace no)
-        (hide yes)
-        (effects
-          (font
-            (size 1.27 1.27))))
-      (property "Description" "Generic connector, single row, 01x03, script generated (kicad-library-utils/schlib/autogen/connector/)"
-        (at 0 0 0)
-        (show_name no)
-        (do_not_autoplace no)
-        (hide yes)
-        (effects
-          (font
-            (size 1.27 1.27))))
-      (property "ki_keywords" "connector"
-        (at 0 0 0)
-        (show_name no)
-        (do_not_autoplace no)
-        (hide yes)
-        (effects
-          (font
-            (size 1.27 1.27))))
-      (property "ki_fp_filters" "Connector*:*_1x??_*"
-        (at 0 0 0)
-        (show_name no)
-        (do_not_autoplace no)
-        (hide yes)
-        (effects
-          (font
-            (size 1.27 1.27))))
-      (symbol "Conn_01x03_1_1"
-        (rectangle
-          (start -1.27 3.81)
-          (end 1.27 -3.81)
-          (stroke
-            (width 0.254)
-            (type default))
-          (fill
-            (type background)))
-        (rectangle
-          (start -1.27 2.667)
-          (end 0 2.413)
-          (stroke
-            (width 0.1524)
-            (type default))
-          (fill
-            (type none)))
-        (rectangle
-          (start -1.27 0.127)
-          (end 0 -0.127)
-          (stroke
-            (width 0.1524)
-            (type default))
-          (fill
-            (type none)))
-        (rectangle
-          (start -1.27 -2.413)
-          (end 0 -2.667)
-          (stroke
-            (width 0.1524)
-            (type default))
-          (fill
-            (type none)))
-        (pin passive line
-          (at -5.08 2.54 0)
-          (length 3.81)
-          (name "Pin_1"
-            (effects
-              (font
-                (size 1.27 1.27))))
-          (number "1"
-            (effects
-              (font
-                (size 1.27 1.27)))))
-        (pin passive line
-          (at -5.08 0 0)
-          (length 3.81)
-          (name "Pin_2"
-            (effects
-              (font
-                (size 1.27 1.27))))
-          (number "2"
-            (effects
-              (font
-                (size 1.27 1.27)))))
-        (pin passive line
-          (at -5.08 -2.54 0)
-          (length 3.81)
-          (name "Pin_3"
-            (effects
-              (font
-                (size 1.27 1.27))))
-          (number "3"
             (effects
               (font
                 (size 1.27 1.27))))))
@@ -26741,14 +26741,14 @@
         (bold yes))
       (justify left bottom))
     (uuid "59d5d031-5165-41a6-af9e-2956ab76273e"))
-  (text "J1 = header on the 5 V side, J2 = header on the 3V3 side (pin 1 = GND, USB-C end)\nV3 / V3.1 / V3.2 are pin-compatible"
+  (text "J1 = header on the 5 V side, J2 = header on the 3V3 side (pin 1 = GND, USB-C end)\\nV3 / V3.1 / V3.2 are pin-compatible"
     (at 25.4 35.56 0)
     (effects
       (font
         (size 1.27 1.27))
       (justify left top))
     (uuid "0e4e1a75-df89-441e-9200-add18d78aae6"))
-  (text "HW revision ID (GPIO20):\nv2.0 = 1M / 1M -> 0.5 x 3V3"
+  (text "HW revision ID (GPIO20):\\nv2.0 = 1M / 1M -> 0.5 x 3V3"
     (at 25.4 124.46 0)
     (effects
       (font
@@ -26786,28 +26786,28 @@
         (size 1.27 1.27))
       (justify left top))
     (uuid "89f54413-3f7c-48de-954d-5e9183bbb9ef"))
-  (text "J3 has VIN and GND only; no external 5 V input.\nUSB supplies logic/sensors; heater requires VIN."
+  (text "J3 has VIN and GND only; no external 5 V input.\\nUSB supplies logic/sensors; heater requires VIN."
     (at 281.94 88.9 0)
     (effects
       (font
         (size 1.27 1.27))
       (justify left top))
     (uuid "48791689-02f3-474e-a044-c76af8dccd15"))
-  (text "JP8 fitted = VIN via buck\nREMOVE BEFORE USB\nopen = USB only; never parallel sources"
+  (text "JP8 fitted = VIN via buck\\nREMOVE BEFORE USB\\nopen = USB only; never parallel sources"
     (at 281.94 63.5 0)
     (effects
       (font
         (size 1.27 1.27))
       (justify left top))
     (uuid "7d09890e-0856-4d6d-9a3b-4da1be008b99"))
-  (text "USB mode: remove JP8 and disconnect VIN before connecting USB-C.\nHeltec VBUS connects to the module 5 V pin; no automatic isolation."
+  (text "USB mode: remove JP8 and disconnect VIN before connecting USB-C.\\nHeltec VBUS connects to the module 5 V pin; no automatic isolation."
     (at 363.22 116.84 0)
     (effects
       (font
         (size 1.27 1.27))
       (justify left top))
     (uuid "b7cc2887-b8ac-4a20-88ed-71db7a8a9b6e"))
-  (text "3.3 V sensor rail: own LDO U7 from 5 V,\nPTC 250 mA + TVS for the external cables;\nthe Heltec 3.3 V rail powers only the module"
+  (text "3.3 V sensor rail: own LDO U7 from 5 V,\\nPTC 250 mA + TVS for the external cables;\\nthe Heltec 3.3 V rail powers only the module"
     (at 254 99.06 0)
     (effects
       (font
@@ -26831,7 +26831,7 @@
         (bold yes))
       (justify left bottom))
     (uuid "c7cf4dcc-4b0c-4683-aa7b-489ad5b31d93"))
-  (text "VIN 6-29.2 V battery max. Q7 drain=input, source=protected rail.\nD31 is the 12 V VGS clamp; bidirectional D1: 48.4 V max clamp, no reverse crowbar.\nC31 is 47 uF/63 V on protected +VLOAD; source-dependent inrush."
+  (text "VIN 6-29.2 V battery max. Q7 drain=input, source=protected rail.\\nD31 is the 12 V VGS clamp; bidirectional D1: 48.4 V max clamp, no reverse crowbar.\\nC31 is 47 uF/63 V on protected +VLOAD; source-dependent inrush."
     (at 617.22 81.28 0)
     (effects
       (font
@@ -26879,7 +26879,7 @@
         (bold yes))
       (justify left bottom))
     (uuid "a120dc37-7fe3-4b5d-9f62-4a4b9a01d0dc"))
-  (text "JP12 fitted: 10k to +5V for open collector.\nRemove for externally pulled-up / push-pull tacho."
+  (text "JP12 fitted: 10k to +5V for open collector.\\nRemove for externally pulled-up / push-pull tacho."
     (at 614.68 342.9 0)
     (effects
       (font
@@ -26903,7 +26903,7 @@
         (bold yes))
       (justify left bottom))
     (uuid "2318dfbf-9f68-4954-a09f-b8882dd1c97e"))
-  (text "(2k + 2k) || (2k + 2k) = 2k effective\n4 x C17944 / 1206 / 0.25 W, no new article\n1 W aggregate nameplate only; thermal/pulse tests required"
+  (text "(2k + 2k) || (2k + 2k) = 2k effective\\n4 x C17944 / 1206 / 0.25 W, no new article\\n1 W aggregate nameplate only; thermal/pulse tests required"
     (at 617.22 238.76 0)
     (effects
       (font
@@ -26927,14 +26927,14 @@
         (bold yes))
       (justify left bottom))
     (uuid "1676b1d4-71c1-4565-9c81-35997ac70af6"))
-  (text "GPIO33 = RX (from Victron TX)\nGPIO34 = TX (to Victron RX)\nside 2 powered by the Victron (VE.Direct +V)"
+  (text "GPIO33 = RX (from Victron TX)\\nGPIO34 = TX (to Victron RX)\\nside 2 powered by the Victron (VE.Direct +V)"
     (at 452.12 83.82 0)
     (effects
       (font
         (size 1.27 1.27))
       (justify left top))
     (uuid "ada53136-aa71-46e8-bb1a-f61936ac4a95"))
-  (text "J15 pin 2 RX / pin 3 TX:\nnode TX -> pin 2, pin 3 -> node RX"
+  (text "J15 pin 2 RX / pin 3 TX:\\nnode TX -> pin 2, pin 3 -> node RX"
     (at 556.26 96.52 0)
     (effects
       (font
@@ -26958,21 +26958,21 @@
         (bold yes))
       (justify left bottom))
     (uuid "7ded2f0e-555d-4b62-99f0-f21e8964d53b"))
-  (text "load supply from common protected\nVIN rail through Q7"
+  (text "load supply from common protected\\nVIN rail through Q7"
     (at 452.12 134.62 0)
     (effects
       (font
         (size 1.27 1.27))
       (justify left top))
     (uuid "bf61f5de-7420-4881-a866-52ccba87f97a"))
-  (text "GPIO38 HIGH = heater on\nGPIO39 HIGH = fan on\n(both PWM capable)"
+  (text "GPIO38 HIGH = heater on\\nGPIO39 HIGH = fan on\\n(both PWM capable)"
     (at 452.12 149.86 0)
     (effects
       (font
         (size 1.27 1.27))
       (justify left top))
     (uuid "1617b8eb-b6ac-47db-ac40-13a63373c4b4"))
-  (text "J12: +V | HEAT- max 3 A   J13: FAN+ | GND | TACH\nFan max 0.5 A at 5 V (JP9 default), 1 A at VIN"
+  (text "J12: +V | HEAT- max 3 A   J13: FAN+ | GND | TACH\\nFan max 0.5 A at 5 V (JP9 default), 1 A at VIN"
     (at 452.12 238.76 0)
     (effects
       (font
@@ -26996,7 +26996,7 @@
         (bold yes))
       (justify left bottom))
     (uuid "f5a78265-7f1a-4363-a1ec-501bf05947f0"))
-  (text "J4 Davis RJ11: 2 yellow 3V3 (switched), 3 green DIR,\n4 red GND, 5 black SPD\nR8 + JP2: pull-up for reed-switch\nvanes (jumper on); Q6: vane supply, GPIO19 LOW = on"
+  (text "J4 Davis RJ11: 2 yellow 3V3 (switched), 3 green DIR,\\n4 red GND, 5 black SPD\\nR8 + JP2: pull-up for reed-switch\\nvanes (jumper on); Q6: vane supply, GPIO19 LOW = on"
     (at 139.7 241.3 0)
     (effects
       (font
@@ -27027,7 +27027,7 @@
         (bold yes))
       (justify left bottom))
     (uuid "bc2349c3-0071-4c87-9b1b-9ed6be961f83"))
-  (text "J6 Davis RJ11: 3 reed switch, 4 GND\n(3/4 may be swapped)\nD20 TVS between jack and terminal\nU2 74LVC2G14: inverting"
+  (text "J6 Davis RJ11: 3 reed switch, 4 GND\\n(3/4 may be swapped)\\nD20 TVS between jack and terminal\\nU2 74LVC2G14: inverting"
     (at 297.18 231.14 0)
     (effects
       (font
@@ -27058,14 +27058,14 @@
         (bold yes))
       (justify left bottom))
     (uuid "3f1a8f87-5554-4751-8bdf-c2871011f749"))
-  (text "J9: 3V3 | SDA | SCL | GND\nCat5: SDA and SCL each\ntwisted with a GND wire"
+  (text "J9: 3V3 | SDA | SCL | GND\\nCat5: SDA and SCL each\\ntwisted with a GND wire"
     (at 109.22 307.34 0)
     (effects
       (font
         (size 1.27 1.27))
       (justify left top))
     (uuid "3a788a38-4d32-4d1f-aad3-4a900a7cd5f8"))
-  (text "Extra 4.7k pull-ups: JP1 SDA, JP11 SCL\nSeparate 2-pin headers, rows 5.08 mm apart\nfor cables longer than 0.5 m"
+  (text "Extra 4.7k pull-ups: JP1 SDA, JP11 SCL\\nSeparate 2-pin headers, rows 5.08 mm apart\\nfor cables longer than 0.5 m"
     (at 109.22 347.98 0)
     (effects
       (font
@@ -27089,7 +27089,7 @@
         (bold yes))
       (justify left bottom))
     (uuid "e75c20df-5976-4335-a549-7846210dffa9"))
-  (text "supply switched by GPIO47\n(HIGH = on), 100 mA PTC\nup to 3 DS18B20"
+  (text "supply switched by GPIO47\\n(HIGH = on), 100 mA PTC\\nup to 3 DS18B20"
     (at 243.84 302.26 0)
     (effects
       (font
@@ -27113,7 +27113,7 @@
         (bold yes))
       (justify left bottom))
     (uuid "4bd1b7d2-e702-4baa-a7cb-7741f4c28709"))
-  (text "AIN -> GPIO4 (ADC1); R25 = 15k for 0-5 V sensors (DNP; scale 1.66667)\nPULSE: reed / open collector -> GPIO48 (inverted)"
+  (text "AIN -> GPIO4 (ADC1); R25 = 15k for 0-5 V sensors (DNP; scale 1.66667)\\nPULSE: reed / open collector -> GPIO48 (inverted)"
     (at 327.66 368.3 0)
     (effects
       (font
@@ -27144,7 +27144,7 @@
         (size 1.27 1.27))
       (justify left top))
     (uuid "a3a7b059-1732-4eb8-9d28-1f95538ed728"))
-  (text "JP10 1-2: 0-3.3 V, ratio 0.909091 (3.3 V -> 3.0000 V)\nJP10 2-3: 0-5 V, ratio 0.600479 (5 V -> 3.0024 V)\nInput scale factors: 1.1 / 1.66534; GPIO3 ADC1"
+  (text "JP10 1-2: 0-3.3 V, ratio 0.909091 (3.3 V -> 3.0000 V)\\nJP10 2-3: 0-5 V, ratio 0.600479 (5 V -> 3.0024 V)\\nInput scale factors: 1.1 / 1.66534; GPIO3 ADC1"
     (at 530.86 350.52 0)
     (effects
       (font
@@ -27893,6 +27893,178 @@
         (size 1.27 1.27))
       (justify right bottom))
     (uuid "b45ef7f0-5c0e-48f5-8258-739f96f10621"))
+  (symbol
+    (lib_id "Connector_Generic:Conn_01x03")
+    (at 622.3 58.42 0)
+    (mirror y)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid "caae241a-48a4-475e-be66-98905eb88217")
+    (property "Reference" "J18"
+      (at 624.37 57.42 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left bottom)))
+    (property "Value" "DC jack 5.5x2.1"
+      (at 624.37 60.02 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (justify left bottom)))
+    (property "Footprint" "Connector_BarrelJack:BarrelJack_Horizontal"
+      (at 622.3 58.42 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" "~"
+      (at 622.3 58.42 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Description" "alternative VIN input parallel to J3 (center positive), hand-soldered THT; 5 A / 24 V contact rating - use J3 above 24 V (8s LiFePO4); never both inputs at once. XKB DC-005-5A-2.0 pins: 1 center, 2 sleeve, 3 switch"
+      (at 622.3 58.42 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "LCSC" "C381116"
+      (at 622.3 58.42 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "MPN" "XKB DC-005-5A-2.0 (5.5x2.1 mm, 5 A, 24 V, THT)"
+      (at 622.3 58.42 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "1"
+      (uuid "b74157aa-7cf0-4e9b-955a-a640c4007b0f"))
+    (pin "2"
+      (uuid "b71b356d-94e8-4976-9273-2b9d65319790"))
+    (pin "3"
+      (uuid "c3bf45a5-8b1e-4a75-8c57-661e12e884a3"))
+    (instances
+      (project "universal-weather-node"
+        (path "/ff1378dd-45a7-45b9-8e58-42c2096ff452"
+          (reference "J18")
+          (unit 1)))))
+  (wire
+    (pts
+      (xy 627.38 58.42)
+      (xy 629.92 58.42))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid "7fd17697-3ed0-4b47-8ce8-947f1ed622da"))
+  (symbol
+    (lib_id "power:GND")
+    (at 629.92 58.42 90)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid "8339d16c-ebdf-40c0-bf6c-e1856ffc3914")
+    (property "Reference" "#PWR0181"
+      (at 629.92 58.42 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Value" "GND"
+      (at 634.32 58.42 90)
+      (effects
+        (font
+          (size 1.27 1.27))))
+    (property "Footprint" ""
+      (at 629.92 58.42 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" ""
+      (at 629.92 58.42 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "1"
+      (uuid "c5311e60-ceb0-4518-affd-66d77481e52d"))
+    (instances
+      (project "universal-weather-node"
+        (path "/ff1378dd-45a7-45b9-8e58-42c2096ff452"
+          (reference "#PWR0181")
+          (unit 1)))))
+  (wire
+    (pts
+      (xy 627.38 60.96)
+      (xy 635 60.96))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid "7beff44b-00ca-4968-b91d-b018c81c5ff5"))
+  (symbol
+    (lib_id "power:GND")
+    (at 635 60.96 90)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid "6e4f7bda-2307-4e21-b35b-2c501b52f848")
+    (property "Reference" "#PWR0182"
+      (at 635 60.96 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Value" "GND"
+      (at 639.4 60.96 90)
+      (effects
+        (font
+          (size 1.27 1.27))))
+    (property "Footprint" ""
+      (at 635 60.96 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (property "Datasheet" ""
+      (at 635 60.96 0)
+      (effects
+        (font
+          (size 1.27 1.27))
+        (hide yes)))
+    (pin "1"
+      (uuid "70ea356e-c025-4e36-8129-931468480819"))
+    (instances
+      (project "universal-weather-node"
+        (path "/ff1378dd-45a7-45b9-8e58-42c2096ff452"
+          (reference "#PWR0182")
+          (unit 1)))))
+  (wire
+    (pts
+      (xy 627.38 55.88)
+      (xy 629.92 55.88))
+    (stroke
+      (width 0)
+      (type default))
+    (uuid "342c5fb2-b360-4e2b-a5e7-79a5fdff5877"))
+  (label "VIN_IN"
+    (at 629.92 55.88 0)
+    (effects
+      (font
+        (size 1.27 1.27))
+      (justify left bottom))
+    (uuid "bbcc2828-5567-4792-bf6e-9bfac293d35a"))
   (sheet_instances
     (path "/"
       (page "1")))

@@ -35,6 +35,9 @@ BUTTON_FOOT_H = 1.0
 BUTTON_D = 3.4
 BUTTON_HOLE = 3.9
 GUIDE_H = 3.0
+JACK_Z = 6.5        # J18 DC jack barrel axis above the PCB top (XKB DC-005 drawing)
+JACK_D = 10.0       # knock-out diameter: room for common 5.5 mm plug overmoulds
+JACK_SKIN = 0.6     # left closed on the outside until J18 is fitted
 
 
 def pcb_facts():
@@ -79,7 +82,7 @@ def pcb_facts():
         raise ValueError(f"Unexpected mounting pattern: {mounts}")
     expected = {"J1": (4.2, 32.36, 90), "J2": (4.2, 9.5, 90),
                 "J6": (83.1, 18.325, 90), "J4": (83.1, 41.325, 90),
-                "J14": (5, 38.8, -90), "J17": (94.5, 81, 90)}
+                "J14": (5, 38.8, -90), "J17": (94.5, 81, 90), "J18": (13.3, 79, 0)}
     for ref, position in expected.items():
         if any(abs(a - b) > 0.001 for a, b in zip(footprints[ref], position)):
             raise ValueError(f"{ref} moved; revise enclosure openings: {footprints[ref]}")
@@ -148,6 +151,13 @@ def generate(output):
     cy = footprints["J14"][1] + 5.25
     body -= block(-5, -0.8, cy - 8, cy + 8, PCB_Z + 1.1, PCB_Z + 13)
     openings.append(("J14", "left", cy - 8, cy + 8, PCB_Z + 1.1, PCB_Z + 13))
+    # J18 DC jack (optional, hand-fitted): round knock-out in the left wall; the outer
+    # JACK_SKIN stays closed so an unfitted case stays shut - drill / cut it out with J18.
+    jy, jz = footprints["J18"][1], PCB_Z + PCB_T + JACK_Z
+    knock = Cylinder(JACK_D / 2, WALL - JACK_SKIN + 0.4,
+                     align=(Align.CENTER, Align.CENTER, Align.CENTER)).rotate(Axis.Y, 90)
+    body -= knock.moved(Location((-1.6 - (WALL - JACK_SKIN) / 2 + 0.2, jy, jz)))
+    openings.append(("J18 knock-out", "left", jy - JACK_D / 2, jy + JACK_D / 2, jz - JACK_D / 2, jz + JACK_D / 2))
     body -= block(-5, -0.8, USB_Y - 6.5, USB_Y + 6.5, *USB_Z)
     openings.append(("USB", "left", USB_Y - 6.5, USB_Y + 6.5, *USB_Z))
     for ref, poles in (("J3", 3), ("J12", 2), ("J13", 3), ("J11", 4), ("J10", 3), ("J9", 4)):
@@ -210,6 +220,8 @@ def generate(output):
                                y + 1.75, PCB_Z + PCB_T, PCB_Z + PCB_T + 10))
     x, y, _ = footprints["J14"]
     envelopes.append(block(x - 5.1, x + 3.5, y - 1.75, y + 12.25, PCB_Z + PCB_T, PCB_Z + PCB_T + 10))
+    x, y, _ = footprints["J18"]   # DC jack body: front 13.8 mm before pin 1, 9 mm wide, 11 mm high
+    envelopes.append(block(x - 13.8, x + 0.9, y - 4.6, y + 4.6, PCB_Z + PCB_T, PCB_Z + PCB_T + 11))
     for x, z in GLANDS:
         nut = Cylinder(9, 4, align=(Align.CENTER, Align.CENTER, Align.CENTER)).rotate(Axis.X, 90)
         nut = nut.moved(Location((x, 125.6, z)))

@@ -10,6 +10,7 @@ BLOCKS = (
      "Pin 1: square pad / connector marking."),
     ("POWER", "POWER / JP8 - ONE SOURCE ONLY\n"
      "J3: 1 VIN 6-29.2V | 2 GND\n"
+     "J18 DC jack: center +, <=24V; not with J3\n"
      "JP8 fitted: VIN buck -> 5V rail\n"
      "JP8: REMOVE BEFORE USB\n"
      "USB only: remove shunt; disconnect VIN\n"
@@ -112,6 +113,15 @@ def documentation_blocks():
         if name == "VIC":
             blocks.extend([(name, "\n".join(lines[:4])),
                            (name + "_CONT", "VE.DIRECT / POWER + ISOLATION\n" + "\n".join(lines[4:]))])
+        elif name == "EXP":
+            blocks.extend([(name, "\n".join(lines[:5])),
+                           (name + "_CONT", "TEST POINTS / CONTINUED\n" + "\n".join(lines[5:]))])
+        elif name == "LIMITS":
+            blocks.extend([(name, "\n".join(lines[:6])),
+                           (name + "_CONT", "LIMITS / CONTINUED\n" + "\n".join(lines[6:]))])
+        elif name == "POWER":
+            blocks.extend([(name, "\n".join(lines[:5])),
+                           (name + "_CONT", "POWER / CONTINUED\n" + "\n".join(lines[5:]))])
         elif name == "START":
             blocks.extend([(name, "\n".join(lines[:5])),
                            (name + "_CONT", "FIRST POWER-UP / CONTINUED\n" + "\n".join(lines[5:]))])

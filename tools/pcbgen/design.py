@@ -41,6 +41,10 @@ P("J2", conn(18), "Heltec V3 header (3V3 side)", SOCK18, j2, None, "MCU",
 
 P("J3", conn(2), "Power", TB.format(n=2), {"1": "VIN_IN", "2": "GND"}, None, "Power",
   "VIN 6-29.2 V LiFePO4 | GND; no external 5 V input", lcsc_key="TB2")
+P("J18", conn(3), "DC jack 5.5x2.1", "Connector_BarrelJack:BarrelJack_Horizontal", {"1": "VIN_IN", "2": "GND", "3": "GND"},
+  None, "Power", "alternative VIN input parallel to J3 (center positive), hand-soldered THT; 5 A / 24 V contact rating - "
+  "use J3 above 24 V (8s LiFePO4); never both inputs at once. XKB DC-005-5A-2.0 pins: 1 center, 2 sleeve, 3 switch",
+  lcsc_key="DCJACK")
 P("F7", ("Device", "Fuse"), "6.3A 125V", "Fuse:Fuse_Littelfuse-NANO2-451_453", {"1": "VIN_IN", "2": "VIN_F"}, None, "Power",
   "Littelfuse 045106.3MRL SMD main fuse; 125 VDC, not the former 5x20 mm cartridge", lcsc_key="FUSE6A3_125")
 P("D1", ("Device", "D_TVS"), "SMBJ30CA", SMB, {"1": "VIN_F", "2": "GND"}, None, "Power",

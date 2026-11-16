@@ -15,6 +15,7 @@ circuit or layout change (or edit the board directly in KiCad for small changes)
 | `finish.py`, `bridge.py` | session import, ground pours, stitching/island vias, ground bridges |
 | `brand.py`, `fixrefs.py` | silkscreen: terminal titles, notes, reference texts |
 | `backdoc.py` | standalone back-side operating reference, 0.8 mm text, preserving pin labels |
+| `add_dcjack.py` | one-off in-place edit of the routed board: adds the J18 DC jack, moves F7/D1/R45 and re-routes only that corner (a full rebuild places them via `layout_w1.FIXED`) |
 | `checknet.py`, `domaincheck.py`, `drc.py` | checks: netlist vs. design, isolation, DRC summary |
 | `build2.sh` | full flow: schematic → ERC → netlist → placement → parallel Freerouting attempts → best board |
 | `export.sh` | Gerber/drill ZIP, JLCPCB BOM/CPL, schematic PDF, renders, final DRC |

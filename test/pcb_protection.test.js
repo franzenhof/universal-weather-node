@@ -46,6 +46,7 @@ for ref in refs:
             assert net in (wanted, "/" + wanted), (ref, pad[1], net, wanted)
 
 assert parts["J3"]["pins"] == {"1": "VIN_IN", "2": "GND"}
+assert parts["J18"]["pins"] == {"1": "VIN_IN", "2": "GND", "3": "GND"}   # DC jack parallel to J3, before F7/Q7
 assert parts["JP8"]["pins"] == {"1": "+5V_BUCK", "2": "+5V"}
 for ref in ("J3", "JP8"):
     assert {p[1] for p in find(footprints[ref], "pad")} == {"1", "2"}
@@ -134,13 +135,14 @@ by_ref = {r.strip(): row for row in bom for r in row["Designator"].split(",")}
 assert len(bom) == 47 and len(by_ref) == 135
 tht = list(csv.DictReader((base / "universal-weather-node-v2.0-tht-lcsc.csv").open()))
 tht_by_ref = {r.strip(): row for row in tht for r in row["Designator"].split(",")}
-assert len(tht) == 8 and len(tht_by_ref) == 22 and not set(tht_by_ref) & set(by_ref)
+assert len(tht) == 9 and len(tht_by_ref) == 23 and not set(tht_by_ref) & set(by_ref)
 assert not removed.intersection(tht_by_ref)
 assert not removed.intersection(by_ref)
 assert by_ref["Q4"]["LCSC Part #"] == "C154901"
 assert by_ref["R32"]["LCSC Part #"] == "C17819"
 assert by_ref["R32"]["MPN"] == "UNI-ROYAL 0805W8F7502T5E (75 kOhm, 1%, 0.125 W, 0805)"
 assert tht_by_ref["J3"]["LCSC Part #"] == "C466970"
+assert tht_by_ref["J18"]["LCSC Part #"] == "C381116"   # DC jack, parallel VIN input
 assert tht_by_ref["JP8"]["LCSC Part #"] == "C53055672"
 by_ref = {**by_ref, **tht_by_ref}
 for ref in bank:

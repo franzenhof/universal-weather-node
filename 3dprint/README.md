@@ -24,7 +24,7 @@ thermal qualification is claimed.
 
 | File | Purpose |
 |------|---------|
-| [Body STL](v20/universal-weather-node-v2.0-case-body.stl) / [STEP](v20/universal-weather-node-v2.0-case-body.step) | Four PCB supports, connector windows, cable bay, mounting ears and lid screw towers |
+| [Body STL](v20/universal-weather-node-v2.0-case-body.stl) / [STEP](v20/universal-weather-node-v2.0-case-body.step) | Four PCB supports, connector windows, cable bay, mounting ears and lid screw towers; Ø 10 mm knock-out (0.6 mm outer skin) in the left wall for the optional DC jack J18 — drill or cut it out when J18 is fitted |
 | [Lid STL](v20/universal-weather-node-v2.0-case-lid.stl) / [STEP](v20/universal-weather-node-v2.0-case-lid.step) | Display window, locating lip, button guide and screw holes |
 | [Button STL](v20/universal-weather-node-v2.0-button-pin.stl) / [STEP](v20/universal-weather-node-v2.0-button-pin.step) | Captive push pin for the Heltec PRG button |
 | [Gland blank STL](v20/universal-weather-node-v2.0-gland-blank.stl) / [STEP](v20/universal-weather-node-v2.0-gland-blank.step) | Print up to three if M12 gland openings are unused; glue in place, not a sealing certification |
