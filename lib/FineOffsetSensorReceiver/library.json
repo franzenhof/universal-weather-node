@@ -1,0 +1,11 @@
+{
+  "name": "FineOffsetSensorReceiver",
+  "version": "0.1.0",
+  "description": "Receiver/decoder for Fine Offset (Ecowitt, Froggit, Ambient Weather) 868 MHz FSK weather sensors with an SX1262 (RadioLib): WH65/WS69, WS80, WS85, WS90, WS68, WH31, WN34, WH40, WN20, WH51, WH57; shares the transceiver with other users such as LoRaWAN",
+  "keywords": "fine offset, ecowitt, froggit, ambient weather, wh65, ws90, weather, sensor, 868mhz, sx1262, radiolib",
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "dependencies": { "jgromes/RadioLib": ">=7.0.0" },
+  "build": { "srcDir": "src" }
+}

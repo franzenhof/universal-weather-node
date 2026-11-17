@@ -114,7 +114,7 @@ Config runConfigPortal(const Config& cur)
     display.drawString(0, 0, "Starting config portal...");
     display.display();
 
-    char b_dev[17], b_join[17], b_region[8], b_pcb[4], b_alt[8], b_uplink[8], b_sample[4], b_mqttsec[8], b_lorawagg[2], b_mqttwagg[2], b_rfen[2], b_rfproto[2], b_windoff[6], b_windunit[2], b_debug[2], b_cpu[4], b_payfmt[2], b_unitsys[2];
+    char b_dev[17], b_join[17], b_region[8], b_pcb[4], b_alt[8], b_uplink[8], b_sample[4], b_mqttsec[8], b_lorawagg[2], b_mqttwagg[2], b_rfen[2], b_rfproto[3], b_windoff[6], b_windunit[2], b_debug[2], b_cpu[4], b_payfmt[2], b_unitsys[2];
     char b_rainmmtip[12], b_windmspp[12], b_winddirtyp[2];
     char b_loraen[2], b_lowpower[2], b_vanesave[2];
     itoa(cur.loraEn,          b_loraen,  10);
@@ -231,7 +231,7 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_mqttsec ("mqttsec", "MQTT interval in s: 0 = like the LoRaWAN interval, else 2-3600", b_mqttsec, 7);
     WiFiManagerParameter p_mqttwagg("mqttwagg","MQTT wind values: 0 = interval since the last publish, 1 = 10-min (WMO)", b_mqttwagg, 2);
     WiFiManagerParameter p_rfen    ("rfen",    "Wireless sensors (868 MHz): 1 = receive with the LoRa chip between uplinks", b_rfen, 2);
-    WiFiManagerParameter p_rfproto ("rfproto", "Wireless sensor type: 1 = Bresser, 6 = TFA/LaCrosse IT+ (both rates), 2 = IT+ 17.241 kbit/s only, 4 = IT+ 9.579 kbit/s only, 7 = Bresser + IT+ alternating (misses packets, not recommended)", b_rfproto, 2);
+    WiFiManagerParameter p_rfproto ("rfproto", "Wireless sensor type (bit mask): 1 = Bresser, 6 = TFA/LaCrosse IT+ (both rates), 2 = IT+ 17.241 kbit/s only, 4 = IT+ 9.579 kbit/s only, 8 = Fine Offset / Ecowitt / Froggit, 10 = IT+ 17.241 kbit/s + Fine Offset (same data rate), 14 = IT+ both rates + Fine Offset, 7 = Bresser + IT+ / 9 = Bresser + Fine Offset alternating (misses packets, not recommended)", b_rfproto, 2);
     // Free-text fields: shown HTML-escaped (htmlAttr), so the field length is
     // at least the escaped length; Config's own buffer limits the saved text.
     auto shownLen = [](int maxLen, const String& shown) { return max(maxLen, (int)shown.length()); };

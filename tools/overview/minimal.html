@@ -1,0 +1,233 @@
+<!doctype html>
+<!-- Source of pictures/minimal-wireless-build.png. Render with tools/overview/render.sh minimal (headless Chrome, 2x). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Minimal wireless build</title>
+<style>
+  :root {
+    --bg: #f3f5f7; --card: #ffffff; --ink: #17212b; --muted: #5d6b78; --line: #dde3e8;
+    --teal: #0f9d8a; --radio: #7c4dff; --radio-soft: #efe9ff; --bme: #3aa356;
+    --w3v3: #e0412f; --wgnd: #222b33; --wsda: #2f80c9; --wscl: #e8b416;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); }
+  body { width: 1400px; padding: 44px 48px 40px; font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; color: var(--ink); }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 22px; }
+  h1 { font-size: 34px; letter-spacing: -0.5px; }
+  h1 span { color: var(--teal); }
+  header p { color: var(--muted); font-size: 17px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 1px 2px rgba(20,30,40,.04), 0 6px 18px rgba(20,30,40,.05); }
+  .stage { padding: 8px 0 0; }
+  .stage svg { display: block; width: 1302px; height: auto; }
+  svg text { font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 18px; }
+  .step { padding: 18px 22px; display: flex; gap: 14px; }
+  .step b.n { flex: none; background: var(--ink); color: #fff; border-radius: 50%; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; }
+  .step h4 { font-size: 17px; margin: 3px 0 5px; }
+  .step p { color: var(--muted); font-size: 14.5px; line-height: 1.45; }
+  .step code { font-family: "SF Mono", Menlo, monospace; font-size: 13px; background: #f1f4f6; border-radius: 5px; padding: 1px 5px; color: var(--ink); }
+  .out { margin-top: 18px; padding: 16px 22px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .out .k { font-size: 13px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; color: var(--muted); margin-right: 6px; }
+  .chip { font-size: 14px; border: 1px solid var(--line); border-radius: 8px; padding: 5px 11px; background: #fafbfc; }
+  .chip.x { color: var(--muted); border-style: dashed; background: transparent; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Minimal wireless build — <span>4 wires</span>, no custom PCB</h1>
+  <p>Heltec V3 + BME280 + 868 MHz sensors</p>
+</header>
+
+<div class="card stage">
+<svg viewBox="0 0 1302 640" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="pcb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b3a47"/><stop offset="1" stop-color="#1c2731"/></linearGradient>
+    <linearGradient id="bme" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7a4bb5"/><stop offset="1" stop-color="#5c3591"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0b1620" flood-opacity=".18"/></filter>
+  </defs>
+
+  <!-- ===== USB-C power supply ===== -->
+  <g filter="url(#sh)">
+    <rect x="28" y="392" width="118" height="92" rx="14" fill="#f7f9fa" stroke="#c9d2d9" stroke-width="2"/>
+    <rect x="44" y="370" width="10" height="24" rx="2" fill="#aab6c0"/><rect x="70" y="370" width="10" height="24" rx="2" fill="#aab6c0"/>
+  </g>
+  <text x="87" y="432" text-anchor="middle" font-size="17" font-weight="700" fill="#17212b">5 V</text>
+  <text x="87" y="454" text-anchor="middle" font-size="13" fill="#5d6b78">USB-C, ≥ 1 A</text>
+  <path d="M146 446 C 180 446, 186 446, 214 446" stroke="#3a4651" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <text x="87" y="512" text-anchor="middle" font-size="13" fill="#5d6b78">any phone charger</text>
+
+  <!-- ===== Heltec V3 ===== -->
+  <g filter="url(#sh)">
+    <rect x="228" y="326" width="580" height="240" rx="12" fill="url(#pcb)"/>
+  </g>
+  <!-- USB-C socket -->
+  <rect x="212" y="428" width="30" height="36" rx="7" fill="#c7cfd6" stroke="#8d99a4" stroke-width="2"/>
+  <!-- OLED -->
+  <rect x="368" y="392" width="270" height="112" rx="6" fill="#0a0f14" stroke="#41505d" stroke-width="2"/>
+  <text x="386" y="424" font-size="15" fill="#9fe3d8" font-family="Menlo, monospace">WeatherNode</text>
+  <text x="386" y="452" font-size="22" fill="#e8f7f4" font-family="Menlo, monospace">9.3°C  79%</text>
+  <text x="386" y="482" font-size="14" fill="#9fe3d8" font-family="Menlo, monospace">1013 hPa  NW 3.2</text>
+  <!-- buttons -->
+  <rect x="262" y="478" width="22" height="16" rx="3" fill="#cfd6dc"/><text x="273" y="512" text-anchor="middle" font-size="10" fill="#9fb0bf">PRG</text>
+  <rect x="300" y="478" width="22" height="16" rx="3" fill="#cfd6dc"/><text x="311" y="512" text-anchor="middle" font-size="10" fill="#9fb0bf">RST</text>
+  <!-- LoRa / ESP32 cans -->
+  <rect x="664" y="400" width="98" height="96" rx="5" fill="#b9c3cb" stroke="#8d99a4"/>
+  <text x="713" y="444" text-anchor="middle" font-size="12" fill="#3d4954" font-weight="700">ESP32-S3</text>
+  <text x="713" y="462" text-anchor="middle" font-size="12" fill="#3d4954">SX1262</text>
+  <!-- antenna socket -->
+  <circle cx="786" cy="354" r="9" fill="#d9b25c" stroke="#9c7a2e" stroke-width="2"/>
+  <text x="518" y="590" text-anchor="middle" font-size="13" fill="#5d6b78" letter-spacing="1">HELTEC WIFI LORA 32 V3 (V3.1 / V3.2)</text>
+
+  <!-- top header (3V3 side) -->
+  <g id="topHeader"></g>
+  <!-- bottom header (5V side) -->
+  <g id="botHeader"></g>
+
+  <!-- ===== antenna ===== -->
+  <path d="M786 354 C 840 354, 850 330, 850 300" stroke="#3a4651" stroke-width="4" fill="none"/>
+  <rect x="841" y="110" width="18" height="196" rx="9" fill="#2e3943"/>
+  <text x="872" y="160" font-size="15" font-weight="700" fill="#17212b">868 MHz antenna</text>
+  <text x="872" y="180" font-size="13" fill="#5d6b78">never power on without it</text>
+
+  <!-- ===== BME280 module ===== -->
+  <g filter="url(#sh)">
+    <rect x="268" y="56" width="236" height="124" rx="8" fill="url(#bme)"/>
+  </g>
+  <rect x="448" y="72" width="36" height="36" rx="3" fill="#cfd5da" stroke="#8d99a4"/>
+  <circle cx="478" cy="78" r="2.5" fill="#6b7782"/>
+  <text x="290" y="88" font-size="16" font-weight="700" fill="#fff">BME280</text>
+  <text x="290" y="106" font-size="12" fill="#e3d6f5">I²C · 3.3 V · 0x76</text>
+  <g id="bmePins"></g>
+
+  <!-- ===== wires ===== -->
+  <g id="wires" fill="none" stroke-linecap="round"></g>
+
+  <!-- legend -->
+  <g transform="translate(560,64)">
+    <text x="0" y="0" font-size="13" font-weight="700" fill="#5d6b78" letter-spacing="1.4">WIRING</text>
+    <g id="legend"></g>
+    <text x="0" y="150" font-size="12.5" fill="#5d6b78">female–female jumper wires, &lt; 30 cm</text>
+    <text x="0" y="168" font-size="12.5" fill="#5d6b78">or a breadboard — go by the pin labels</text>
+  </g>
+
+  <!-- ===== wireless sensors ===== -->
+  <!-- waves -->
+  <g fill="none" stroke="#7c4dff" stroke-width="3" stroke-linecap="round" opacity=".85">
+    <path d="M905 230 a 30 30 0 0 1 0 60" transform="rotate(180 905 260)"/>
+    <path d="M920 215 a 48 48 0 0 1 0 90" transform="rotate(180 920 260)"/>
+    <path d="M935 200 a 66 66 0 0 1 0 120" transform="rotate(180 935 260)"/>
+  </g>
+  <rect x="938" y="246" width="96" height="28" rx="14" fill="#efe9ff"/>
+  <text x="986" y="265" text-anchor="middle" font-size="13" font-weight="700" fill="#7c4dff">868 MHz</text>
+
+  <!-- Bresser 7-in-1 station -->
+  <g stroke="#3a4651" stroke-width="4" stroke-linecap="round" fill="none">
+    <line x1="1150" y1="120" x2="1150" y2="282"/>
+    <line x1="1130" y1="282" x2="1170" y2="282"/>
+    <!-- anemometer -->
+    <line x1="1150" y1="92" x2="1150" y2="120"/>
+    <line x1="1112" y1="80" x2="1188" y2="80"/>
+    <line x1="1150" y1="80" x2="1150" y2="56" stroke-width="3"/>
+  </g>
+  <circle cx="1108" cy="84" r="11" fill="#e8edf1" stroke="#3a4651" stroke-width="3"/>
+  <circle cx="1192" cy="84" r="11" fill="#e8edf1" stroke="#3a4651" stroke-width="3"/>
+  <circle cx="1150" cy="52" r="10" fill="#e8edf1" stroke="#3a4651" stroke-width="3"/>
+  <!-- body / louvres -->
+  <rect x="1104" y="150" width="92" height="96" rx="10" fill="#f7f9fa" stroke="#3a4651" stroke-width="3"/>
+  <g stroke="#9aa7b3" stroke-width="2"><line x1="1114" y1="172" x2="1186" y2="172"/><line x1="1114" y1="188" x2="1186" y2="188"/><line x1="1114" y1="204" x2="1186" y2="204"/><line x1="1114" y1="220" x2="1186" y2="220"/></g>
+  <!-- rain funnel + solar -->
+  <path d="M1104 128 L1196 128 L1184 146 L1116 146 Z" fill="#dfe6ec" stroke="#3a4651" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="1200" y="160" width="44" height="30" rx="3" fill="#2f4f7a" stroke="#3a4651" stroke-width="2" transform="rotate(-18 1222 175)"/>
+  <text x="1150" y="310" text-anchor="middle" font-size="16" font-weight="700" fill="#17212b">Bresser 5/6/7-in-1</text>
+  <text x="1150" y="330" text-anchor="middle" font-size="13" fill="#5d6b78">wind · rain · temp · humidity</text>
+  <text x="1150" y="347" text-anchor="middle" font-size="13" fill="#5d6b78">UV · light</text>
+
+  <!-- TFA IT+ sensor -->
+  <g transform="translate(930,400)">
+    <rect x="0" y="0" width="64" height="92" rx="10" fill="#f7f9fa" stroke="#3a4651" stroke-width="3"/>
+    <rect x="12" y="16" width="40" height="22" rx="3" fill="#0a0f14"/>
+    <text x="32" y="32" text-anchor="middle" font-size="11" fill="#e8f7f4" font-family="Menlo, monospace">9.3°</text>
+    <circle cx="32" cy="64" r="8" fill="none" stroke="#9aa7b3" stroke-width="2"/>
+  </g>
+  <text x="962" y="514" text-anchor="middle" font-size="15" font-weight="700" fill="#17212b">or TFA IT+</text>
+  <text x="962" y="532" text-anchor="middle" font-size="13" fill="#5d6b78">temp · humidity</text>
+
+  <!-- Ecowitt / Froggit (Fine Offset) sensor -->
+  <g transform="translate(1124,396)">
+    <path d="M6 0 L58 0 L64 10 L0 10 Z" fill="#dfe6ec" stroke="#3a4651" stroke-width="3" stroke-linejoin="round"/>
+    <rect x="4" y="10" width="56" height="86" rx="6" fill="#f7f9fa" stroke="#3a4651" stroke-width="3"/>
+    <g stroke="#9aa7b3" stroke-width="2"><line x1="12" y1="28" x2="52" y2="28"/><line x1="12" y1="42" x2="52" y2="42"/><line x1="12" y1="56" x2="52" y2="56"/><line x1="12" y1="70" x2="52" y2="70"/></g>
+    <circle cx="32" cy="84" r="4" fill="#0f9d8a"/>
+  </g>
+  <text x="1156" y="514" text-anchor="middle" font-size="15" font-weight="700" fill="#17212b">or Ecowitt / Froggit</text>
+  <text x="1156" y="532" text-anchor="middle" font-size="13" fill="#5d6b78">WS69 · WS80/90 · WH31 …</text>
+  <text x="986" y="296" text-anchor="middle" font-size="13" fill="#5d6b78">no cable to the node</text>
+
+  <!-- caption -->
+  <text x="228" y="612" font-size="13" fill="#5d6b78">Pin labels as printed on the Heltec V3. BME280: module pin order varies — connect by label. Keep the BME280 a little away from the warm module (it only provides the air pressure).</text>
+</svg>
+</div>
+
+<div class="steps">
+  <div class="card step"><b class="n">1</b><div><h4>Flash</h4><p>USB-C cable to the Heltec, flash the firmware once (<code>pio run -t upload</code>). Later updates over Wi-Fi (OTA). The same USB-C socket powers the node.</p></div></div>
+  <div class="card step"><b class="n">2</b><div><h4>Wire</h4><p>Four jumper wires: <code>3V3→VIN</code> <code>GND→GND</code> <code>41→SDA</code> <code>42→SCL</code>. No soldering on the Heltec (pin headers), no resistors.</p></div></div>
+  <div class="card step"><b class="n">3</b><div><h4>Configure</h4><p>Portal / web settings: wind + rain sensor <b>off</b>, wireless sensors <b>on</b> with the matching sensor type, source temperature/humidity = <b>Wireless 1</b>.</p></div></div>
+</div>
+
+<div class="card out">
+  <span class="k">Same as with the boards</span>
+  <span class="chip">Dashboard</span><span class="chip">MQTT / Home Assistant</span><span class="chip">LoRaWAN</span>
+  <span class="chip">Weather networks</span><span class="chip">Derived values</span>
+  <span class="chip x">no Davis · DS18B20 · outputs</span>
+</div>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent, text) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; parent.appendChild(e); return e; }
+const topPins = ["GND","3V3","3V3","37","46","45","42","41","40","39","38","1","2","3","4","5","6","7"];
+const bot = ["GND","5V","Ve","Ve","RX","TX","RST","0","36","35","34","33","47","48","26","21","20","19"];
+const X0 = 266, P = 27.4;
+const used = { "GND": "--wgnd", "3V3": "--wscl", "42": "--wscl", "41": "--wsda" };
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const tg = document.getElementById("topHeader"), bg = document.getElementById("botHeader");
+const pinX = {};
+topPins.forEach((n, i) => {
+  const x = X0 + i * P, hot = (i === 0 || i === 1 || n === "41" || n === "42");
+  el("rect", { x: x - 8, y: 340, width: 16, height: 16, rx: 2, fill: hot ? "#f1c75b" : "#6d7a86" }, tg);
+  el("text", { x, y: 376, "text-anchor": "middle", "font-size": 11.5, "font-weight": hot ? 700 : 400, fill: hot ? "#ffffff" : "#8796a3" }, tg, n);
+  if (i === 0) pinX.GND = x; if (i === 1) pinX["3V3"] = x; if (n === "41") pinX["41"] = x; if (n === "42") pinX["42"] = x;
+});
+bot.forEach((n, i) => {
+  const x = X0 + i * P;
+  el("rect", { x: x - 8, y: 536, width: 16, height: 16, rx: 2, fill: "#55626e" }, bg);
+  el("text", { x, y: 528, "text-anchor": "middle", "font-size": 11.5, fill: "#6f7e8b" }, bg, n);
+});
+// BME280 pins (common GY-BME280 order)
+const bp = ["VIN","GND","SCL","SDA"], bpx = {};
+bp.forEach((n, i) => {
+  const x = 312 + i * 50;
+  el("rect", { x: x - 8, y: 160, width: 16, height: 16, rx: 2, fill: "#f1c75b" }, document.getElementById("bmePins"));
+  el("text", { x, y: 150, "text-anchor": "middle", "font-size": 12, "font-weight": 700, fill: "#fff" }, document.getElementById("bmePins"), n);
+  bpx[n] = x;
+});
+const wires = [
+  { from: "3V3", to: "VIN", c: css("--w3v3"), label: "3V3  →  VIN" },
+  { from: "GND", to: "GND", c: css("--wgnd"), label: "GND  →  GND" },
+  { from: "41",  to: "SDA", c: css("--wsda"), label: "41    →  SDA" },
+  { from: "42",  to: "SCL", c: css("--wscl"), label: "42    →  SCL" },
+];
+const wg = document.getElementById("wires"), lg = document.getElementById("legend");
+wires.forEach((w, i) => {
+  const x1 = pinX[w.from], y1 = 348, x2 = bpx[w.to], y2 = 168;
+  const d = `M${x1} ${y1} C ${x1} ${y1 - 90 - i * 8}, ${x2} ${y2 + 90 + i * 8}, ${x2} ${y2}`;
+  el("path", { d, stroke: "#ffffff", "stroke-width": 10 }, wg);
+  el("path", { d, stroke: w.c, "stroke-width": 6 }, wg);
+  const y = 26 + i * 28;
+  el("line", { x1: 0, y1: y - 5, x2: 34, y2: y - 5, stroke: w.c, "stroke-width": 6, "stroke-linecap": "round" }, lg);
+  el("text", { x: 48, y, "font-size": 15, "font-weight": 600, fill: "#17212b", "font-family": "Menlo, monospace" }, lg, w.label);
+});
+if (location.search === "?measure") document.body.setAttribute("data-h", Math.ceil(document.body.getBoundingClientRect().bottom + 2));
+</script>
+</body>
+</html>

@@ -225,6 +225,8 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
             o["id"]        = id;
             o["type"]      = r.type;
             o["protocol"]  = rfProtoName(r.proto);
+            if (r.model)   o["model"]   = r.model;      // Fine Offset: "WS90", "WH31", ...
+            if (r.channel) o["channel"] = r.channel;    // WH31
             o["rssi"]      = (int)lroundf(r.rssi);
             // after a millis() wrap the raw difference is meaningless once the sensor is stale
             unsigned long age = (millis() - r.lastMs) / 1000;
@@ -241,6 +243,11 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
             if (r.hasRain)  o["rainTotal"] = rainForOutput(r.rainTotalMm, gCfg);
             if (r.hasUv)    o["uvIndex"]   = r.uvIndex;
             if (r.hasLight) o["lightLux"]  = (long)lroundf(r.lightLux);
+            if (r.hasMoisture) o["soilMoisturePct"] = r.moisturePct;
+            if (r.hasLightning) {
+                o["lightningCount"] = r.lightningCount;   // the sensor's 8-bit counter (wraps)
+                if (r.lightningKm) o["lightningDistKm"] = r.lightningKm;
+            }
             // values not received for more than 5 min (the sensor still sends others)
             const bool has[6] = { r.hasTemp, r.hasHumidity, r.hasWind, r.hasRain, r.hasUv, r.hasLight };
             static const char* const keys[6] = { "temp", "humidity", "wind", "rain", "uv", "light" };

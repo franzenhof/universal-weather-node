@@ -70,6 +70,19 @@ int main()
     gRfSensors[1].used=true;gRfSensors[1].id=0x99;   // a thermo-only sensor: no weather groups
     buildJsonPayload(doc);
     assert(doc["rfSensors"].size()==2 && doc["rfSensors"][1]["windSpeed"].isNull());
+    // Fine Offset extras: model, WH31 channel, soil moisture, lightning
+    assert(doc["rfSensors"][0]["model"].isNull() && doc["rfSensors"][0]["channel"].isNull());
+    gRfSensors[1].proto=RF_PROTO_FINEOFFSET;gRfSensors[1].model="WH31";gRfSensors[1].channel=3;
+    gRfSensors[1].hasMoisture=true;gRfSensors[1].moisturePct=36;
+    gRfSensors[1].hasLightning=true;gRfSensors[1].lightningCount=7;gRfSensors[1].lightningKm=0;
+    buildJsonPayload(doc);
+    {
+        JsonObject fo=doc["rfSensors"][1];
+        assert(fo["protocol"].as<std::string>()=="Fine Offset" && fo["model"].as<std::string>()=="WH31" && fo["channel"].as<int>()==3);
+        assert(fo["soilMoisturePct"].as<int>()==36 && fo["lightningCount"].as<int>()==7 && fo["lightningDistKm"].isNull());
+        gRfSensors[1].lightningKm=12;buildJsonPayload(doc);
+        assert(doc["rfSensors"][1]["lightningDistKm"].as<int>()==12);
+    }
     // per-value freshness: the station keeps sending wind, the temperature/
     // humidity part fails -> after 5 min only temperature/humidity drop out
     gCfg.srcSel[SG_AIR]=SRC_RF1;gCfg.srcSel[SG_WIND]=SRC_RF1;gCfg.windEn=0;

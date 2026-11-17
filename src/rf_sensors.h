@@ -1,21 +1,32 @@
 #pragma once
 // Wireless weather sensors on 868.3 MHz FSK, received with the Heltec's SX1262
-// between LoRaWAN uplinks: Bresser 5/6/7-in-1, lightning, leakage, ... and
-// LaCrosse / TFA Dostmann IT+ temperature/humidity sensors (itplus.h).
-// gCfg.rfProto selects the protocols; with more than one the receiver
-// alternates (Bresser 17 s, each IT+ rate 5 s - longer than the sensors'
-// send intervals of 12-16 s / about 4 s, so every sensor is heard each round).
+// between LoRaWAN uplinks: Bresser 5/6/7-in-1, lightning, leakage, ...,
+// LaCrosse / TFA Dostmann IT+ temperature/humidity sensors and Fine Offset
+// (Ecowitt / Froggit / Ambient Weather) sensors.
+// gCfg.rfProto selects the protocols; with more than one data rate the
+// receiver alternates (Bresser 17 s, each IT+ data rate 5 s, the 17.241
+// kbit/s phase with Fine Offset 17 s - longer than the send intervals of
+// 12-16 s / about 4 s / 16 s of Bresser, IT+ and the Fine Offset weather
+// stations, so those are heard each round). IT+ 17.241 kbit/s and Fine Offset share one
+// phase: same bit rate and sync word, one receive configuration decodes both
+// (the frame is tried as Fine Offset first - family code + CRC + sum - then
+// as IT+), so adding Fine Offset to IT+ 17.241 costs no receive time.
 //
 // The transceiver is shared: LoRaWAN (lora_transport.cpp / sendLoRa()) calls
 // loraRadioTaken() before every use, which stops the FSK reception here;
 // rfSensorsLoop() restarts it afterwards. A sensor packet that arrives during
 // an uplink and its RX windows (~0.1-3 s) is lost - the sensors repeat every
-// 12-16 s, and only the latest values are kept.
+// 4-16 s, and only the latest values are kept.
 //
 // Decoding: lib/BresserWeatherSensorReceiver (fork of matthias-bs/
-// BresserWeatherSensorReceiver, MIT, see its FORK.md); IT+ in itplus.cpp.
-// IT+ sensors have only a 6-bit ID: they appear as 170000xx (17.241 kbit/s)
-// and 090000xx (9.579 kbit/s), xx = ID (+0x40 for a second probe channel).
+// BresserWeatherSensorReceiver, MIT, see its FORK.md), lib/TfaWeatherSensorReceiver
+// (IT+) and lib/FineOffsetSensorReceiver (own, MIT).
+// IDs: IT+ sensors have only a 6-bit ID: they appear as 170000xx (17.241
+// kbit/s) and 090000xx (9.579 kbit/s), xx = ID (+0x40 for a second probe
+// channel). Fine Offset sensors appear as FFiiiiii: FF = family code (= model
+// number: 24 WH65/WS69, 30 WH31, 40 WH40, 51 WH51, 57 WH57, 80 WS80, 90 WS90,
+// ...), iiiiii = the sensor ID as the Ecowitt app / rtl_433 show it; WH31:
+// 3000CCii with CC = channel 1-8 and ii = ID.
 #include <stdint.h>
 #include <vector>
 #include "sources.h"         // SRC_RF_FRESH_MS
@@ -55,6 +66,14 @@ struct RfSensorReading {
     float rainTotalMm = 0.0f;        // the sensor's own running total (resets on battery change)
     float uvIndex = 0.0f;
     float lightLux = 0.0f;
+    // Fine Offset only (rfSensors JSON, status page; no value-source groups)
+    const char* model = nullptr;     // "WS90", "WH31", ... (static string); nullptr = not Fine Offset
+    uint8_t channel = 0;             // WH31: 1-8; 0 = none
+    bool    hasMoisture = false;     // WH51 soil moisture
+    uint8_t moisturePct = 0;
+    bool    hasLightning = false;    // WH57
+    uint8_t lightningCount = 0;      // strikes counted by the sensor (8 bit, wraps)
+    uint8_t lightningKm = 0;         // distance to the storm front; 0 = none detected
 };
 
 extern RfSensorReading gRfSensors[RF_MAX_SENSORS];
@@ -107,6 +126,10 @@ bool    rfSensorsReceiving();
 int16_t rfSensorsLastError();
 uint32_t rfSensorsPacketsTotal();
 const char* rfSensorsListening();      // protocol currently listened to, e.g. "IT+ 17.241 kbit/s"
-const char* rfProtoName(int proto);    // "Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s"
+const char* rfProtoName(int proto);    // "Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset"
+
+// Receive phases for a protocol set (RF_PROTO_* bit mask): Fine Offset is
+// received in the IT+ 17.241 kbit/s phase, so its bit maps to RF_PROTO_ITPLUS17.
+int rfPhaseSet(int protoSet);
 
 constexpr uint32_t RF_ID_ITPLUS17 = 0x17000000UL, RF_ID_ITPLUS9 = 0x09000000UL;

@@ -32,8 +32,11 @@ constexpr int PCB_REV_2_0 = 20;
 constexpr int RF_RADIO_OFF = 0, RF_RADIO_SX1262 = 1;
 // Wireless protocols (gCfg.rfProto bit mask): Bresser 5/6/7-in-1 etc. (8.21 kbit/s),
 // LaCrosse / TFA IT+ at 17.241 kbit/s (TX29-IT, TFA 30.3159.IT, ...) and at
-// 9.579 kbit/s (TX35-IT, TFA 30.3155.WD, ...). Several = the receiver alternates.
-constexpr int RF_PROTO_BRESSER = 1, RF_PROTO_ITPLUS17 = 2, RF_PROTO_ITPLUS9 = 4, RF_PROTO_ALL = 7;
+// 9.579 kbit/s (TX35-IT, TFA 30.3155.WD, ...), Fine Offset / Ecowitt / Froggit
+// (17.241 kbit/s, received in the same phase as IT+ 17.241 kbit/s). Several
+// data rates = the receiver alternates.
+constexpr int RF_PROTO_BRESSER = 1, RF_PROTO_ITPLUS17 = 2, RF_PROTO_ITPLUS9 = 4, RF_PROTO_FINEOFFSET = 8,
+              RF_PROTO_ALL = 15;
 
 struct Config {
     // Set once the config portal has been completed the first time. Used
@@ -63,7 +66,7 @@ struct Config {
     volatile int loraWindAgg       = 0;    // LoRaWAN wind values: 0 = interval since last uplink, 1 = 10-min (WMO)
     volatile int mqttWindAgg       = 0;    // MQTT wind values: 0 = interval since last publish, 1 = 10-min (WMO)
     volatile int rfProto           = 1;    // wireless protocols, bit mask RF_PROTO_* (rf_sensors.cpp); several = time-shared
-    volatile int rfEn              = 0;    // Bresser 868 MHz sensors (rf_sensors.cpp): 0 = off, RF_RADIO_SX1262 = shared LoRa chip
+    volatile int rfEn              = 0;    // 868 MHz wireless sensors (rf_sensors.cpp): 0 = off, RF_RADIO_SX1262 = shared LoRa chip
     volatile int windDirOffsetDeg  = 0;   // north offset (added to raw value, mod 360)
     volatile int windUnitMs        = 1;   // 1 = transmit wind in m/s, 0 = transmit in km/h
     volatile int windEn            = 1;   // 1 = Davis wind sensor enabled (direction + speed)

@@ -2,10 +2,10 @@
 
 A DIY weather station on a custom PCB around the **Heltec WiFi LoRa 32 V3** (ESP32-S3). It measures **wind speed, wind direction, rain, temperature, humidity and air pressure** and sends the data wherever you need it — over LoRaWAN, over Wi-Fi, or both at once.
 
-The sensors are your choice: a **Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station** or **TFA Dostmann / LaCrosse IT+ thermo-hygro sensors** over 868 MHz (received by the board's LoRa chip — no wiring, no extra hardware), **Davis** wind and rain sensors on their original RJ11 plugs, or **generic wired** reed-switch sensors. A **BME280** adds the air pressure (wireless stations have no barometer) and is part of almost every setup.
+The sensors are your choice: a **Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station** , **TFA Dostmann / LaCrosse IT+ thermo-hygro sensors** or **Ecowitt / Froggit (Fine Offset) sensors** over 868 MHz (received by the board's LoRa chip — no wiring, no extra hardware), **Davis** wind and rain sensors on their original RJ11 plugs, or **generic wired** reed-switch sensors. A **BME280** adds the air pressure (wireless stations have no barometer) and is part of almost every setup.
 
 - 🧩 **Everything runs on the node itself** — the ESP32-S3 of the Heltec V3 receives, measures, computes (dew point, trends, daily totals …) and uploads. No Linux PC, Raspberry Pi, ioBroker script or cloud service in between
-- 📻 **Wireless sensors out of the box** — Bresser stations and TFA / LaCrosse IT+ sensors (IT+ not yet tested with real sensors) on 868 MHz, received between LoRaWAN uplinks; per value you choose which sensor counts (board, wireless, automatic fallback)
+- 📻 **Wireless sensors out of the box** — Bresser stations, TFA / LaCrosse IT+ and Ecowitt / Froggit sensors (IT+ and Ecowitt not yet tested with real sensors) on 868 MHz, received between LoRaWAN uplinks; per value you choose which sensor counts (board, wireless, automatic fallback)
 - 📡 **LoRaWAN** to ChirpStack or TTN — compact binary format (default) or CayenneLPP, automatically fitted to the data rate
 - 📶 **Wi-Fi + MQTT** (TLS-capable) with **Home Assistant** auto-discovery
 - 🌐 **Built-in web dashboard** with live values, trend charts and hover details — works without internet
@@ -24,7 +24,7 @@ The sensors are your choice: a **Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor statio
 
 The transports can be enabled independently. Web serving and weather-network uploads run in background tasks; sensor sampling and LoRaWAN share the main loop, so a radio exchange briefly pauses sampling.
 
-**Current status:** [2.0.0-beta.2](firmware/universal-weather-node-2.0.0-beta.2.bin) is the latest prepared firmware. PCB v2.0 fabrication files are ready for **prototypes**, not a hardware-qualified production run. Builds and host tests pass; physical v2.0 qualification and beta field tests on Rev 1.2/1.3 remain open. The photos below show older Rev 1.2 hardware; the v2.0 images are renders.
+**Current status:** [2.0.0-beta.3](firmware/universal-weather-node-2.0.0-beta.3.bin) is the latest prepared firmware. PCB v2.0 fabrication files are ready for **prototypes**, not a hardware-qualified production run. Builds and host tests pass; physical v2.0 qualification and beta field tests on Rev 1.2/1.3 remain open. The photos below show older Rev 1.2 hardware; the v2.0 images are renders.
 
 > **PCB v2.0 power safety:** use **one power source at a time**. JP8 is a two-pin manual buck disconnect, not a power mux. Before connecting USB-C, disconnect VIN and remove the JP8 shunt. J3 has VIN and GND only; there is no external 5 V input. Never select PCB revision `20` on a Rev 1.2/1.3 board.
 
@@ -42,7 +42,7 @@ The transports can be enabled independently. Web serving and weather-network upl
 - [Weather Networks](#weather-networks)
 - [MQTT and Home Assistant](#mqtt-and-home-assistant)
 - [LoRaWAN](#lorawan)
-- [Using Other Sensors](#using-other-sensors) · [Wireless Sensors (Bresser, TFA)](#wireless-sensors-bresser-tfa-it-868-mhz)
+- [Using Other Sensors](#using-other-sensors) · [Wireless Sensors (Bresser, TFA)](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz)
 - [Inputs and Outputs (PCB v2.0)](#inputs-and-outputs-pcb-v20) · [Second Wind Sensor](#second-wind-sensor-pcb-v20)
 - [Derived Values](#derived-values) · [Firmware Update Check](#firmware-update-check)
 - [Units (Metric/Imperial)](#units-metricimperial)
@@ -62,7 +62,7 @@ The transports can be enabled independently. Web serving and weather-network upl
 
 <!-- help:skip -->
 <p align="center">
-  <img src="pictures/overview.png" alt="Overview: sensor setups (Bresser or TFA IT+ 868 MHz wireless, Davis, generic wired, plus BME280) feed the Universal Weather Node PCB, which sends to LoRaWAN, MQTT/Home Assistant, the web dashboard/REST API and weather networks" width="100%">
+  <img src="pictures/overview.png" alt="Overview: sensor setups (Bresser, TFA IT+ or Ecowitt / Froggit 868 MHz wireless, Davis, generic wired, plus BME280) feed the Universal Weather Node PCB, which sends to LoRaWAN, MQTT/Home Assistant, the web dashboard/REST API and weather networks" width="100%">
 </p>
 
 <table>
@@ -95,8 +95,10 @@ The transports can be enabled independently. Web serving and weather-network upl
 
 ## How It Fits Together
 
+The node reads every sensor **directly** — wired inputs, I²C / 1-Wire, or 868 MHz radio decoded by its own LoRa chip — processes the values itself and only **sends** them out (LoRaWAN, MQTT, web/REST, weather networks). It never fetches or receives sensor data over Wi-Fi.
+
 ```
- Bresser / TFA IT+ ~ ~ 868 MHz ~ ~ ~┐
+ Bresser / TFA / Ecowitt ~ 868 MHz ~┐
  Davis / generic wind sensor ───────┤
  Davis / generic rain gauge ────────┤                      ┌─► LoRaWAN ──► ChirpStack / TTN ──► Grafana, ...
  BME280 (I²C) ──────────────────────┼──► Weather Node ─────┤
@@ -139,22 +141,28 @@ For permanent VIN power on v2.0, disconnect USB first, then fit JP8 as described
 | Davis AeroCone / Standard, typically 6466M (default) | Rainfall (reed switch, 0.2 mm/pulse) |
 | BME280 | Temperature / humidity / air pressure (I²C 0x76; Cat5 recommended for longer cables, see [Connectors](#connectors)) |
 | DS18B20 | Up to 3 temperature probes (1-Wire, external) |
-| Bresser 5/6/7-in-1 station or TFA Dostmann / LaCrosse IT+ sensors (optional) | Wireless 868 MHz sensors, received by the Heltec's LoRa chip — no extra hardware; see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-868-mhz) |
+| Bresser 5/6/7-in-1 station, TFA Dostmann / LaCrosse IT+ or Ecowitt / Froggit sensors (optional) | Wireless 868 MHz sensors, received by the Heltec's LoRa chip — no extra hardware; see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz) |
 | LiPo battery | Optional; voltage measured via voltage divider + ADC |
 | Custom PCB **v2.0** (default) or Rev 1.2 / 1.3 | Connectors plus ESD protection, pull-ups, RC filters, polyfuses; v2.0 also power supply 6–29.2 V / 5 V and a UV input |
 
-> **Other sensors work too.** Rain gauges and anemometers are just reed-switch pulse counters — any similar sensor works after setting its ratio. See [Using Other Sensors](#using-other-sensors). **Without any wiring**, a Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station delivers wind, rain, temperature, humidity (and UV / light) over 868 MHz, TFA Dostmann / LaCrosse IT+ sensors temperature and humidity — see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-868-mhz); keep the BME280 for the air pressure. A wireless-only station even works **without the custom PCB** — see [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb).
+> **Other sensors work too.** Rain gauges and anemometers are just reed-switch pulse counters — any similar sensor works after setting its ratio. See [Using Other Sensors](#using-other-sensors). **Without any wiring**, a Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station delivers wind, rain, temperature, humidity (and UV / light) over 868 MHz, TFA Dostmann / LaCrosse IT+ sensors temperature and humidity, Ecowitt / Froggit stations (WS69, WS80, WS90 …) all outdoor values — see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz); keep the BME280 for the air pressure. A wireless-only station even works **without the custom PCB** — see [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb).
 
 ### Minimal Wireless Build (no custom PCB)
 
-For a wireless station (Bresser 5/6/7-in-1 or TFA / LaCrosse IT+ sensors) the custom PCB is optional: the Heltec module receives the sensors itself, and a **BME280** module adds the air pressure. *Not yet built and tested as described here — the firmware paths are the same as on the boards.*
+For a wireless station (Bresser 5/6/7-in-1, TFA / LaCrosse IT+ or Ecowitt / Froggit sensors) the custom PCB is optional: the Heltec module receives the sensors itself, and a **BME280** module adds the air pressure. *Not yet built and tested as described here — the firmware paths are the same as on the boards.*
 
 | Part | Notes |
 |------|-------|
 | Heltec WiFi LoRa 32 **V3 / V3.1 / V3.2** | with an **868 MHz** antenna (EU); never power it without the antenna |
 | BME280 module (I²C, 3.3 V) | address **0x76** (SDO to GND; many modules are 0x76, some 0x77 — check the jumper/solder bridge). Must be a BME280, not a BMP280 (no humidity) |
 | USB-C power supply 5 V, ≥ 1 A | the Heltec's own USB-C socket |
-| Bresser station or TFA IT+ sensor | see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-868-mhz) |
+| Bresser station, TFA IT+ or Ecowitt / Froggit sensor | see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz) |
+
+<!-- help:skip -->
+<p align="center">
+  <img src="pictures/minimal-wireless-build.png" alt="Minimal wireless build: Heltec V3 powered over USB-C, BME280 on four jumper wires (3V3, GND, 41 SDA, 42 SCL), Bresser, TFA IT+ or Ecowitt / Froggit sensors over 868 MHz" width="100%">
+</p>
+<!-- /help:skip -->
 
 **Wiring** (four wires, Heltec pin labels; keep them short, < 30 cm — there is no protection circuitry without the PCB):
 
@@ -168,7 +176,7 @@ For a wireless station (Bresser 5/6/7-in-1 or TFA / LaCrosse IT+ sensors) the cu
 **Settings** (portal or web settings, after [flashing](#build--flash)):
 
 1. *Wind sensor* and *Rain sensor* **off** (nothing is connected to the board inputs); *PCB revision* stays at 13.
-2. *Wireless sensors* **on**, *Wireless sensor type* Bresser or TFA / LaCrosse IT+; enter the sensor ID shown on the status page under *Wireless sensor IDs*.
+2. *Wireless sensors* **on**, *Wireless sensor type* Bresser, TFA / LaCrosse IT+ or Fine Offset / Ecowitt / Froggit; enter the sensor ID shown on the status page under *Wireless sensor IDs*.
 3. *Source: temperature / humidity* = **Wireless 1** — otherwise *Auto* takes the BME280 first, which sits in the case next to the warm module. The BME280 then only provides the air pressure (QNH), which is not affected by its location.
 4. Wi-Fi / MQTT / LoRaWAN / weather networks as needed.
 
@@ -586,8 +594,8 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | LoRaWAN wind values | *Interval* (mean, 3-s gust and direction since the last uplink) or *10 min* (WMO values of the last 10 minutes) | interval |
 | MQTT interval | Seconds between MQTT publishes; `0` = like the LoRaWAN interval, else 2–3600 | 0 |
 | MQTT wind values | *Interval* or *10 min*, as for LoRaWAN | interval |
-| Wireless sensors | Receive 868 MHz sensors with the LoRa chip between uplinks — see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-868-mhz) | off |
-| Wireless sensor type | *Bresser* or *TFA / LaCrosse IT+* (both data rates, alternating, or 17.241 / 9.579 kbit/s only); *Bresser + TFA IT+ alternating* is possible but **not recommended** (packets of both are missed) | Bresser |
+| Wireless sensors | Receive 868 MHz sensors with the LoRa chip between uplinks — see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz) | off |
+| Wireless sensor type | *Bresser*, *TFA / LaCrosse IT+* (both data rates, alternating, or 17.241 / 9.579 kbit/s only), *Fine Offset / Ecowitt / Froggit*, *TFA IT+ 17.241 kbit/s + Fine Offset* (same data rate, received together) or *IT+ both rates + Fine Offset*; *Bresser + TFA IT+* or *Bresser + Fine Offset* alternating is possible but **not recommended** (packets of both are missed) | Bresser |
 | Wireless sensor IDs | Hex IDs to accept, comma-separated, max 4; empty = any. The order defines *Wireless 1–4* for the value sources; the hint lists the IDs received so far | – |
 | Source: temperature / humidity, wind, rain, UV, light | Which sensor feeds each value into all outputs: *Auto* (board first, then wireless 1–4), *Board sensor*, *Wireless 1–4*, *Off* — see [Value Sources](#value-sources) | Auto |
 | Wind / rain sensor | Enable or disable the board's anemometer / rain gauge (a wireless sensor can still deliver wind/rain, see value sources) | on |
@@ -1014,7 +1022,7 @@ Send on **FPort 1**: `0x10`, followed by one or more triplets `[paramId][valueHi
 | 43 | `0x2B` | `mqttWindAgg` | `0` interval, `1` 10 min (WMO) | 1 | `10 2B 00 01` |
 | 44 | `0x2C` | `rfEn` | `0` / `1`, 868 MHz wireless sensors (IDs only via web settings / portal) | 1 | `10 2C 00 01` |
 | 45–49 | `0x2D`–`0x31` | value sources: temperature/humidity, wind, rain, UV, light | `0` auto, `1` board, `2`–`5` wireless 1–4, `6` off — see [Value Sources](#value-sources) | 2 (wind from wireless 1) | `10 2E 00 02` |
-| 50 | `0x32` | `rfProto` | wireless sensor type, bit mask: `1` Bresser, `2` IT+ 17.241 kbit/s, `4` IT+ 9.579 kbit/s, `6` IT+ both, `7` Bresser + IT+ (several bits = the receiver alternates and misses packets; Bresser + IT+ not recommended) | 6 | `10 32 00 06` |
+| 50 | `0x32` | `rfProto` | wireless sensor type, bit mask: `1` Bresser, `2` IT+ 17.241 kbit/s, `4` IT+ 9.579 kbit/s, `6` IT+ both, `7` Bresser + IT+, `8` Fine Offset / Ecowitt, `10` IT+ 17.241 + Fine Offset (same data rate, no alternating), `14` IT+ both + Fine Offset, `9` Bresser + Fine Offset; any combination `1..15` (Bresser together with others = the receiver alternates and misses packets, not recommended) | 6 | `10 32 00 06` |
 
 IDs 15–30 and wind-2 mode (33) belong to the [PCB v2.0 I/O block](#inputs-and-outputs-pcb-v20); on Rev 1.2/1.3 they are rejected except for disabling a function. Enabling UV (35) also requires v2.0. Calibration values can be prepared where accepted, but do not provide the missing hardware.
 
@@ -1117,16 +1125,17 @@ calibration result is not restricted to an arbitrary meteorological threshold.
 
 ---
 
-### Wireless Sensors (Bresser, TFA IT+, 868 MHz)
+### Wireless Sensors (Bresser, TFA IT+, Ecowitt, 868 MHz)
 
-The node can additionally receive wireless sensors on 868.3 MHz (FSK) **with the existing LoRa chip, no extra hardware**: **Bresser** sensors — e.g. the **7-in-1** station (wind, rain, temperature, humidity, UV, light), 5-in-1 and 6-in-1 stations, thermo/hygro, soil, lightning and leakage sensors — or **TFA Dostmann / LaCrosse IT+** temperature/humidity sensors (details below; not yet tested with real sensors). Switch it on with *Wireless sensors* and choose the family with *Wireless sensor type* (web settings *Measurement*, portal, or parameters 44 and 50).
+The node can additionally receive wireless sensors on 868.3 MHz (FSK) **with the existing LoRa chip, no extra hardware**: **Bresser** sensors — e.g. the **7-in-1** station (wind, rain, temperature, humidity, UV, light), 5-in-1 and 6-in-1 stations, thermo/hygro, soil, lightning and leakage sensors — , **TFA Dostmann / LaCrosse IT+** temperature/humidity sensors or **Fine Offset** sensors sold as **Ecowitt** and **Froggit** (details below; IT+ and Fine Offset not yet tested with real sensors). Switch it on with *Wireless sensors* and choose the family with *Wireless sensor type* (web settings *Measurement*, portal, or parameters 44 and 50).
 
 - **Shared radio:** the SX1262 listens for the sensors whenever LoRaWAN does not need it. Before every uplink (and its two receive windows) and every join, the firmware stops the reception and restarts it afterwards. LoRaWAN is not affected; a sensor packet that arrives during an uplink is lost — Bresser sensors repeat every 12–16 s, IT+ sensors about every 4 s, so at a 60 s LoRaWAN interval roughly 5 % of the packets are missed, and only the latest values are kept anyway.
-- **Sensor IDs:** with *Wireless sensor IDs* empty the node accepts any sensor of the selected type in range (up to 4); IT+ sensors get a new ID with every battery change. The status page lists every received ID with RSSI — enter yours (hex, comma-separated) to ignore the neighbours'. A sensor not heard for 5 minutes gives up its place to a new one (e.g. after a battery change), and changing the ID list clears the sensor table. An IT+ sensor that reports a fresh battery takes over the place of a silent IT+ sensor on the same data rate after 1 minute (with an ID list, only if the new ID is in it).
-- **Output:** status page box *Wireless sensors (868 MHz)* and the JSON field `rfSensors` in `/api/data` and the MQTT data topic — one object per sensor with `id`, `type`, `protocol` (`Bresser`, `IT+ 17.241 kbit/s`, `IT+ 9.579 kbit/s`), `rssi`, `ageSec`, `batteryOk` and, as far as the sensor sends them, `temp`, `humidityPct`, `windSpeed` / `windGust` / `windDirDeg` (the sensor's own mean and gust), `rainTotal` (the sensor's running total, resets on a battery change), `uvIndex`, `lightLux`, and `stale` — the values not received for more than 5 minutes although the sensor still sends others (e.g. a failed temperature element); the status page marks them *(stale)*. Units follow the unit settings. Which of these values go into LoRaWAN, MQTT, Home Assistant, the weather networks and the history is set with the [value sources](#value-sources).
+- **Sensor IDs:** with *Wireless sensor IDs* empty the node accepts any sensor of the selected type in range (up to 4); IT+ sensors and most Ecowitt / Froggit sensors get a new ID with every battery change. The status page lists every received ID with RSSI — enter yours (hex, comma-separated) to ignore the neighbours'. A sensor not heard for 5 minutes gives up its place to a new one (e.g. after a battery change), and changing the ID list clears the sensor table. An IT+ sensor that reports a fresh battery takes over the place of a silent IT+ sensor on the same data rate after 1 minute (with an ID list, only if the new ID is in it).
+- **Output:** status page box *Wireless sensors (868 MHz)* and the JSON field `rfSensors` in `/api/data` and the MQTT data topic — one object per sensor with `id`, `type`, `protocol` (`Bresser`, `IT+ 17.241 kbit/s`, `IT+ 9.579 kbit/s`, `Fine Offset`), for Fine Offset also `model` and `channel`, `rssi`, `ageSec`, `batteryOk` and, as far as the sensor sends them, `temp`, `humidityPct`, `windSpeed` / `windGust` / `windDirDeg` (the sensor's own mean and gust), `rainTotal` (the sensor's running total, resets on a battery change), `uvIndex`, `lightLux`, `soilMoisturePct`, `lightningCount` / `lightningDistKm` (WH51 / WH57, JSON and status page only), and `stale` — the values not received for more than 5 minutes although the sensor still sends others (e.g. a failed temperature element); the status page marks them *(stale)*. Units follow the unit settings. Which of these values go into LoRaWAN, MQTT, Home Assistant, the weather networks and the history is set with the [value sources](#value-sources).
 - **Low-power mode** is not available while wireless sensors are on (the chip stays in receive mode, ~5 mA).
 - **TFA Dostmann / LaCrosse IT+ sensors** instead of Bresser: set *Wireless sensor type* (web settings, portal field `rfproto`, parameter 50) to *TFA / LaCrosse IT+*. Supported: temperature / humidity sensors at **17.241 kbit/s** (TFA 30.3143.IT, 30.3144.IT, 30.3147.IT, 30.3157.IT, 30.3159.IT; TX21/25/27/29-IT) and **9.579 kbit/s** (TFA 30.3155.WD, 30.3156.WD; TX35-IT). With *both data rates* the receiver alternates every 5 s (the sensors send about every 4 s); choose the single rate if you know it. **Bresser and IT+ at the same time** is only possible alternating (*Bresser + TFA IT+ alternating*: 17 s Bresser, 5 s each IT+ rate) — the single SX1262 can listen to one data rate / sync word at a time, so packets of both families are missed (e.g. a good part of the Bresser wind packets, which makes wireless wind coarser). **Not recommended**; use one sensor family where possible. IT+ sensors only have a 6-bit ID that changes with every battery change — they appear as **`170000xx`** (17.241 kbit/s) or **`090000xx`** (9.579 kbit/s); after a battery change, update *Wireless sensor IDs* (or leave the list empty). **Not yet tested with real sensors** — the decoder is checked against a published frame. TFA *WeatherHub* / Mobile Alerts sensors are not supported yet (scrambled 6 kbit/s format; see `lib/TfaWeatherSensorReceiver/README.md`).
-- Decoding: Bresser with a fork of [BresserWeatherSensorReceiver](https://github.com/matthias-bs/BresserWeatherSensorReceiver) (MIT) in `lib/BresserWeatherSensorReceiver` — adapted to share the transceiver with LoRaWAN and to RadioLib 7; changes in its `FORK.md`. IT+ with `lib/TfaWeatherSensorReceiver` (own, MIT, same usage pattern — kept self-contained so it can become a stand-alone library). Ecowitt/Fine Offset and 433 MHz (OOK) sensors are not supported (the SX1262 has no OOK receiver).
+- **Fine Offset / Ecowitt / Froggit sensors** (868 MHz versions only): set *Wireless sensor type* to *Fine Offset / Ecowitt / Froggit* — or, together with IT+ thermo-hygro sensors, *TFA IT+ 17.241 kbit/s + Fine Offset*: both use 17.24 kbit/s with the same sync word and are received **in the same phase, nothing is missed**. Supported (formats from the rtl_433 documentation, each frame checked by CRC-8 and checksum): outdoor arrays **WH65 / WS69** (e.g. Froggit WH3000SE / WH4000SE; WS69 with pressure), **WS68**, **WS80**, **WS85**, **WS90**; thermo-hygro **WH31 / WN31 / DP50** (8 channels); probes **WN34 / DP35 / DP150**, **WN38** (globe temperature — select them as a temperature source deliberately); rain **WH40 / DP80**, **WN20**; soil moisture **WH51 / DP100** and lightning **WH57 / DP60** (JSON and status page only). IDs read **`FFiiiiii`** — `FF` the model code, `iiiiii` the sensor ID as the Ecowitt app or rtl_433 shows it, e.g. WS90 `9000342B`, WH31 channel 1 `300001C3`. The old **WH24** sends the same frame as the WH65 with other units and can't be told apart — values follow the WH65. Not supported: WH25/WH32, air-quality, leak and WH1080 sensors, 433/915 MHz versions. **Not yet tested with real sensors.**
+- Decoding: Bresser with a fork of [BresserWeatherSensorReceiver](https://github.com/matthias-bs/BresserWeatherSensorReceiver) (MIT) in `lib/BresserWeatherSensorReceiver` — adapted to share the transceiver with LoRaWAN and to RadioLib 7; changes in its `FORK.md`. IT+ with `lib/TfaWeatherSensorReceiver` (own, MIT, same usage pattern — kept self-contained so it can become a stand-alone library). Fine Offset with `lib/FineOffsetSensorReceiver` (own, MIT, written from the rtl_433 format documentation, no code copied). 433 MHz (OOK) sensors are not supported (the SX1262 has no OOK receiver).
 
 ### Value Sources
 
@@ -1134,11 +1143,11 @@ Board sensors and wireless sensors can measure the same quantities. For each gro
 
 | Group | Board sensor | Wireless sensors |
 |-------|--------------|------------------|
-| Temperature / humidity | BME280 | Bresser 5/6/7-in-1, thermo/hygro; TFA / LaCrosse IT+ (humidity only if the sensor has it) |
-| Wind (mean, gust, direction always together) | Davis anemometer + vane | Bresser 5/6/7-in-1 |
-| Rain | tipping-bucket gauge | Bresser 5/6/7-in-1 |
-| UV | analog UV input (PCB v2.0) | Bresser 6/7-in-1 (UV index) |
-| Light | – | Bresser 7-in-1 (lux) |
+| Temperature / humidity | BME280 | Bresser 5/6/7-in-1, thermo/hygro; TFA / LaCrosse IT+ (humidity only if the sensor has it); Ecowitt / Froggit WH65/WS69, WS68/80/85/90, WH31 (WN34/WN38: temperature only) |
+| Wind (mean, gust, direction always together) | Davis anemometer + vane | Bresser 5/6/7-in-1; Ecowitt / Froggit WH65/WS69, WS68/80/85/90 |
+| Rain | tipping-bucket gauge | Bresser 5/6/7-in-1; Ecowitt / Froggit WH65/WS69, WS85/90, WH40, WN20 |
+| UV | analog UV input (PCB v2.0) | Bresser 6/7-in-1 (UV index); Ecowitt / Froggit WH65/WS69, WS80/90 |
+| Light | – | Bresser 7-in-1 (lux); Ecowitt / Froggit WH65/WS69, WS80/90 |
 
 Pressure always comes from the BME280; the DS18B20 probes, wind 2 and AUX are unaffected.
 
@@ -1446,7 +1455,7 @@ Start with a short button press to view the display and `pio device monitor` for
 | Settings/Log cannot be opened | Enable Wi-Fi + web API and set an admin password in the portal; browser login user is `admin` |
 | MQTT or weather uploads absent | Enable the service, verify credentials and network reachability; weather uploads also require NTP time. Broker TLS mode must match its listener |
 | Heater/fan stays off | Correct supply and jumper, mode, first valid temperature in auto, VE.Direct battery/PV interlocks; entering the portal latches outputs off until restart |
-| Wireless sensor not listed | *Wireless sensors* on, sensor within range (RSSI on the status page; above about −100 dBm is fine), ID filter empty or containing its ID; only Bresser and TFA / LaCrosse IT+ 868 MHz sensors are supported — *Wireless sensor type* must match (for IT+ try *both data rates*). *Paused for a LoRaWAN uplink* on the status page is normal |
+| Wireless sensor not listed | *Wireless sensors* on, sensor within range (RSSI on the status page; above about −100 dBm is fine), ID filter empty or containing its ID; only Bresser, TFA / LaCrosse IT+ and Fine Offset (Ecowitt / Froggit) 868 MHz sensors are supported — *Wireless sensor type* must match (for IT+ try *both data rates*). *Paused for a LoRaWAN uplink* on the status page is normal |
 | UV voltage or index is wrong | Correct J17 pin numbers, one sensor supply, JP10 and matching scale; a UV index additionally needs the sensor-specific transfer function and both calibration/index switches |
 
 **Known limits:** v2.0 has not been qualified on real hardware. Current targets are not lightning/surge certification or guaranteed thermal ratings. An externally powered analog sensor can backfeed an unpowered controller; avoid powered signals with the node off. Chart history is lost on restart, and RTC-backed rain/AUX totals are lost on power loss. Keep the device on a trusted local network; neither the HTTP interface nor the open setup portal provides encrypted configuration transport.
@@ -1578,6 +1587,7 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 │   └── generated_version.h, decoder_js.h, readme_md.h   # generated, git-ignored
 ├── lib/BresserWeatherSensorReceiver/  # Fork (MIT) of the Bresser 868 MHz decoder, see FORK.md
 ├── lib/TfaWeatherSensorReceiver/     # TFA / LaCrosse IT+ 868 MHz receiver + decoder (own, MIT), see its README
+├── lib/FineOffsetSensorReceiver/    # Fine Offset (Ecowitt / Froggit) 868 MHz receiver + decoder (own, MIT)
 ├── chirpstack/decoder.js    # Payload decoder (ChirpStack v3/v4, TTN)
 ├── test/                    # Decoder, round-trip, VE.Direct and firmware runtime tests
 ├── tools/version.py         # Pre-build script: version, decoder, README headers
@@ -1609,6 +1619,7 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 | PubSubClient | ^2.8 | MQTT client |
 | BresserWeatherSensorReceiver | fork of 0.44.0 in `lib/` | Bresser 868 MHz sensor decoding (MIT, see `lib/BresserWeatherSensorReceiver/FORK.md`) |
 | TfaWeatherSensorReceiver | 0.1.0 in `lib/` (own) | TFA / LaCrosse IT+ 868 MHz sensor receiving and decoding (MIT) |
+| FineOffsetSensorReceiver | 0.1.0 in `lib/` (own) | Fine Offset (Ecowitt / Froggit) 868 MHz sensor receiving and decoding (MIT; format from the rtl_433 documentation) |
 | WiFi, WiFiClientSecure, WebServer, HTTPClient | ESP32 core | Wi-Fi, TLS, web server, uploads |
 
 ### Technical Notes
@@ -1623,6 +1634,16 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 ---
 
 ## Changelog
+
+### 2.0.0-beta.3
+
+Firmware binary: [`universal-weather-node-2.0.0-beta.3.bin`](firmware/universal-weather-node-2.0.0-beta.3.bin) (application image for OTA or USB). Same hardware support and beta status as 2.0.0-beta.2; existing settings keep their meaning, payload format unchanged (no decoder update needed).
+
+**Ecowitt / Froggit (Fine Offset)**
+* **868 MHz sensors:** WH65/WS69, WS68, WS80, WS85, WS90, WH31/DP50, WN34, WN38, WH40, WN20, WH51, WH57 — received in the same 17.241 kbit/s phase as IT+ (*Wireless sensor type* values 8, 10, 14, 9). New library `lib/FineOffsetSensorReceiver` (own, MIT). `rfSensors` gains `model`, `channel`, `soilMoisturePct`, `lightningCount`, `lightningDistKm`. Not yet tested with real sensors.
+
+**Docs**
+* Wiring graphic for the [minimal wireless build](#minimal-wireless-build-no-custom-pcb) (Heltec V3 + BME280 on four wires, USB-C power); architecture note: sensors are read directly, Wi-Fi is output only.
 
 ### 2.0.0-beta.2
 

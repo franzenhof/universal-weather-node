@@ -107,8 +107,16 @@ void rfExpireValues(unsigned long now)
 const char* rfProtoName(int proto)
 {
     switch (proto) {
-        case RF_PROTO_ITPLUS17: return "IT+ 17.241 kbit/s";
-        case RF_PROTO_ITPLUS9:  return "IT+ 9.579 kbit/s";
-        default:                return "Bresser";
+        case RF_PROTO_ITPLUS17:   return "IT+ 17.241 kbit/s";
+        case RF_PROTO_ITPLUS9:    return "IT+ 9.579 kbit/s";
+        case RF_PROTO_FINEOFFSET: return "Fine Offset";
+        default:                  return "Bresser";
     }
+}
+
+int rfPhaseSet(int protoSet)
+{
+    int p = protoSet & (RF_PROTO_BRESSER | RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9);
+    if (protoSet & RF_PROTO_FINEOFFSET) p |= RF_PROTO_ITPLUS17;   // same receive phase
+    return p ? p : RF_PROTO_BRESSER;
 }

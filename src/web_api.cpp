@@ -565,9 +565,15 @@ void handleStatusPage()
             if (r.hasRain)     v += " &middot; rain total " + String(rainForOutput(r.rainTotalMm, gCfg), 1) + " " + rainUnitLabel(gCfg) + stale("rain");
             if (r.hasUv)       v += " &middot; UV " + String(r.uvIndex, 1) + stale("uv");
             if (r.hasLight)    v += " &middot; " + String((long)lroundf(r.lightLux)) + " lx" + stale("light");
-            addRow(html, String("ID ") + id + " (" + (r.proto == RF_PROTO_BRESSER ? "type " + String(r.type) : String(rfProtoName(r.proto))) + ")", v);
+            if (r.hasMoisture) v += " &middot; soil moisture " + String(r.moisturePct) + " %";
+            if (r.hasLightning) v += " &middot; lightning count " + String(r.lightningCount) +
+                                     (r.lightningKm ? " &middot; storm " + String(r.lightningKm) + " km" : String());
+            String kind = r.proto == RF_PROTO_BRESSER ? "type " + String(r.type) : String(rfProtoName(r.proto));
+            if (r.model)   kind += String(" ") + r.model;
+            if (r.channel) kind += " ch " + String(r.channel);
+            addRow(html, String("ID ") + id + " (" + kind + ")", v);
         }
-        if (!any) addRow(html, "Sensors", "<span class='dim'>none received yet (Bresser sensors send every 12&ndash;16 s, IT+ about every 4 s)</span>");
+        if (!any) addRow(html, "Sensors", "<span class='dim'>none received yet (Bresser sensors send every 12&ndash;16 s, IT+ about every 4 s, Fine Offset every 5&ndash;80 s)</span>");
         html += "</table></section>";
     }
 
@@ -870,21 +876,47 @@ void renderSettings(const String& message, bool isError, int httpCode)
     fieldText  (html, "mqttsec",   "MQTT interval (s)", String(gCfg.mqttIntervalSec), 5, "0 = like the LoRaWAN interval, else 2&ndash;3600", "number");
     fieldSelect(html, "mqttwagg",  "MQTT wind values", gCfg.mqttWindAgg, OPTS(windAggs));
     {
-        static const Option rfProtos[] = { { RF_PROTO_BRESSER, "Bresser (5/6/7-in-1 and others)" },
-                                           { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ (both data rates)" },
-                                           { RF_PROTO_ITPLUS17, "TFA / LaCrosse IT+ 17.241 kbit/s only" },
-                                           { RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ 9.579 kbit/s only" },
-                                           { RF_PROTO_ALL, "Bresser + TFA IT+ alternating (not recommended)" } };
+        // the last entry shows a bit mask set by downlink / MQTT that has no own
+        // entry, so saving the form keeps it
+        static char customText[48];
+        static Option rfProtos[] = { { RF_PROTO_BRESSER, "Bresser (5/6/7-in-1 and others)" },
+                                     { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ (both data rates)" },
+                                     { RF_PROTO_ITPLUS17, "TFA / LaCrosse IT+ 17.241 kbit/s only" },
+                                     { RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ 9.579 kbit/s only" },
+                                     { RF_PROTO_FINEOFFSET, "Fine Offset / Ecowitt / Froggit" },
+                                     { RF_PROTO_ITPLUS17 | RF_PROTO_FINEOFFSET,
+                                       "TFA IT+ 17.241 kbit/s + Fine Offset (same data rate, no alternating)" },
+                                     { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9 | RF_PROTO_FINEOFFSET,
+                                       "TFA IT+ (both data rates) + Fine Offset" },
+                                     { RF_PROTO_BRESSER | RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9,
+                                       "Bresser + TFA IT+ alternating (not recommended)" },
+                                     { RF_PROTO_BRESSER | RF_PROTO_FINEOFFSET,
+                                       "Bresser + Fine Offset alternating (not recommended)" },
+                                     { 0, customText } };
+        constexpr size_t RF_PROTO_FIXED = sizeof(rfProtos) / sizeof(rfProtos[0]) - 1;
         int cur = gCfg.rfProto;
-        if (cur != 1 && cur != 2 && cur != 4 && cur != 6 && cur != 7) cur = RF_PROTO_BRESSER;   // 3/5: set by downlink
-        fieldSelect(html, "rfproto", "Wireless sensor type", cur, OPTS(rfProtos),
+        bool listed = false;
+        for (size_t i = 0; i < RF_PROTO_FIXED; i++) listed |= rfProtos[i].value == cur;
+        size_t count = RF_PROTO_FIXED;
+        if (!listed && cur >= 1 && cur <= RF_PROTO_ALL) {
+            snprintf(customText, sizeof(customText), "Other combination (bit mask %d, set by parameter 50)", cur);
+            rfProtos[RF_PROTO_FIXED].value = cur;
+            count++;
+        } else if (!listed) {
+            cur = RF_PROTO_BRESSER;
+        }
+        fieldSelect(html, "rfproto", "Wireless sensor type", cur, rfProtos, count,
                     "IT+: e.g. TFA 30.3143/3144/3147/3157/3159.IT (17.241 kbit/s), 30.3155/3156.WD (9.579 kbit/s); "
-                    "with both rates the receiver alternates every 5 s. Bresser + IT+: the receiver alternates "
-                    "(17 s Bresser, 5 s each IT+ rate) and misses packets of both &mdash; e.g. about every second "
-                    "Bresser wind packet; not recommended, choose one sensor family where possible");
+                    "with both rates the receiver alternates every 5 s. Fine Offset: Ecowitt / Froggit / Ambient "
+                    "WH65/WS69 7-in-1, WS80, WS85, WS90, WS68, WH31/DP50, WN34, WH40, WN20, WH51, WH57 (868 MHz "
+                    "versions); same data rate as IT+ 17.241 kbit/s, so both are received together (with IT+ 9.579 "
+                    "kbit/s: 17 s / 5 s alternating). Bresser + another family: the receiver alternates (17 s "
+                    "Bresser, 5 s per IT+ data rate, 17 s Fine Offset) and misses packets of both &mdash; e.g. "
+                    "about every second Bresser wind packet; not recommended, choose one data rate where possible");
     }
     fieldCheck (html, "rfen",      "Wireless sensors (868 MHz)", gCfg.rfEn,
-                "Bresser 5/6/7-in-1 and other Bresser sensors, received with the LoRa chip between uplinks; disables low-power mode");
+                "Bresser, TFA / LaCrosse IT+ or Fine Offset / Ecowitt / Froggit sensors (see Wireless sensor type), "
+                "received with the LoRa chip between uplinks; disables low-power mode");
     {
         // received sensors as a copy-and-paste hint ("learning" without extra buttons)
         static char seen[160];
@@ -892,8 +924,12 @@ void renderSettings(const String& message, bool isError, int httpCode)
         bool first = true;
         for (int i = 0; i < RF_MAX_SENSORS && n < (int)sizeof(seen) - 24; i++) {
             if (!gRfSensors[i].used) continue;
-            n += snprintf(seen + n, sizeof(seen) - n, "%s%08lX (type %u)", first ? ". Received: " : ", ",
-                          (unsigned long)gRfSensors[i].id, (unsigned)gRfSensors[i].type);
+            if (gRfSensors[i].model)
+                n += snprintf(seen + n, sizeof(seen) - n, "%s%08lX (%s)", first ? ". Received: " : ", ",
+                              (unsigned long)gRfSensors[i].id, gRfSensors[i].model);
+            else
+                n += snprintf(seen + n, sizeof(seen) - n, "%s%08lX (type %u)", first ? ". Received: " : ", ",
+                              (unsigned long)gRfSensors[i].id, (unsigned)gRfSensors[i].type);
             first = false;
         }
         fieldText  (html, "rfids",     "Wireless sensor IDs", gCfg.rfIds, sizeof(gCfg.rfIds) - 1, seen);

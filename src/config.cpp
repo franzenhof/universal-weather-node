@@ -110,6 +110,7 @@ void sanitizeConfig(Config& c)
     choice(c.loraWindAgg, d.loraWindAgg, 0, 1);
     choice(c.mqttWindAgg, d.mqttWindAgg, 0, 1);
     choice(c.rfEn, d.rfEn, RF_RADIO_OFF, RF_RADIO_SX1262);
+    if (c.rfProto < 1 || c.rfProto > RF_PROTO_ALL) c.rfProto = d.rfProto;   // bit mask RF_PROTO_*
     range (c.windDirOffsetDeg, -180, 180);
     choice(c.windUnitMs, d.windUnitMs, 0, 1);
     choice(c.windEn, d.windEn, 0, 1);
