@@ -12,7 +12,8 @@
 // up, using gCfg.ntpServer/gCfg.timeZone.
 void timeSyncPoll();
 
-// Re-applies gCfg.timeZone immediately and restarts SNTP with
+// Re-applies gCfg.timeZone on the next main-loop pass (TZ is only changed on
+// the main task, see time_sync.cpp) and restarts SNTP with
 // gCfg.ntpServer on the next timeSyncPoll() — for the web settings page.
 void timeSyncReconfigure();
 

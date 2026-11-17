@@ -24,7 +24,7 @@
  *   Short press → turn on display for 20 s
  *   Hold 3 s    → config portal
  *
- * LoRaWAN downlink commands (FPort 1, 1 byte):
+ * LoRaWAN downlink commands (FPort 1 only - other ports are ignored, 1 byte):
  *   0x01 → reset rain accumulator (since start)
  *   0x02 → restart device
  *   0x03 → open Wi-Fi config portal (takes effect after current send cycle)
@@ -32,7 +32,7 @@
  *   0x05 → disable debug mode (persistent)
  *   0x06 → reset AUX pulse total (PCB v2.0)
  *   0x10 → set parameter(s): [0x10, paramId, valueMSB, valueLSB, ...]
- *           paramId 1..43 (signed 16-bit values, validated — see ParamId in
+ *           paramId 1..50 (signed 16-bit values, validated — see ParamId in
  *           params.h, also reachable via MQTT and the web settings page)
  *   0xFF → factory reset: wipe all config (NVS) and restart into the
  *           first-boot config portal
@@ -129,6 +129,9 @@ static volatile unsigned long isrPressedAtMs  = 0;
 static volatile unsigned long isrReleasedAtMs = 0;
 static volatile bool          isrPressEvent   = false;
 static volatile bool          isrReleaseEvent = false;
+// Guards the four variables above: handleButton() takes and clears them in
+// one step, so an edge arriving in between is not lost.
+static portMUX_TYPE           buttonMux       = portMUX_INITIALIZER_UNLOCKED;
 
 void IRAM_ATTR buttonISR()
 {
@@ -138,13 +141,16 @@ void IRAM_ATTR buttonISR()
     if (now - lastEdgeMs < 50) return;
     lastEdgeMs = now;
 
-    if (digitalRead(BUTTON) == LOW) {
+    bool pressed = digitalRead(BUTTON) == LOW;
+    portENTER_CRITICAL_ISR(&buttonMux);
+    if (pressed) {
         isrPressedAtMs = now;
         isrPressEvent  = true;
     } else {
         isrReleasedAtMs = now;
         isrReleaseEvent = true;
     }
+    portEXIT_CRITICAL_ISR(&buttonMux);
 }
 
 // Runs the config portal, persists the result, shows a status screen, and
@@ -203,17 +209,30 @@ static void handleButton()
     static unsigned long pressedAtMs = 0;
     static bool          longFired   = false;
 
-    // Consume ISR press event (falling edge)
-    if (isrPressEvent) {
-        isrPressEvent = false;
-        pressedAtMs   = isrPressedAtMs;
-        longFired     = false;
+    // Take the ISR's events atomically (check-then-clear could drop an edge)
+    portENTER_CRITICAL(&buttonMux);
+    bool          pressEvent   = isrPressEvent;
+    bool          releaseEvent = isrReleaseEvent;
+    unsigned long pressMs      = isrPressedAtMs;
+    unsigned long releaseMs    = isrReleasedAtMs;
+    isrPressEvent = isrReleaseEvent = false;
+    portEXIT_CRITICAL(&buttonMux);
+
+    // Both pending: a release older than the press belongs to the previous press.
+    if (pressEvent && releaseEvent && (long)(releaseMs - pressMs) < 0) {
+        if (!longFired && (releaseMs - pressedAtMs) < 3000) activateDisplay(20000);
+        releaseEvent = false;
     }
 
-    // Consume ISR release event (rising edge)
-    if (isrReleaseEvent) {
-        isrReleaseEvent = false;
-        if (!longFired && (isrReleasedAtMs - pressedAtMs) < 3000) {
+    // Press event (falling edge)
+    if (pressEvent) {
+        pressedAtMs = pressMs;
+        longFired   = false;
+    }
+
+    // Release event (rising edge)
+    if (releaseEvent) {
+        if (!longFired && (releaseMs - pressedAtMs) < 3000) {
             activateDisplay(20000);
         }
     }
@@ -260,8 +279,9 @@ static uint8_t  noDownlinkShift = 0;
 //   - LoRaWAN / MQTT: "interval" (since this path's last send) or "10 min"
 //     (WMO values from the ring), see loraWindAgg / mqttWindAgg;
 //   - weather networks: always the WMO 10-min wind (wx_upload.cpp).
-// Rain: one running total (rainMMSinceStart); every path reports the
-// difference since its own last send (RainWindow).
+// Rain: one running total (rainWindowTotalMm(), unaffected by a reset of
+// rainMMSinceStart); every path reports the difference since its own last
+// send (RainWindow).
 // ============================================================================
 enum PathIdx { PATH_BASE = 0, PATH_LORA = 1, PATH_MQTT = 2, PATH_COUNT = 3 };
 static WindRing      windRing;
@@ -294,7 +314,7 @@ static void resetPath(int idx, unsigned long now)
 {
     windAcc[idx].reset();
     srcRfWindReset(idx);
-    rainWin[idx].reset(rainMMSinceStart, now);
+    rainWin[idx].reset(rainWindowTotalMm(), now);
     pathLastMs[idx] = now;
 }
 
@@ -339,19 +359,24 @@ static void takeSlowSample()
 static PathValues pathValues(int idx, int aggMode, unsigned long now)
 {
     PathValues v;
-    v.windSpeedMs = windSpeedMs; v.windGustMs = windGustMs; v.windDirDeg = windDirection;   // fallback
     // wind from the selected source (board anemometer or a wireless sensor)
     WindStats w = srcIsRadio(SG_WIND) ? srcRfWind(idx, aggMode == WIND_AGG_10MIN)
                 : (aggMode == WIND_AGG_10MIN) ? windRing.stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps)
                                               : windAcc[idx].result(gCfg.windMsPerPps);
+    // No valid sample in the window (all rejected, wireless sensor silent):
+    // windValid stays false and the payloads leave wind out - not the
+    // previous cycle's values as if they were current. Speed/gust 0 for the
+    // globals; the vane keeps its last direction.
+    v.windValid  = w.valid;
+    v.windDirDeg = (w.valid && w.dirValid) ? w.dirDeg : windDirection;
     if (w.valid) {
         v.windSpeedMs = w.meanMs;
         v.windGustMs  = w.gustMs;
-        if (w.dirValid) v.windDirDeg = w.dirDeg;
     }
     if (srcActive(SG_RAIN)) {
-        v.rainMm      = rainWin[idx].amount(rainMMSinceStart);
-        v.rainRateMmH = rainWin[idx].rateMmH(rainMMSinceStart, now);
+        const float total = rainWindowTotalMm();
+        v.rainMm      = rainWin[idx].amount(total);
+        v.rainRateMmH = rainWin[idx].rateMmH(total, now);
     }
     return v;
 }
@@ -362,13 +387,18 @@ static void computeFinalValues(unsigned long elapsedMs, unsigned long now)
 {
     if (srcActive(SG_WIND)) {
         PathValues b = pathValues(PATH_BASE, WIND_AGG_INTERVAL, now);
+        windCycleValid = b.windValid;
         windSpeedMs   = b.windSpeedMs;
         windGustMs    = b.windGustMs;
         windDirection = b.windDirDeg;
+        if (!b.windValid) dbgSerial.println("Wind: no valid sample this cycle - left out.");
+    } else {
+        windCycleValid = false;
     }
     if (srcActive(SG_RAIN)) {
-        rainMM      = rainWin[PATH_BASE].amount(rainMMSinceStart);
-        rainRateMmH = rainWin[PATH_BASE].rateMmH(rainMMSinceStart, now);
+        const float total = rainWindowTotalMm();
+        rainMM      = rainWin[PATH_BASE].amount(total);
+        rainRateMmH = rainWin[PATH_BASE].rateMmH(total, now);
     }
     if (bme280Present && bme280SampleCount > 0) {
         bme280TempC    = bme280TempSum    / bme280SampleCount;
@@ -391,19 +421,28 @@ static void computeFinalValues(unsigned long elapsedMs, unsigned long now)
     windSampleCount = 0;
 }
 
-// A path is due once its interval has passed; half a base cycle of slack so
-// a base cycle ending a few ms early does not push the send a whole cycle.
+// A path is due once its interval has passed. A little slack (at most 2 s,
+// at most half a base cycle) so a base cycle ending a few ms early does not
+// push the send a whole cycle - but not more: half a base cycle let a path
+// with a multiple of the base interval send up to 25 % too often.
+static constexpr unsigned long PATH_JITTER_MS = 2000;
 static bool pathDue(int idx, unsigned long now, unsigned long intervalMs, unsigned long baseMs)
 {
-    return now - pathLastMs[idx] + baseMs / 2 >= intervalMs;
+    return now - pathLastMs[idx] + min(baseMs / 2, PATH_JITTER_MS) >= intervalMs;
 }
 
 // Thin LoRaWAN-specific parser: byte-frame commands map onto the shared,
 // transport-agnostic actions in params.cpp/h, which are also reachable via
-// the MQTT command topic (see wifi_mqtt.cpp).
-static void processDownlink(const uint8_t* data, size_t len)
+// the MQTT command topic (see wifi_mqtt.cpp). Commands are only accepted on
+// DOWNLINK_PORT (README: FPort 1); other application ports are ignored.
+static constexpr uint8_t DOWNLINK_PORT = 1;
+static void processDownlink(uint8_t fPort, const uint8_t* data, size_t len)
 {
     if (len < 1) return;
+    if (fPort != DOWNLINK_PORT) {
+        dbgSerial.printf("Downlink on FPort %u ignored (commands: FPort %u).\n", fPort, DOWNLINK_PORT);
+        return;
+    }
 
     switch (data[0]) {
         case 0x01:
@@ -453,7 +492,9 @@ static void processDownlink(const uint8_t* data, size_t len)
     }
 }
 
-static void sendLoRa()
+// Returns false if the uplink was not sent because the regional duty-cycle
+// limit does not allow it yet (retry at the next cycle, path window kept).
+static bool sendLoRa()
 {
     uint8_t downlinkData[256] = {};
     size_t  lenDown = sizeof(downlinkData) - 1;
@@ -471,7 +512,29 @@ static void sendLoRa()
 
     LoRaWANEvent_t evUp = {}, evDown = {};
     loraRadioTaken();   // wireless-sensor reception pauses for the uplink + RX windows
+    // RadioLib compares absolute millis() values: after the 49.7-day wrap its
+    // scheduled-uplink time would lie ~49 days "in the future" (blocking
+    // sleep) and the duty-cycle check would refuse every uplink. Schedule
+    // "now" (it is only ever moved forward), and skip the duty-cycle check
+    // once if its last-uplink time is from before the wrap.
+    loRaNode->scheduleTransmission(0);
+    const bool clockWrapped = loRaNode->timeUntilUplink() > 0x80000000UL;
+    if (clockWrapped) loRaNode->setDutyCycle(false);
     int16_t state = loRaNode->sendReceive(txBuf, txLen, txPort, downlinkData, &lenDown, false, &evUp, &evDown);
+    if (clockWrapped) loRaNode->setDutyCycle(true);
+
+    if (state == RADIOLIB_ERR_UPLINK_UNAVAILABLE) {
+        unsigned long waitS = (unsigned long)(loRaNode->timeUntilUplink() / 1000);
+        dbgSerial.printf("Uplink skipped: duty-cycle limit (next possible in %lu s), retry next cycle.\n", waitS);
+        display.drawString(0, 44, "Uplink deferred");
+        display.drawString(0, 55, "duty cycle");
+        return false;
+    }
+    // FCntUp changed: keep the session copy current (RTC RAM + nonces), so a
+    // software restart (cmdRestart, settings) never resumes an old counter
+    // the network server would reject as a replay.
+    if (!persist.saveSession(loRaNode))
+        dbgSerial.println("LoRaWAN: failed to persist session/nonces.");
 
     // status-page diagnostics (read by the web task)
     if (state >= RADIOLIB_ERR_NONE) {
@@ -512,7 +575,7 @@ static void sendLoRa()
         noDownlinkShift = 0;
         gLoraDiag.uplinksWithoutDownlink = 0;
         gLoraDiag.rejoinThreshold = NO_DOWNLINK_REJOIN;
-        processDownlink(downlinkData, lenDown);
+        processDownlink(evDown.fPort, downlinkData, lenDown);
         display.drawString(0, 44, "Uplink + Downlink");
         snprintf(buf, sizeof(buf), "SNR %.1f  RSSI %.1f", radio.getSNR(), radio.getRSSI());
         display.drawString(0, 55, buf);
@@ -526,6 +589,7 @@ static void sendLoRa()
             sendFailCount = 0;
         }
     }
+    return true;
 }
 
 // ============================================================================
@@ -761,8 +825,10 @@ void loop()
     gBaseCycleMs = baseMs;
     // LoRaWAN duty cycle: never more than 1 % airtime - with a slow data rate
     // (e.g. SF12, ~1.5 s per uplink) the interval is stretched (here ~150 s).
+    // The jitter allowance of pathDue() is added, so a stretched interval is
+    // never undercut (RadioLib would refuse that uplink, see sendLoRa()).
     unsigned long loraEffMs = loraMs;
-    if (loRaNode) loraEffMs = max(loraMs, (unsigned long)loRaNode->getLastToA() * 100UL);
+    if (loRaNode) loraEffMs = max(loraMs, (unsigned long)loRaNode->getLastToA() * 100UL + PATH_JITTER_MS);
     gLoraDiag.intervalMs = loraEffMs;
 
     // ── Samples ────────────────────────────────────────────────────────────
@@ -805,11 +871,13 @@ void loop()
                 size_t limit = loRaNode->getMaxPayloadLen();
                 if (gCfg.payloadFormat == 1) buildBinaryPacket(limit, &lv);
                 else                          buildLppPacket(limit, &lv);
-                sendLoRa();
+                // Deferred by the duty-cycle limit: keep the window, so the
+                // next uplink covers this cycle's wind/rain as well.
+                if (sendLoRa()) resetPath(PATH_LORA, cycleEnd);
             } else {
                 dbgSerial.println("LoRa uplink skipped: not joined (measurements/WiFi continue).");
+                resetPath(PATH_LORA, cycleEnd);
             }
-            resetPath(PATH_LORA, cycleEnd);
             // Low-power mode: SX1262 into sleep (warm start, config kept) until
             // the next uplink - RadioLib wakes it again on the next command.
             if (lowPowerActive()) loraSleep();

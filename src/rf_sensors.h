@@ -18,8 +18,15 @@
 // and 090000xx (9.579 kbit/s), xx = ID (+0x40 for a second probe channel).
 #include <stdint.h>
 #include <vector>
+#include "sources.h"         // SRC_RF_FRESH_MS
 
 constexpr int RF_MAX_SENSORS = 4;
+
+// Value bits (RfValues::ok, RfSensorReading::staleMask); the same values as
+// the Bresser library's MSG_OK_* (checked in rf_sensors.cpp).
+constexpr uint8_t RF_VAL_TEMP = 0x01, RF_VAL_HUM = 0x02, RF_VAL_WIND = 0x04, RF_VAL_RAIN = 0x08,
+                  RF_VAL_UV = 0x10, RF_VAL_LIGHT = 0x20,
+                  RF_VAL_ANY = 0x80;   // staleMask only: lastMs (no packet at all)
 
 struct RfSensorReading {
     bool          used = false;
@@ -34,6 +41,11 @@ struct RfSensorReading {
     // can keep sending (e.g. wind) while one of its measurements fails, so the
     // freshness of every value is judged on its own (sources.cpp)
     unsigned long tempMs = 0, humMs = 0, windMs = 0, rainMs = 0, uvMs = 0, lightMs = 0;
+    // RF_VAL_* whose timestamp was found older than SRC_RF_FRESH_MS
+    // (rfExpireValues()): keeps them stale when millis() wraps after 49.7 days
+    // and an old timestamp would look recent again. Cleared by the next packet
+    // carrying the value.
+    uint8_t       staleMask = 0;
     uint32_t      packets = 0;       // received since start
     // weather values (only the *_ok groups the sensor sends)
     bool  hasTemp = false, hasHumidity = false, hasWind = false, hasRain = false, hasUv = false, hasLight = false;
@@ -49,6 +61,41 @@ extern RfSensorReading gRfSensors[RF_MAX_SENSORS];
 
 // "39582376, 1234" -> IDs (hex; max RF_MAX_SENSORS; empty = accept any)
 std::vector<uint32_t> rfParseIds(const char* s);
+
+// ---- Table handling (rf_sensors_data.cpp, no RadioLib: host-tested) ----
+
+// The values of one decoded packet; only those flagged in ok are stored.
+struct RfValues {
+    uint8_t ok = 0;                  // RF_VAL_* this packet carries
+    float   tempC = 0.0f;
+    uint8_t humidity = 0;
+    float   windAvgMs = 0.0f, windGustMs = 0.0f, windDirDeg = 0.0f;
+    float   rainTotalMm = 0.0f, uvIndex = 0.0f, lightLux = 0.0f;
+};
+
+// Stores v in r with the packet time now (per value, see tempMs ...) and
+// sets lastMs. Returns the rain increase since the sensor's previous rain
+// value (0 for the first one after a node start: rain while the node was
+// down is not known). rainGapMs: 0 normally; the age of the previous rain
+// value (> SRC_RF_FRESH_MS) when the sensor was not heard for longer than
+// the freshness window, so the increase covers that whole outage.
+float rfStoreValues(RfSensorReading& r, const RfValues& v, unsigned long now, unsigned long& rainGapMs);
+
+// Table index for a sensor ID: its own slot, else a free one, else the slot
+// of the sensor heard longest ago provided that was more than takeOverMs ago
+// (the slot is then cleared for the new sensor), else -1 (table full).
+// onlyProto != 0: take over only a sensor received with that RF_PROTO_*.
+int rfSlotFor(uint32_t id, unsigned long now, unsigned long takeOverMs = SRC_RF_FRESH_MS, int onlyProto = 0);
+
+// Forget all sensors (ID filter changed).
+void rfSensorsClear();
+
+// Marks values older than SRC_RF_FRESH_MS in staleMask (see there); call
+// regularly (rfSensorsLoop(), every loop iteration).
+void rfExpireValues(unsigned long now);
+
+// Timestamp of one RF_VAL_* value of r (RF_VAL_ANY: lastMs).
+unsigned long rfValueMs(const RfSensorReading& r, uint8_t bit);
 
 // Call every loop() iteration: (re)starts the FSK reception when LoRaWAN is
 // done with the transceiver and decodes received packets. No-op while

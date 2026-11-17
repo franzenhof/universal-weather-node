@@ -14,3 +14,14 @@ inline void pcnt_counter_pause(int) {}
 inline void pcnt_counter_clear(int unit) { hostCounts[unit]=0; }
 inline void pcnt_counter_resume(int) {}
 inline void pcnt_get_counter_value(int unit,int16_t* out) { *out=hostCounts[unit]; }
+// Overflow events (sensors.cpp counts H_LIM wraps): the test calls
+// hostPcntIsr[unit](hostPcntArg[unit]) to simulate one.
+#ifndef IRAM_ATTR
+#define IRAM_ATTR
+#endif
+constexpr int PCNT_EVT_H_LIM = 1 << 5;
+extern void (*hostPcntIsr[4])(void*);
+extern void* hostPcntArg[4];
+inline int pcnt_event_enable(int, int) { return 0; }
+inline int pcnt_isr_service_install(int) { return 0; }
+inline int pcnt_isr_handler_add(int unit, void (*fn)(void*), void* arg) { hostPcntIsr[unit]=fn; hostPcntArg[unit]=arg; return 0; }

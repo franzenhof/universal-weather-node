@@ -25,7 +25,12 @@ bool boardHas(SrcGroup g)
     }
 }
 
-bool fresh(unsigned long t) { return millis() - t <= SRC_RF_FRESH_MS; }
+// The last packet carrying this value (RF_VAL_*) is at most SRC_RF_FRESH_MS
+// old; staleMask keeps an expired one stale across the millis() wrap.
+bool fresh(const RfSensorReading& r, uint8_t bit)
+{
+    return !(r.staleMask & bit) && millis() - rfValueMs(r, bit) <= SRC_RF_FRESH_MS;
+}
 
 bool radioHas(int idx, SrcGroup g)
 {
@@ -33,11 +38,11 @@ bool radioHas(int idx, SrcGroup g)
     const RfSensorReading& r = gRfSensors[idx];
     if (!r.used) return false;
     switch (g) {   // the last packet carrying *this* value, not just any packet
-        case SG_AIR:   return r.hasTemp  && fresh(r.tempMs);
-        case SG_WIND:  return r.hasWind  && fresh(r.windMs);
-        case SG_RAIN:  return r.hasRain  && fresh(r.rainMs);
-        case SG_UV:    return r.hasUv    && fresh(r.uvMs);
-        case SG_LIGHT: return r.hasLight && fresh(r.lightMs);
+        case SG_AIR:   return r.hasTemp  && fresh(r, RF_VAL_TEMP);
+        case SG_WIND:  return r.hasWind  && fresh(r, RF_VAL_WIND);
+        case SG_RAIN:  return r.hasRain  && fresh(r, RF_VAL_RAIN);
+        case SG_UV:    return r.hasUv    && fresh(r, RF_VAL_UV);
+        case SG_LIGHT: return r.hasLight && fresh(r, RF_VAL_LIGHT);
         default:       return false;
     }
 }
@@ -137,7 +142,7 @@ void srcUpdateCycle()
         v.tempC = bme280TempC; v.humidity = bme280Humidity;
     } else if (r >= 0) {
         v.tempValid = true;  v.tempC = gRfSensors[r].tempC;
-        v.humValid  = gRfSensors[r].hasHumidity && fresh(gRfSensors[r].humMs);  v.humidity = gRfSensors[r].humidity;
+        v.humValid  = gRfSensors[r].hasHumidity && fresh(gRfSensors[r], RF_VAL_HUM);  v.humidity = gRfSensors[r].humidity;
     }
     r = srcResolve(SG_UV);
     if (r == SRC_IS_BOARD) v.uvBoard = true;
@@ -159,11 +164,40 @@ __attribute__((weak)) void wxAddSunshine(float) {}
 namespace {
 int      lastLightIdx = -1;
 uint32_t lastLightMs  = 0;
+
+// Rain that fell while the rain sensor was not heard (see srcRfPacket()).
+constexpr unsigned long RAIN_SPREAD_MAX_MS = 3600000UL;
+int      lateRainIdx   = -1;
+float    lateRainMm    = 0.0f;
+float    lateRainPerMs = 0.0f;
+uint32_t lateRainMs    = 0;
 }
 
-void srcRfPacket(int idx, bool hasWind, float rainDeltaMm, bool hasLight)
+void srcRfPacket(int idx, bool hasWind, float rainDeltaMm, bool hasLight, unsigned long rainGapMs)
 {
-    if (rainDeltaMm > 0.0f && srcResolve(SG_RAIN) == idx) rainMMSinceStart += rainDeltaMm;
+    if (srcResolve(SG_RAIN) == idx) {
+        // After an outage (rainGapMs) the increase holds all the rain since the
+        // sensor was last heard. Counted at once it would look like a burst
+        // (every path's rain rate = amount / its send interval), so it is
+        // released at its average rate over the outage (at most 1 h) with the
+        // following packets instead - late, but the total stays complete.
+        uint32_t now = millis();
+        if (rainGapMs && rainDeltaMm > 0.0f) {
+            if (lateRainIdx != idx) lateRainMm = 0.0f;   // another sensor's rest: not the selected source
+            lateRainIdx   = idx;
+            lateRainMm   += rainDeltaMm;
+            lateRainPerMs = lateRainMm / (float)(rainGapMs < RAIN_SPREAD_MAX_MS ? rainGapMs : RAIN_SPREAD_MAX_MS);
+            lateRainMs    = now;
+            rainDeltaMm   = 0.0f;
+        } else if (lateRainIdx == idx && lateRainMm > 0.0f) {
+            float part = lateRainPerMs * (float)(now - lateRainMs);
+            if (part > lateRainMm) part = lateRainMm;
+            lateRainMm  -= part;
+            rainDeltaMm += part;
+            lateRainMs   = now;
+        }
+        if (rainDeltaMm > 0.0f) rainMMSinceStart += rainDeltaMm;
+    }
     if (hasLight && srcResolve(SG_LIGHT) == idx) {
         // sunshine duration: the time since the previous light packet of this
         // sensor counts as sunny if this packet is above the threshold
@@ -221,9 +255,8 @@ void srcRfWindReset(int path)
 bool srcRfValueFresh(int idx, const char* value)
 {
     if (idx < 0 || idx >= RF_MAX_SENSORS) return false;
-    const RfSensorReading& r = gRfSensors[idx];
-    unsigned long t = !strcmp(value, "temp") ? r.tempMs : !strcmp(value, "humidity") ? r.humMs :
-                      !strcmp(value, "wind") ? r.windMs : !strcmp(value, "rain") ? r.rainMs :
-                      !strcmp(value, "uv")   ? r.uvMs   : r.lightMs;
-    return fresh(t);
+    uint8_t bit = !strcmp(value, "temp") ? RF_VAL_TEMP : !strcmp(value, "humidity") ? RF_VAL_HUM :
+                  !strcmp(value, "wind") ? RF_VAL_WIND : !strcmp(value, "rain") ? RF_VAL_RAIN :
+                  !strcmp(value, "uv")   ? RF_VAL_UV   : RF_VAL_LIGHT;
+    return fresh(gRfSensors[idx], bit);
 }

@@ -351,17 +351,23 @@ void buildHistoryJson(JsonDocument& doc, bool coarse)
 }
 
 namespace {
-// Fine-tier sample whose end is closest to ageSec ago (at most 10 min off).
+// Fine-tier sample closest to ageSec ago, judged by the bucket's end. Only a
+// bucket that is at least ageSec - 5 min and at most ageSec + 10 min old
+// counts: its average then covers a time at least the nominal age back (a
+// "1 h" trend needs about an hour of uptime, the 3-h tendency about 3 h),
+// and a slightly older one bridges a missing bucket.
+constexpr long AGO_EARLY_SEC = 300, AGO_LATE_SEC = 600;
 // Caller holds historyMutex.
 const HistorySample* fineSampleAgo(unsigned long nowSec, uint32_t ageSec, uint8_t needMask)
 {
     const HistorySample* best = nullptr;
-    long bestDiff = 601;
+    long bestDiff = 0;
     for (size_t i = 0; i < fineCount; i++) {
         const HistorySample& s = fineRing[i];
         if (!(s.validMask & needMask)) continue;
-        long diff = labs((long)(nowSec - s.bucketEndSec) - (long)ageSec);
-        if (diff < bestDiff) { bestDiff = diff; best = &s; }
+        long diff = (long)(nowSec - s.bucketEndSec) - (long)ageSec;
+        if (diff < -AGO_EARLY_SEC || diff > AGO_LATE_SEC) continue;
+        if (!best || labs(diff) < labs(bestDiff)) { bestDiff = diff; best = &s; }
     }
     return best;
 }
@@ -385,14 +391,23 @@ bool historyTempAgo(uint32_t ageSec, float& tempC)
     return s != nullptr;
 }
 
+// A finished bucket holds the rain of the cycles merged since the previous
+// bucket was finalized, i.e. it covers (previous bucket's end, its own end].
+// It counts only if that whole span lies within the window, so the sum never
+// covers more than windowSec (it may cover up to one bucket, 5 min, less).
+// The open bucket - everything since the newest finished one - always counts.
 float historyRainSum(uint32_t windowSec)
 {
     unsigned long nowSec = uptimeSec();
     float mm = 0.0f;
     xSemaphoreTake(historyMutex, portMAX_DELAY);
-    for (size_t i = 0; i < fineCount; i++) {
-        const HistorySample& s = fineRing[i];
-        if ((s.validMask & VALID_RAIN) && nowSec - s.bucketEndSec < windowSec) mm += s.rainAmountX100 / 100.0f;
+    for (size_t k = 0; k < fineCount; k++) {   // newest first
+        const HistorySample& s = fineRing[(fineHead + HISTORY_FINE_CAPACITY - 1 - k) % HISTORY_FINE_CAPACITY];
+        unsigned long startSec = k + 1 < fineCount
+            ? fineRing[(fineHead + HISTORY_FINE_CAPACITY - 2 - k) % HISTORY_FINE_CAPACITY].bucketEndSec
+            : s.bucketEndSec - HISTORY_FINE_BUCKET_SEC;   // oldest one: nominal length
+        if (nowSec - startSec > windowSec) break;
+        if (s.validMask & VALID_RAIN) mm += s.rainAmountX100 / 100.0f;
     }
     if (fineOpen.rainCount) mm += fineOpen.rainAmountSum;
     xSemaphoreGive(historyMutex);

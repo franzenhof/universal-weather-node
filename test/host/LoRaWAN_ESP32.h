@@ -15,6 +15,8 @@ struct LoRaWANNode {
     ~LoRaWANNode() { --hostNodes; }
     bool isActivated() { return active; }
     void clearSession() { active=false; }
+    bool dutyCycle=false;
+    void setDutyCycle(bool enable=true, unsigned long=0) { dutyCycle=enable; }
 };
 struct HostPersistence {
     bool provision(const char*,int,uint64_t,uint64_t,const uint8_t*,const uint8_t*) { return hostProvisionOk; }

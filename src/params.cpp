@@ -146,6 +146,8 @@ bool applyParam(uint8_t paramId, int16_t value)
         case PARAM_HEATER_ON_BELOW_DC: // 0.1 °C
             if (value < -400 || value > 400) return false;
             gCfg.heaterOnBelowDc = value;
+            // the full-power temperature can't lie above the switch-on threshold
+            if (gCfg.heaterFullBelowDc > value) gCfg.heaterFullBelowDc = value;
             return true;
         case PARAM_FAN_MODE:
             if (value < 0 || value > 2) return false;
@@ -183,8 +185,8 @@ bool applyParam(uint8_t paramId, int16_t value)
             if (value < 1 || value > 100) return false;
             gCfg.heaterMinDutyPct = value;
             return true;
-        case PARAM_HEATER_FULL_BELOW_DC: // 0.1 °C
-            if (value < -400 || value > 400) return false;
+        case PARAM_HEATER_FULL_BELOW_DC: // 0.1 °C, at most heaterOnBelowDc
+            if (value < -400 || value > 400 || value > gCfg.heaterOnBelowDc) return false;
             gCfg.heaterFullBelowDc = value;
             return true;
         case PARAM_LOW_POWER_EN:
@@ -237,7 +239,7 @@ bool applyParam(uint8_t paramId, int16_t value)
 
 void cmdResetRainAccumulator()
 {
-    rainMMSinceStart = 0.0f;
+    resetRainAccumulator();   // the per-path rain windows keep counting
     dbgSerial.println("Command: rain accumulator reset.");
 }
 

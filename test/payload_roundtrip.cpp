@@ -3,6 +3,7 @@
 // them as JSON, so the test can decode them with chirpstack/decoder.js.
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include "payload.h"
 #include "uv_calibration.h"
 
@@ -102,7 +103,28 @@ int main()
     all.hasLight = true; all.lightLux = 120000.0f; all.hasSources = true; all.sources = 0x0155;
     emit("all", all, false);
     emit("fit51", all, false, 51);                 // EU868 SF10-SF12
-    emit("fit11", all, true, 11);                  // US915 DR0
+    emit("fit11", all, false, 11);                 // US915 DR0
+
+    // A failed reading (NAN) or INF is left out, never sent as a number.
+    Measurements bad;
+    bad.hasWind = true; bad.windDirDeg = 90; bad.windSpeed = NAN; bad.windGust = INFINITY;
+    bad.hasRain = true; bad.rainRate = 1.0f; bad.rainCycle = NAN; bad.rainSinceStart = -INFINITY;
+    bad.hasBme = true; bad.humidityPct = NAN; bad.bmeTemp = NAN;
+    bad.hasPressure = true; bad.pressureQnh = NAN; bad.pressureAbs = 950.0f;
+    bad.hasLight = true; bad.lightLux = NAN;
+    emit("nonfinite", bad, true);
+
+    // The "left out" list: never cut mid-name, ends in "..." when full.
+    {
+        uint8_t buf[BIN_MAX_SIZE];
+        char dropped[40];
+        encodeBinaryFitted(all, buf, 3, dropped, sizeof(dropped));
+        size_t n = strlen(dropped);
+        if (n >= sizeof(dropped) || n < 3 || strcmp(dropped + n - 3, "...") != 0) return 3;
+        char big[256];
+        encodeBinaryFitted(all, buf, 3, big, sizeof(big));
+        if (strstr(big, "...") || !strstr(big, "wind") || !strstr(big, "debug")) return 4;
+    }
 
     printf("]\n");
     return 0;

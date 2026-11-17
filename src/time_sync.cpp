@@ -6,6 +6,7 @@
 
 #include <Arduino.h>
 #include <esp_sntp.h>
+#include <mutex>
 
 namespace {
 
@@ -14,12 +15,28 @@ constexpr time_t MIN_VALID_EPOCH = 1704067200;
 
 // volatile: cleared by timeSyncReconfigure() from the web server task.
 volatile bool sntpStarted = false;
+volatile bool tzPending = false;   // new gCfg.timeZone, applied by timeSyncPoll()
 bool loggedValid = false;
+
+// newlib's TZ state (setenv/tzset vs. localtime_r) is not safe across
+// tasks: TZ is only changed on the main task (timeSyncPoll), and every
+// change and every localtime_r() here holds this lock.
+std::mutex tzLock;
 
 } // namespace
 
 void timeSyncPoll()
 {
+    if (tzPending) {
+        tzPending = false;
+        wxUploadLock();   // gCfg.timeZone is written by the web task
+        {
+            std::lock_guard<std::mutex> g(tzLock);
+            setenv("TZ", gCfg.timeZone, 1);
+            tzset();
+        }
+        wxUploadUnlock();
+    }
     if (!sntpStarted) {
         if (!gCfg.wifiEn || !wifiIsConnected()) return;
         // configTzTime() sets TZ (setenv+tzset) and starts SNTP in one go;
@@ -30,7 +47,10 @@ void timeSyncPoll()
         // web settings page writes these fields from another task.
         wxUploadLock();
         const char* server = gCfg.ntpServer[0] ? gCfg.ntpServer : "pool.ntp.org";
-        configTzTime(gCfg.timeZone, server, "time.google.com");
+        {
+            std::lock_guard<std::mutex> g(tzLock);
+            configTzTime(gCfg.timeZone, server, "time.google.com");
+        }
         sntpStarted = true;
         dbgSerial.printf("NTP: started (server %s, TZ %s)\n", server, gCfg.timeZone);
         wxUploadUnlock();
@@ -48,9 +68,10 @@ void timeSyncPoll()
 
 void timeSyncReconfigure()
 {
-    setenv("TZ", gCfg.timeZone, 1);
-    tzset();
-    // configTzTime() stops a running SNTP client itself before restarting it.
+    // Called from the web task: only flag it, the main task applies the TZ
+    // (next loop() iteration). configTzTime() stops a running SNTP client
+    // itself before restarting it.
+    tzPending = true;
     sntpStarted = false;
 }
 
@@ -63,6 +84,7 @@ bool localTimeNow(struct tm& out)
 {
     time_t now = time(nullptr);
     if (now < MIN_VALID_EPOCH) return false;
+    std::lock_guard<std::mutex> g(tzLock);
     localtime_r(&now, &out);
     return true;
 }

@@ -164,6 +164,16 @@ namespace WeatherSensorReceiver {
 #define DECODER_LIGHTNING       0x08
 #define DECODER_LEAKAGE         0x10
 
+// Fork: values carried by the last decoded message (Sensor::msg_ok). The
+// w.*_ok flags of a 6-in-1 slot accumulate over its two alternating
+// messages and are never cleared; these bits tell what *this* message had.
+#define MSG_OK_TEMP             0x01
+#define MSG_OK_HUMIDITY         0x02
+#define MSG_OK_WIND             0x04
+#define MSG_OK_RAIN             0x08
+#define MSG_OK_UV               0x10
+#define MSG_OK_LIGHT            0x20
+
 // Message buffer size
 #define MSG_BUF_SIZE            27
 
@@ -360,6 +370,7 @@ class WeatherSensor {
             bool     battery_ok;       //!< battery o.k.
             bool     valid;            //!< data valid (but not necessarily complete)
             bool     complete;         //!< data is split into two separate messages is complete (only 6-in-1 WS)
+            uint8_t  msg_ok;           //!< fork: MSG_OK_* values of the last message (0 for non-weather sensors)
             union {
                 struct Weather      w;
                 struct Soil         soil;

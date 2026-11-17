@@ -1,6 +1,7 @@
 #include "derived.h"
 #include <math.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <ctype.h>
 
@@ -126,7 +127,9 @@ bool parseVersion(const char* s, Ver& v)
         s = end;
         if (i < 2) { if (*s != '.') return false; s++; }
     }
-    if (*s == '-' && !isdigit((unsigned char)s[1])) {   // "-beta.3" (a "-12-gabc" describe suffix starts with a digit)
+    // "-beta.3" (a "-12-gabc" describe suffix starts with a digit; a bare
+    // "-dirty" from git describe is not a pre-release either)
+    if (*s == '-' && !isdigit((unsigned char)s[1]) && strcasecmp(s + 1, "dirty") != 0) {
         s++;
         v.pre = true;
         size_t k = 0;
@@ -144,7 +147,7 @@ int compareVersions(const char* a, const char* b)
     for (int i = 0; i < 3; i++) if (x.n[i] != y.n[i]) return x.n[i] < y.n[i] ? -1 : 1;
     if (x.pre != y.pre) return x.pre ? -1 : 1;
     if (!x.pre) return 0;
-    int c = strcmp(x.preTag, y.preTag);
+    int c = strcasecmp(x.preTag, y.preTag);   // "RC.1" > "beta.3" like "rc.1"
     if (c) return c < 0 ? -1 : 1;
     return x.preNum == y.preNum ? 0 : (x.preNum < y.preNum ? -1 : 1);
 }

@@ -2,6 +2,7 @@
 #include "wind_window.h"
 #include "serial_log.h"
 #include <Preferences.h>
+#include <memory>
 
 uint64_t hexToUint64(const char* s) { return strtoull(s, nullptr, 16); }
 
@@ -76,6 +77,90 @@ bool checkWrite(const char* key, size_t written, size_t expected)
 bool checkWriteStr(const char* key, size_t written, const char* value)
 {
     return checkWrite(key, written, strlen(value));
+}
+
+// Loaded values outside what applyParam() (params.cpp) and the portal accept
+// - a corrupted NVS entry, or one written by an older firmware - must not
+// reach the code that relies on those limits (e.g. windDirCalCount indexes
+// a 16-entry table). Choices fall back to the default, ranges are clamped.
+void choice(volatile int& v, int def, int a, int b, int c = -1)
+{
+    if (v != a && v != b && v != c) v = def;
+}
+void choice(int& v, int def, int a, int b, int c = -1)
+{
+    if (v != a && v != b && v != c) v = def;
+}
+void range(volatile int& v, int lo, int hi) { v = v < lo ? lo : (v > hi ? hi : v); }
+void range(int& v, int lo, int hi)          { v = v < lo ? lo : (v > hi ? hi : v); }
+void rangeF(volatile float& v, float def, float lo, float hi)
+{
+    if (!isfinite(v)) v = def;
+    else v = v < lo ? lo : (v > hi ? hi : v);
+}
+
+void sanitizeConfig(Config& c)
+{
+    // The defaults from config.h; on the heap, Config is ~3.7 KB.
+    std::unique_ptr<const Config> defaults(new Config());
+    const Config& d = *defaults;
+    choice(c.pcbVersion, d.pcbVersion, PCB_REV_1_2, PCB_REV_1_3, PCB_REV_2_0);
+    range (c.uplinkIntervalSec, 5, 3600);
+    if (c.mqttIntervalSec != 0) range(c.mqttIntervalSec, 2, 3600);
+    choice(c.loraWindAgg, d.loraWindAgg, 0, 1);
+    choice(c.mqttWindAgg, d.mqttWindAgg, 0, 1);
+    choice(c.rfEn, d.rfEn, RF_RADIO_OFF, RF_RADIO_SX1262);
+    range (c.windDirOffsetDeg, -180, 180);
+    choice(c.windUnitMs, d.windUnitMs, 0, 1);
+    choice(c.windEn, d.windEn, 0, 1);
+    choice(c.rainEn, d.rainEn, 0, 1);
+    choice(c.lipoEn, d.lipoEn, 0, 1);
+    choice(c.debugMode, d.debugMode, 0, 1);
+    choice(c.cpuFreqMhz, d.cpuFreqMhz, 80, 240);
+    choice(c.payloadFormat, d.payloadFormat, 0, 1);
+    choice(c.unitSystem, d.unitSystem, 0, 1);
+    rangeF(c.rainMmPerTip, d.rainMmPerTip, 0.001f, 5.0f);
+    rangeF(c.windMsPerPps, d.windMsPerPps, 0.001f, 10.0f);
+    choice(c.windDirSensorType, d.windDirSensorType, 0, 1);
+    range (c.windDirCalCount, 0, 16);
+    choice(c.loraEn, d.loraEn, 0, 1);
+    choice(c.lowPowerEn, d.lowPowerEn, 0, 1);
+    choice(c.vanePowerSave, d.vanePowerSave, 0, 1);
+    choice(c.wifiEn, d.wifiEn, 0, 1);
+    choice(c.mqttEn, d.mqttEn, 0, 1);
+    choice(c.webApiEn, d.webApiEn, 0, 1);
+    choice(c.mqttCtrlEn, d.mqttCtrlEn, 0, 1);
+    choice(c.staticIpEn, d.staticIpEn, 0, 1);
+    if (c.mqttPort < 1 || c.mqttPort > 65535) c.mqttPort = d.mqttPort;
+    choice(c.mqttTlsMode, d.mqttTlsMode, MQTT_TLS_NONE, MQTT_TLS_INSECURE, MQTT_TLS_VERIFY);
+
+    choice(c.auxAinEn, d.auxAinEn, 0, 1);
+    rangeF(c.auxAinScale, d.auxAinScale, 0.001f, 20.0f);
+    choice(c.auxPulseEn, d.auxPulseEn, 0, 1);
+    choice(c.wind2Mode, d.wind2Mode, 0, 1, 2);
+    if (c.wind2Mode >= 1) c.auxPulseEn = 0;   // the 2nd wind sensor owns the AUX inputs it uses
+    if (c.wind2Mode == 2) c.auxAinEn = 0;
+    range (c.wind2DirOffsetDeg, -180, 180);
+    choice(c.heaterMode, d.heaterMode, 0, 1, 2);
+    range (c.heaterDutyPct, 1, 100);
+    range (c.heaterOnBelowDc, -400, 400);
+    range (c.heaterMinDutyPct, 1, 100);
+    range (c.heaterFullBelowDc, -400, 400);
+    if (c.heaterFullBelowDc > c.heaterOnBelowDc) c.heaterFullBelowDc = c.heaterOnBelowDc;
+    choice(c.fanMode, d.fanMode, 0, 1, 2);
+    range (c.fanDutyPct, 1, 100);
+    range (c.fanOnAboveDc, -400, 600);
+    range (c.fanMinPvW, 0, 5000);
+    choice(c.tachoEn, d.tachoEn, 0, 1);
+    range (c.tachoPpr, 1, 8);
+    choice(c.veDirectEn, d.veDirectEn, 0, 1);
+    range (c.outMinBattDv, 0, 600);
+    choice(c.uvEn, d.uvEn, 0, 1);
+    rangeF(c.uvAinScale, d.uvAinScale, 1.0f, 5.0f);
+    choice(c.uvIndexEn, d.uvIndexEn, 0, 1);
+    choice(c.uvCalibrated, d.uvCalibrated, 0, 1);
+    rangeF(c.uvIndexSlope, d.uvIndexSlope, 0.001f, 30.0f);
+    rangeF(c.uvIndexOffset, d.uvIndexOffset, -10.0f, 10.0f);
 }
 
 } // namespace
@@ -207,6 +292,7 @@ Config loadConfig()
     c.uvIndexOffset    = prefs.getFloat  ("uvoffset", c.uvIndexOffset);
 
     prefs.end();
+    sanitizeConfig(c);
     return c;
 }
 

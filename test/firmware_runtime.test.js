@@ -14,7 +14,10 @@ try {
     ['windows', ['src/wind_window.cpp']],
     ['derived', ['src/derived.cpp']],
     ['itplus', ['lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp']],
+    ['netids', []],
     ['telemetry', [...common, 'src/json_payload.cpp', 'src/units.cpp']],
+    ['rf', common],
+    ['history', [...common.filter((f) => f !== 'test/host/runtime.cpp'), 'src/units.cpp']],   // includes runtime.cpp + history.cpp
     ['payload', [...common, 'src/lora_payload.cpp', 'src/payload_binary.cpp', 'src/units.cpp',
       '.pio/libdeps/heltec_wifi_lora_32_V3/CayenneLPP/src/CayenneLPP.cpp',
       '.pio/libdeps/heltec_wifi_lora_32_V3/CayenneLPP/src/CayenneLPPPolyline.cpp']],

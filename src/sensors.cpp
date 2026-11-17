@@ -22,6 +22,7 @@ float    bme280Humidity = 0.0f;
 float    bus1Temps[MAX_SENSORS_PER_BUS];
 int      bus1Count = 0;
 
+bool     windCycleValid = false;
 float    windSpeedMs   = 0.0f;
 float    windGustMs    = 0.0f;
 float    rainMM        = 0.0f;
@@ -53,6 +54,18 @@ static void restoreRainAccumulator()
     dbgSerial.printf("Rain since start: %.1f mm (%s)\n", rainMMSinceStart, keep ? "kept across restart" : "reset");
 }
 
+// Rain taken away by resetRainAccumulator() since boot (the windows restart
+// with the boot anyway).
+static float rainResetMm = 0.0f;
+
+float rainWindowTotalMm() { return rainMMSinceStart + rainResetMm; }
+
+void resetRainAccumulator()
+{
+    rainResetMm     += rainMMSinceStart;
+    rainMMSinceStart = 0.0f;
+}
+
 PinSet gPins = { .windSpeed = 3, .rain = 4, .oneWire = 5 };   // set by sensorsInit()
 
 namespace {
@@ -66,18 +79,54 @@ bool windPcntConfigured = false;
 bool rainPcntConfigured = false;
 int16_t pulsesLastCountWindspeed = 0;
 int16_t pulsesLastCountRain      = 0;
+uint32_t wrapsLastWind = 0, wrapsLastRain = 0;
 unsigned long previousMillis     = 0;
 
 } // namespace
 
-// Pulses since the previous read of a free-running PCNT counter. The
-// hardware counter resets to 0 when it reaches counter_h_lim (32767), so a
-// plain cur - last would go negative across that wrap. Sub-samples are a few
-// seconds apart, far below 32767 pulses, so at most one wrap can occur.
+// The hardware counter resets to 0 when it reaches counter_h_lim (32767) and
+// raises the H_LIM event; the ISR counts those wraps, so any number of them
+// between two reads is accounted for (a high-pulse anemometer or a long gap
+// between reads can exceed 32767 pulses).
 constexpr int16_t PCNT_H_LIM = 32767;
-static int32_t pcntDelta(int16_t cur, int16_t last)
+enum { WRAP_WIND = 0, WRAP_RAIN = 1 };
+static volatile uint32_t pcntWraps[2] = { 0, 0 };
+
+static void IRAM_ATTR pcntWrapIsr(void* arg)
 {
-    return (cur >= last) ? (int32_t)cur - last : (int32_t)(PCNT_H_LIM - last) + cur;
+    pcntWraps[(intptr_t)arg]++;
+}
+
+static void enableWrapCount(pcnt_unit_t unit, int idx)
+{
+    static bool serviceInstalled = false;
+    if (!serviceInstalled) {
+        pcnt_isr_service_install(0);   // ESP_ERR_INVALID_STATE if already installed: fine
+        serviceInstalled = true;
+    }
+    pcnt_event_enable(unit, PCNT_EVT_H_LIM);   // pcnt_unit_config() disables it
+    pcnt_isr_handler_add(unit, pcntWrapIsr, (void*)(intptr_t)idx);
+}
+
+// Pulses since the previous read: wraps x 32767 + (cur - last).
+static int32_t pcntPulses(pcnt_unit_t unit, int idx, int16_t& last, uint32_t& lastWraps)
+{
+    uint32_t w;
+    int16_t  cur = 0;
+    do {   // a wrap between the two reads: read again
+        w = pcntWraps[idx];
+        pcnt_get_counter_value(unit, &cur);
+    } while (w != pcntWraps[idx]);
+    int32_t d = (int32_t)(w - lastWraps) * PCNT_H_LIM + cur - last;
+    if (d < 0) {
+        // The counter has already wrapped, but its interrupt has not run yet:
+        // count that wrap now and skip it when the ISR catches up.
+        d += PCNT_H_LIM;
+        w++;
+    }
+    last = cur;
+    lastWraps = w;
+    return d;
 }
 
 PinSet getPins(int pcbVersion)
@@ -110,13 +159,15 @@ void configureWindPcnt()
         pcnt_unit_config(&pcnt_wind);
         pcnt_set_filter_value(PCNT_UNIT_WINDSPEED, FILTER_VALUE_WINDSPEED);
         pcnt_filter_enable(PCNT_UNIT_WINDSPEED);
+        enableWrapCount(PCNT_UNIT_WINDSPEED, WRAP_WIND);
         windPcntConfigured = true;
     }
 
     pcnt_counter_pause(PCNT_UNIT_WINDSPEED);
     pcnt_counter_clear(PCNT_UNIT_WINDSPEED);
-    pcnt_counter_resume(PCNT_UNIT_WINDSPEED);
     pulsesLastCountWindspeed = 0;
+    wrapsLastWind = pcntWraps[WRAP_WIND];
+    pcnt_counter_resume(PCNT_UNIT_WINDSPEED);
 }
 
 void configureRainPcnt()
@@ -139,13 +190,15 @@ void configureRainPcnt()
         pcnt_unit_config(&pcnt_rain);
         pcnt_set_filter_value(PCNT_UNIT_RAIN, FILTER_VALUE_RAIN);
         pcnt_filter_enable(PCNT_UNIT_RAIN);
+        enableWrapCount(PCNT_UNIT_RAIN, WRAP_RAIN);
         rainPcntConfigured = true;
     }
 
     pcnt_counter_pause(PCNT_UNIT_RAIN);
     pcnt_counter_clear(PCNT_UNIT_RAIN);
-    pcnt_counter_resume(PCNT_UNIT_RAIN);
     pulsesLastCountRain = 0;
+    wrapsLastRain = pcntWraps[WRAP_RAIN];
+    pcnt_counter_resume(PCNT_UNIT_RAIN);
 }
 
 void stopWindPcnt()
@@ -154,6 +207,7 @@ void stopWindPcnt()
     pcnt_counter_pause(PCNT_UNIT_WINDSPEED);
     pcnt_counter_clear(PCNT_UNIT_WINDSPEED);
     pulsesLastCountWindspeed = 0;
+    wrapsLastWind = pcntWraps[WRAP_WIND];
 }
 
 void stopRainPcnt()
@@ -162,6 +216,7 @@ void stopRainPcnt()
     pcnt_counter_pause(PCNT_UNIT_RAIN);
     pcnt_counter_clear(PCNT_UNIT_RAIN);
     pulsesLastCountRain = 0;
+    wrapsLastRain = pcntWraps[WRAP_RAIN];
 }
 
 void sensorsEarlyInit()
@@ -290,7 +345,6 @@ volatile uint32_t sleepPulsesWind = 0, sleepPulsesRain = 0;
 
 PulseSample readPulseCounters()
 {
-    int16_t       curWind = 0, curRain = 0;
     unsigned long now     = millis();
     unsigned long elapsed = now - previousMillis;
     previousMillis = now;
@@ -298,9 +352,8 @@ PulseSample readPulseCounters()
     out.elapsedMs = (uint16_t)(elapsed > 65535 ? 65535 : elapsed);
 
     if (gCfg.windEn) {
-        pcnt_get_counter_value(PCNT_UNIT_WINDSPEED, &curWind);
-        int32_t pulsesWind = pcntDelta(curWind, pulsesLastCountWindspeed) + (int32_t)sleepPulsesWind;
-        pulsesLastCountWindspeed = curWind;
+        int32_t pulsesWind = pcntPulses(PCNT_UNIT_WINDSPEED, WRAP_WIND, pulsesLastCountWindspeed, wrapsLastWind)
+                           + (int32_t)sleepPulsesWind;
         sleepPulsesWind = 0;
         float pps    = (elapsed > 0) ? (float)pulsesWind / ((float)elapsed / 1000.0f) : 0.0f;
         // gCfg.windMsPerPps: sensor-specific calibration (Davis default: 1.00584,
@@ -314,15 +367,14 @@ PulseSample readPulseCounters()
             dbgSerial.printf("Wind: %ld pulses → %.1f m/s REJECTED (implausible)\n", (long)pulsesWind, newSpeedMs);
         } else {
             out.windValid  = true;
-            out.windPulses = (uint16_t)pulsesWind;
+            out.windPulses = (uint32_t)pulsesWind;
             dbgSerial.printf("Wind: %ld pulses in %lu ms → %.1f m/s\n", (long)pulsesWind, elapsed, newSpeedMs);
         }
     }
 
     if (gCfg.rainEn) {
-        pcnt_get_counter_value(PCNT_UNIT_RAIN, &curRain);
-        int32_t pulsesRain = pcntDelta(curRain, pulsesLastCountRain) + (int32_t)sleepPulsesRain;
-        pulsesLastCountRain = curRain;
+        int32_t pulsesRain = pcntPulses(PCNT_UNIT_RAIN, WRAP_RAIN, pulsesLastCountRain, wrapsLastRain)
+                           + (int32_t)sleepPulsesRain;
         sleepPulsesRain = 0;
         // gCfg.rainMmPerTip: sensor-specific calibration (Davis default: 0.2mm/tip);
         // configurable for other tipping-bucket rain gauges.
@@ -357,6 +409,14 @@ bool readBme280()
     if (isnan(t) || isnan(p) || isnan(h)) {
         bme280Present = false;
         dbgSerial.println("BME280: measurement failed – marked absent, will re-probe.");
+        return false;
+    }
+    // Outside the sensor's operating range (datasheet: -40..85 °C, 300..1100
+    // hPa, 0..100 %): a corrupted read (I2C glitch, lost calibration after a
+    // brown-out) - handled like a failed one, re-init on the next sample.
+    if (!(t >= -40.0f && t <= 85.0f) || !(p >= 300.0f && p <= 1100.0f) || !(h >= 0.0f && h <= 100.0f)) {
+        bme280Present = false;
+        dbgSerial.printf("BME280: implausible reading (%.1f °C, %.1f hPa, %.1f %%) – dropped, will re-probe.\n", t, p, h);
         return false;
     }
     bme280TempC    = t;

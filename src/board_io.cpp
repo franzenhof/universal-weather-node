@@ -3,6 +3,7 @@
 #include "serial_log.h"
 #include "sensors.h"
 #include "uv_calibration.h"
+#include "wind_window.h"
 
 #include "driver/pcnt.h"
 #include <driver/gpio.h>
@@ -44,11 +45,14 @@ int16_t auxPulseLast = 0, tachoLast = 0;
 uint32_t auxPulsesAcc = 0, tachoPulsesAcc = 0;
 
 // 2nd anemometer on AUX (wind2Mode): pulses since the last sub-sample, and
-// the cycle accumulators (same scheme as the main wind sensor in main.cpp)
+// the cycle accumulators (same scheme as the main wind sensor, wind_window.h):
+// pulse-weighted mean (sum of pulses / sum of time), highest 3-s gust.
 uint32_t wind2Pulses = 0;
 unsigned long wind2LastMs = 0;
-float    wind2SpeedSum = 0.0f, wind2Gust = 0.0f, wind2SinSum = 0.0f, wind2CosSum = 0.0f;
+uint32_t wind2PulseSum = 0, wind2MsSum = 0;
+float    wind2Gust = 0.0f, wind2SinSum = 0.0f, wind2CosSum = 0.0f;
 int      wind2Samples = 0;
+WindGust wind2GustWin;
 unsigned long tachoSinceMs = 0;
 
 float auxAinMvSum = 0.0f;
@@ -375,7 +379,7 @@ void ioPoll()
     // cycle at fan-tacho rates) ----
     if (auxPulseInputUsed() && !auxPulseRunning) {
         startPcnt(PCNT_UNIT_AUX_PULSE, PIN_AUX_PULSE);
-        auxPulseLast = 0;  auxPulsesAcc = 0;  wind2Pulses = 0;  sleepPulsesAux = 0;
+        auxPulseLast = 0;  auxPulsesAcc = 0;  wind2Pulses = 0;  sleepPulsesAux = 0;  wind2GustWin.clear();
         wind2LastMs = millis();  auxPulseRunning = true;
     } else if (!auxPulseInputUsed() && auxPulseRunning) {
         stopPcnt(PCNT_UNIT_AUX_PULSE);
@@ -417,14 +421,19 @@ static void sampleWind2()
     unsigned long now = millis();
     unsigned long elapsed = now - wind2LastMs;
     wind2LastMs = now;
-    float speed = elapsed > 0 ? wind2Pulses / (elapsed / 1000.0f) * gCfg.windMsPerPps : 0.0f;
+    uint32_t pulses = wind2Pulses;
+    float speed = elapsed > 0 ? pulses / (elapsed / 1000.0f) * gCfg.windMsPerPps : 0.0f;
     wind2Pulses = 0;
-    if (speed > MAX_PLAUSIBLE_WIND_SPEED_MS) {
+    if (elapsed == 0) return;
+    if (speed > MAX_PLAUSIBLE_WIND_SPEED_MS || elapsed > 65535) {
         dbgSerial.printf("Wind 2: %.1f m/s REJECTED (implausible)\n", speed);
+        wind2GustWin.clear();   // no gust window across the gap
         return;
     }
-    wind2SpeedSum += speed;
-    if (speed > wind2Gust) wind2Gust = speed;
+    wind2PulseSum += pulses;
+    wind2MsSum    += (uint32_t)elapsed;
+    float gust = wind2GustWin.push(pulses, (uint32_t)elapsed, gCfg.windMsPerPps);
+    if (gust > wind2Gust) wind2Gust = gust;
     if (ioWind2DirActive()) {
         int deg = map(adcAverage(PIN_AUX_AIN), 0, 4095, 0, 359) + gCfg.wind2DirOffsetDeg;
         float rad = ((deg % 360 + 360) % 360) * DEG_TO_RAD;
@@ -495,8 +504,8 @@ void ioFinishCycle(unsigned long /*elapsedMs*/)
             dbgSerial.printf("UV sensor: %.3f V (index calculation disabled)\n", gIo.uvSensorVolts);
     }
     gIo.auxPulsesCycle = (auxPulseRunning && !gCfg.wind2Mode) ? auxPulsesAcc : 0;
-    if (gCfg.wind2Mode && wind2Samples > 0) {
-        gIo.wind2SpeedMs = wind2SpeedSum / wind2Samples;
+    if (gCfg.wind2Mode && wind2Samples > 0 && wind2MsSum > 0) {
+        gIo.wind2SpeedMs = (float)wind2PulseSum * 1000.0f / (float)wind2MsSum * gCfg.windMsPerPps;
         gIo.wind2GustMs  = max(wind2Gust, gIo.wind2SpeedMs);
         if (gCfg.wind2Mode == 2) {
             int deg = (int)roundf(atan2f(wind2SinSum, wind2CosSum) * RAD_TO_DEG);
@@ -526,7 +535,8 @@ void ioFinishCycle(unsigned long /*elapsedMs*/)
     auxAinMvSum = 0.0f;  auxAinSamples = 0;
     uvAinMvSum = 0.0f;   uvAinSamples = 0;
     auxPulsesAcc = 0;
-    wind2SpeedSum = wind2Gust = wind2SinSum = wind2CosSum = 0.0f;  wind2Samples = 0;
+    wind2Gust = wind2SinSum = wind2CosSum = 0.0f;  wind2Samples = 0;
+    wind2PulseSum = wind2MsSum = 0;
     tachoPulsesAcc = 0;  tachoSinceMs = millis();
     fanFullWholeCycle = true;  cycleSamples = 0;
 }

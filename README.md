@@ -544,6 +544,7 @@ There are two places to change settings:
 
 > Don't hold the button while powering on or resetting — that starts the ESP32 bootloader instead of the firmware.
 
+- **Passwords and keys** (AppKey, web settings admin password, MQTT password) are not shown in the portal: the field stays empty with *(unchanged)*; leave it empty to keep the stored value, or tick *Remove* to clear a password. The portal network itself stays open (no Wi-Fi password) so a node can always be recovered — close the portal when you are done.
 - *Save* on the parameter page is enough. Only use **Configure WiFi** if you want to change the Wi-Fi network or a static IP. The network is stored even if it is not in range (pre-provisioning a node for its final site): the portal reports the failed connection, and after closing it the node keeps trying that network. In normal operation the [web settings page](#web-settings-page) can change the network too.
 - If the portal is left untouched for 3 minutes, it closes and the node restarts. (The timer restarts with every page you open.)
 - The start page also offers the version-matched **payload decoder** download, the **help page** and the **wind-direction calibration** wizard.
@@ -563,8 +564,8 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 - Sections marked **live** apply immediately: measurement, inputs & outputs (PCB v2.0 only), units, calibration, weather networks, time, admin password.
 - Sections marked **restart** are only read at boot: LoRaWAN, network & MQTT, PCB revision. If you change one of them, the node saves and restarts — this clears the chart history, which lives in RAM.
 - **Passwords and keys are never shown.** Leave a password field empty to keep the stored value; optional ones have a *remove* checkbox.
-- Invalid values are listed after saving and keep their old value; everything else is saved.
-- **Wi-Fi network** (name and password, *Network & MQTT*): a change is **tested for 60 s** without a restart. If the node connects, the new network is stored; if not, it goes back to the current one and the settings page shows a notice — a typo can't lock you out. **Store without test (pre-provisioning)** stores a network that is not in range yet right away: the node leaves the current network immediately and keeps trying the new one (reachable again via that network, downlink `0x03` for the portal, or the button).
+- Invalid values are listed after saving and keep their old value; everything else is saved. Fields that are not sent keep their value (scripts: send checkboxes explicitly as `name=on` / `name=0`). Posts from another web site (`Origin`/`Referer` not matching the node) are refused with 403.
+- **Wi-Fi network** (name and password, *Network & MQTT*): a change is **tested for 60 s** without a restart. If the node connects, the new network is stored; if not, it goes back to the current one and the settings page shows a notice — a typo can't lock you out. The test only counts as passed if the new network also answers (gateway ping or a DNS lookup within 10 s) — a network that blocks both rolls back; use *Store without test* for it. Switching to another network needs DHCP: switch a static IP off in the same step (or before). **Store without test (pre-provisioning)** stores a network that is not in range yet right away: the node leaves the current network immediately and keeps trying the new one (reachable again via that network, downlink `0x03` for the portal, or the button).
 - Only switching Wi-Fi or the web API off and the wind-direction calibration wizard are portal-only — so you can't lock yourself out.
 
 ### Settings Reference
@@ -614,7 +615,7 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | Minimum battery voltage for heater/fan | V (VE.Direct), 0 = no limit | 0 |
 | **Wi-Fi + MQTT** | | |
 | Wi-Fi / MQTT / web API / MQTT commands | On/off switches — see [MQTT and Home Assistant](#mqtt-and-home-assistant) | off |
-| Device name | Wi-Fi hostname, MQTT client ID, default topic prefix | – |
+| Device name | Wi-Fi hostname, MQTT client ID (characters outside `A–Z a–z 0–9 _ -` become `_`), default topic prefix | – |
 | Wi-Fi network and password | Portal (*Configure WiFi*) or web settings (tested for 60 s with rollback, or *store without test* for pre-provisioning) | – |
 | Static IP, gateway, subnet, DNS | Optional fixed LAN address; leave disabled to use DHCP. Configure in the portal's Wi-Fi form or the web settings page (restart required) | DHCP; subnet 255.255.255.0; DNS defaults to gateway |
 | MQTT broker, port, user, password, topic prefix, TLS mode, CA certificate | Broker connection | port 1883, no TLS |
@@ -632,6 +633,8 @@ Saved settings survive ordinary restarts and application-only OTA updates. Facto
 1. Open the config portal (button 3 s or downlink `0x03`) and connect to **`WeatherNode`**.
 2. Open **http://192.168.4.1** and click **Firmwareupdate**.
 3. Upload the application `.bin` from [`firmware/`](firmware/) and wait for the restart. Keep power stable and do not close the upload page early.
+
+With a **web settings admin password** set, the portal's `/update` page asks for it (user `admin`) and ArduinoOTA (`pio run -t upload` over the network) needs it as well (`upload_flags = --auth=<password>`). Without an admin password both stay open while the portal is running.
 
 OTA requires an existing compatible partition table with `cfgdata`; it cannot prepare a new board or repair an older table. Use [USB flashing](#build--flash) in that case. Heater/fan outputs remain off throughout the portal/update and resume according to saved settings after restart.
 
@@ -871,6 +874,8 @@ With MQTT enabled, the node registers itself in Home Assistant automatically (MQ
 - With wireless sensors on, temperature, humidity, wind, rain, *UV Index* and *Illuminance* are always announced (they follow the [value sources](#value-sources) and show as unavailable while no source delivers them).
 - Derived values: *Dew Point*, *Feels Like*, *Cloud Base*, *Temperature Change (1 h)*, *Pressure Change (3 h)*, *Pressure Tendency*, *Weather Trend*, *Wind Direction (compass)*, *Rain Last Hour / Last 24 h / Today / Yesterday*, *Last Rain* (timestamp), with wireless sensors *Sunshine Today / Yesterday*, and the warnings *Frost*, *Fog / Dew* and *Sultry* as binary sensors — ready for automations (e.g. a frost notification). *Firmware Update* with the update check on.
 - If you switch a sensor on or off, the entity list updates on the next MQTT reconnect.
+- The device ID (MQTT client ID, discovery `node_id`, `unique_id`) is the *device name* reduced to `A–Z a–z 0–9 _ -` (other characters become `_`); without a name `weathernode-<MAC>` (full 12-digit MAC). Since 2.0.0-beta.2 names with spaces or other characters, and unnamed nodes, get a new ID — Home Assistant then shows a new device; delete the old one.
+- If the broker is unreachable, reconnects back off from 15 s to at most 5 min.
 
 ---
 
@@ -944,7 +949,7 @@ Works the same way, no firmware changes needed:
 
 Send application commands on **FPort 1**, as **unconfirmed Class-A downlinks**. The node listens after its next uplink; reception is not guaranteed. Do not enable Class B/C for this firmware.
 
-**FPort 0 is reserved for LoRaWAN MAC commands**, not application control. The firmware currently does not filter received application ports, but "any FPort" is not a safe configuration recommendation. In ChirpStack's queue, select FPort `1` and HEX payload `03` to open the portal (equivalent Base64: `Aw==`). Binary uplinks on FPort 3 do not change the command port.
+**FPort 0 is reserved for LoRaWAN MAC commands**, not application control. Commands on any other FPort are ignored. In ChirpStack's queue, select FPort `1` and HEX payload `03` to open the portal (equivalent Base64: `Aw==`). Binary uplinks on FPort 3 do not change the command port.
 
 Single-byte commands:
 
@@ -1117,7 +1122,7 @@ calibration result is not restricted to an arbitrary meteorological threshold.
 The node can additionally receive wireless sensors on 868.3 MHz (FSK) **with the existing LoRa chip, no extra hardware**: **Bresser** sensors — e.g. the **7-in-1** station (wind, rain, temperature, humidity, UV, light), 5-in-1 and 6-in-1 stations, thermo/hygro, soil, lightning and leakage sensors — or **TFA Dostmann / LaCrosse IT+** temperature/humidity sensors (details below; not yet tested with real sensors). Switch it on with *Wireless sensors* and choose the family with *Wireless sensor type* (web settings *Measurement*, portal, or parameters 44 and 50).
 
 - **Shared radio:** the SX1262 listens for the sensors whenever LoRaWAN does not need it. Before every uplink (and its two receive windows) and every join, the firmware stops the reception and restarts it afterwards. LoRaWAN is not affected; a sensor packet that arrives during an uplink is lost — Bresser sensors repeat every 12–16 s, IT+ sensors about every 4 s, so at a 60 s LoRaWAN interval roughly 5 % of the packets are missed, and only the latest values are kept anyway.
-- **Sensor IDs:** with *Wireless sensor IDs* empty the node accepts any sensor of the selected type in range (up to 4); IT+ sensors get a new ID with every battery change. The status page lists every received ID with RSSI — enter yours (hex, comma-separated) to ignore the neighbours'.
+- **Sensor IDs:** with *Wireless sensor IDs* empty the node accepts any sensor of the selected type in range (up to 4); IT+ sensors get a new ID with every battery change. The status page lists every received ID with RSSI — enter yours (hex, comma-separated) to ignore the neighbours'. A sensor not heard for 5 minutes gives up its place to a new one (e.g. after a battery change), and changing the ID list clears the sensor table. An IT+ sensor that reports a fresh battery takes over the place of a silent IT+ sensor on the same data rate after 1 minute (with an ID list, only if the new ID is in it).
 - **Output:** status page box *Wireless sensors (868 MHz)* and the JSON field `rfSensors` in `/api/data` and the MQTT data topic — one object per sensor with `id`, `type`, `protocol` (`Bresser`, `IT+ 17.241 kbit/s`, `IT+ 9.579 kbit/s`), `rssi`, `ageSec`, `batteryOk` and, as far as the sensor sends them, `temp`, `humidityPct`, `windSpeed` / `windGust` / `windDirDeg` (the sensor's own mean and gust), `rainTotal` (the sensor's running total, resets on a battery change), `uvIndex`, `lightLux`, and `stale` — the values not received for more than 5 minutes although the sensor still sends others (e.g. a failed temperature element); the status page marks them *(stale)*. Units follow the unit settings. Which of these values go into LoRaWAN, MQTT, Home Assistant, the weather networks and the history is set with the [value sources](#value-sources).
 - **Low-power mode** is not available while wireless sensors are on (the chip stays in receive mode, ~5 mA).
 - **TFA Dostmann / LaCrosse IT+ sensors** instead of Bresser: set *Wireless sensor type* (web settings, portal field `rfproto`, parameter 50) to *TFA / LaCrosse IT+*. Supported: temperature / humidity sensors at **17.241 kbit/s** (TFA 30.3143.IT, 30.3144.IT, 30.3147.IT, 30.3157.IT, 30.3159.IT; TX21/25/27/29-IT) and **9.579 kbit/s** (TFA 30.3155.WD, 30.3156.WD; TX35-IT). With *both data rates* the receiver alternates every 5 s (the sensors send about every 4 s); choose the single rate if you know it. **Bresser and IT+ at the same time** is only possible alternating (*Bresser + TFA IT+ alternating*: 17 s Bresser, 5 s each IT+ rate) — the single SX1262 can listen to one data rate / sync word at a time, so packets of both families are missed (e.g. a good part of the Bresser wind packets, which makes wireless wind coarser). **Not recommended**; use one sensor family where possible. IT+ sensors only have a 6-bit ID that changes with every battery change — they appear as **`170000xx`** (17.241 kbit/s) or **`090000xx`** (9.579 kbit/s); after a battery change, update *Wireless sensor IDs* (or leave the list empty). **Not yet tested with real sensors** — the decoder is checked against a published frame. TFA *WeatherHub* / Mobile Alerts sensors are not supported yet (scrambled 6 kbit/s format; see `lib/TfaWeatherSensorReceiver/README.md`).
@@ -1141,7 +1146,7 @@ Pressure always comes from the BME280; the DS18B20 probes, wind 2 and AUX are un
 - **Board sensor** / **Wireless n** use exactly that sensor and nothing else; if it does not deliver, the value is left out (no fallback). *Off* never reports the group.
 - **Wireless 1–4** are the IDs in *Wireless sensor IDs* in their order; with an empty list, the sensors in the order they were first received since start (so better enter the IDs — the settings page lists the received ones).
 - **Wind** from a wireless sensor uses the sensor's own mean, gust and direction per packet (every 12–16 s), aggregated per send path exactly like the board anemometer: *Interval* (time-weighted mean, highest gust, vector-mean direction since the last send) or *10 min*. The weather networks get the 10-min values. The gust is the sensor's gust, not the board's 3-s gust.
-- **Rain**: the running total (*rain since start*) only adds the increases of the selected source — the board's tipping-bucket pulses or the difference between two packets of the wireless sensor's total. Switching the source never produces a jump; a battery change of the wireless sensor (its total restarts) counts from zero again. Missed packets (during an uplink, interference, weak signal) lose no rain: the sensor sends its total, so the next packet received carries the increase — after a longer gap it is booked at once in that interval.
+- **Rain**: the running total (*rain since start*) only adds the increases of the selected source — the board's tipping-bucket pulses or the difference between two packets of the wireless sensor's total. Switching the source never produces a jump; a battery change of the wireless sensor (its total restarts) counts from zero again. Missed packets (during an uplink, interference, weak signal) lose no rain: the sensor sends its total, so the next packet received carries the increase — after a gap of more than 5 minutes the missed rain is added gradually (at its average rate over the gap, within at most 1 h), so the total stays right without a rain-rate spike.
 - **Where the value came from** is visible on the status page (*Sources*, while wireless sensors are on or a source is set other than *Auto*), in JSON as `sources` (`{"tempHum": "board", "wind": "radio:39582376", …, "light": "none"}`, plus `radioBatteryLow` when a wireless sensor in use reports a low battery) and in the LoRaWAN payload (CayenneLPP Ch 16 / binary field 33) — these three only while wireless sensors are on.
 - Not (yet) sent to the weather networks: UV and light.
 
@@ -1156,9 +1161,9 @@ Computed on the node from the measured values — the same numbers in JSON/MQTT,
 | Cloud base | 125 m per K of temperature − dew point spread, above the station (cumulus estimate) | temperature + humidity |
 | Pressure tendency (3 h) | QNH now minus 3 h ago: *steady* (< 0.1 hPa), *slowly* (< 1.6), normal (< 3.6), *quickly* (< 6), *very rapidly* | BME280, 3 h of history after a start |
 | Weather trend | barometer rule of thumb: *storm warning* (falling ≥ 6 hPa / 3 h), *worsening* (≥ 1.6), *improving* (rising ≥ 1.6), else *settled* (QNH ≥ 1020), *unsettled* (< 1000) or *no change* — not a forecast model | as above |
-| Temperature trend (1 h) | now minus 1 h ago | 1 h of history |
-| Rain last hour / 24 h | sum of the 5-min history buckets (since start if shorter) | rain source |
-| Rain today / yesterday, last rain | local days (NTP); kept across restarts in RTC RAM, not across a power cut | rain source, time |
+| Temperature trend (1 h) | now minus 1 h ago | 1 h of history (shown after about 1 h, the pressure tendency after about 3 h) |
+| Rain last hour / 24 h | sum of the 5-min history buckets that lie completely inside the window, plus the current one — never longer than 1 h / 24 h, at most one bucket shorter (since start if shorter) | rain source |
+| Rain today / yesterday, last rain | local days (NTP); kept across restarts in RTC RAM, not across a power cut; rain before the first time sync after a restart counts as today | rain source, time |
 | Sunshine today / yesterday | time with the selected light source ≥ 15 000 lx — an estimate of the WMO 120 W/m² threshold; a lux sensor sees global, not direct radiation | Bresser 7-in-1 (light) |
 | Warnings | *frost* (T ≤ 0 °C), *fog/dew* (spread ≤ 1 K and RH ≥ 95 %), *sultry* (dew point ≥ 16 °C) | temperature (+ humidity) |
 
@@ -1166,7 +1171,7 @@ Long-term statistics (monthly and yearly values, summer/frost days, records) are
 
 ### Firmware Update Check
 
-With *Check daily for newer firmware* on (web settings, *Firmware update check*; off by default), the node asks a version list once a day — by default this project's Gitea tags API, any Gitea `…/tags` or GitHub `…/releases` URL works — and shows a newer version on the status page, as `firmwareUpdate` in JSON and in Home Assistant. Installing stays manual ([OTA](#firmware-update-ota)). Pre-releases count: `2.0.0-beta.3` is newer than `2.0.0-beta.2`, `2.0.0` newer than any `2.0.0-beta`.
+With *Check daily for newer firmware* on (web settings, *Firmware update check*; off by default), the node asks a version list once a day — by default this project's Gitea tags API, any Gitea `…/tags` or GitHub `…/releases` URL works — and shows a newer version on the status page, as `firmwareUpdate` in JSON and in Home Assistant. Installing stays manual ([OTA](#firmware-update-ota)). Pre-releases count: `2.0.0-beta.3` is newer than `2.0.0-beta.2`, `2.0.0` newer than any `2.0.0-beta` (tags compared case-insensitively, a `-dirty` build counts as the release). GitHub release lists are read with `per_page=5` and streamed, so long release notes don't exhaust the heap.
 
 ## Inputs and Outputs (PCB v2.0)
 
@@ -1494,10 +1499,10 @@ The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 desig
 | `/chart` | GET | – | Redirect to `/` (old address) |
 | `/api/data` | GET | – | Current measurement JSON (same as the MQTT data topic) |
 | `/api/history` | GET | – | History JSON for the dashboard — 24 h, or 7 days with `?range=7d` |
-| `/api/settings` | GET / POST | admin | Settings form / save |
+| `/api/settings` | GET / POST | admin | Settings form / save (POST: same-origin only, fields not sent keep their value) |
 | `/api/log` | GET | admin | Log viewer |
 | `/api/log/raw` | GET | admin | Log as plain text |
-| `/api/log/clear` | POST | admin | Clear the log |
+| `/api/log/clear` | POST | admin | Clear the log (same-origin only) |
 | `/help`, `/help.md` | GET | – | Help page / README source |
 
 <!-- help:skip -->
@@ -1517,7 +1522,11 @@ logged (HTTP returns 500), rather than publishing truncated JSON.
 
 - **Watchdog** (120 s): the main loop subscribes after setup and unsubscribes before entering the blocking portal. A radio call that hangs during normal operation can still trigger it.
 - **Automatic rejoin** after 10 consecutive send failures, or after 288 uplinks in a row without any downlink (see [Join and Session](#join-and-session)): clear the session and retry after 60 s without rebooting or clearing chart history.
-- **Button** via interrupt — a short press is never missed, even during LoRa airtime.
+- **EU868 duty cycle** (1 %) is enforced by RadioLib on top of the interval stretching; an uplink that would exceed it is deferred to the next cycle and not counted as a send failure.
+- **LoRaWAN session** (frame counter, nonces) is saved after every uplink.
+- **Stored settings** are re-checked at boot; out-of-range values are clamped or reset to their default.
+- **MQTT** reconnects back off from 15 s to at most 5 min while the broker is unreachable, so the main loop is not blocked by repeated connect timeouts.
+- **Button** via interrupt — a short press is never missed, even during LoRa airtime or after low-power sleep.
 - **Display** is off in normal operation (turns on for 20 s with a short press) and stays on during startup to show errors.
 - **ADC averaging** over 8 samples for wind direction and battery.
 
@@ -1651,6 +1660,14 @@ Firmware binary: [`universal-weather-node-2.0.0-beta.2.bin`](firmware/universal-
 
 **Web settings**
 * **Wi-Fi network on the web settings page:** name and password can be changed in normal operation. The new network is tested for 60 s without a restart and only stored if the node connects; otherwise it returns to the previous network and shows a notice. *Store without test* pre-provisions a network that is not in range yet.
+
+**Robustness (review of the whole firmware)**
+* **Wireless sensors:** freshness is judged **per value** (a station that keeps sending wind but loses its temperature part drops only the temperature after 5 min; `stale` in `rfSensors`, *(stale)* on the status page) — also for the Bresser 6-in-1, whose library flags were cumulative (fork change 8). Sensor places are freed after 5 min of silence and when the ID list changes; IT+ battery changes are re-learned. Rain after a reception gap is spread instead of spiking the rain rate; values stay stale across the 49-day `millis()` wrap.
+* **LoRaWAN:** the session is saved after every uplink; the EU868 1 % duty cycle is enforced by RadioLib (a too-early uplink is deferred, not counted as a failure; safe across the `millis()` wrap); send paths are at most 2 s early instead of half a cycle (LoRaWAN no longer sends more often than set); downlink commands only on FPort 1; the binary and CayenneLPP encoders leave out non-finite values; exact 32-bit AUX totals in CayenneLPP; the decoder reports truncated or unknown payloads in `errors`.
+* **Inputs:** the user button works again after low-power sleep (the wake-up left its interrupt level-triggered) and press/release events can't be lost; no double count of a pulse just before light sleep; any number of PCNT counter wraps; rain reset (`0x01`) no longer shortens per-uplink rain amounts; BME280 readings outside its range (−40…85 °C, 300…1100 hPa, 0…100 %) are dropped; VE.Direct `---` means unavailable; wind fields are left out when a window has no valid sample; wind 2 gust is a 3-s gust, its mean pulse-weighted.
+* **Settings:** stored values are re-checked at boot (out-of-range values reset or clamped); heater full-power temperature ≤ switch-on temperature; time-zone changes are applied on the main task.
+* **Web / Wi-Fi / MQTT:** Wi-Fi change keeps the previous network from the driver (a short disconnect could store the untested one), needs DHCP for another network and a gateway/DNS answer before it is kept; portal values with `'` are no longer cut off, secrets are not prefilled, the admin password protects `/update` and ArduinoOTA; settings posts from other sites are refused and missing fields keep their value; MQTT/HA IDs sanitised, full MAC for unnamed nodes; MQTT reconnect back-off up to 5 min with shorter timeouts; update-check tag validated and escaped, GitHub lists streamed; weather-network uploads after an outage restart their averaging window; rain before the first time sync counts as today; dashboard wind unit follows the device setting.
+* **Derived values:** rain 1 h / 24 h never longer than the window; 1-h / 3-h trends only after enough history; version compare ignores `-dirty` and case.
 
 **Status page and diagnostics**
 * Status page: new **LoRaWAN** box (data rate/SF, channel, TX power, device address, frame counter, last downlink with RSSI/SNR, uplinks since the last downlink vs. the rejoin limit, rejoins since start) and in **Device** the CPU temperature, the cause of the last restart and the minimum free heap.

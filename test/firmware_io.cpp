@@ -6,6 +6,7 @@
 #include "driver/pcnt.h"
 #include <esp_timer.h>
 #include <cassert>
+#include <cmath>
 
 extern Config hostSavedConfig;
 int main()
@@ -20,7 +21,35 @@ int main()
     hostNow+=3000;
     ioPoll(); ioSample(); ioFinishCycle(3000);
     assert(gIo.wind2SpeedMs>0);
+    {
+        // 3-s gust, not the highest single 1-s sample: (2+2+8)/3 = 4, not 8
+        gCfg.windMsPerPps=1.0f;
+        const int p[]={2,2,2,8,2,2};
+        for (int k: p) { hostNow+=1000;hostCounts[2]+=k;ioPoll();ioSample(); }
+        ioFinishCycle(6000);
+        assert(std::fabs(gIo.wind2SpeedMs-3.0f)<0.01f && std::fabs(gIo.wind2GustMs-4.0f)<0.01f);
+        // pulse-weighted mean: 10 pulses in 1 s + 0 in 3 s = 2.5 m/s (not (10+0)/2)
+        hostNow+=1000;hostCounts[2]+=10;ioPoll();ioSample();
+        hostNow+=3000;ioPoll();ioSample();
+        ioFinishCycle(4000);
+        assert(std::fabs(gIo.wind2SpeedMs-2.5f)<0.01f);
+        gCfg.windMsPerPps=1.00584f;
+    }
     gCfg.wind2Mode=0;
+
+    // heater curve: the full-power temperature never lies above the switch-on threshold
+    gCfg.heaterOnBelowDc=40;gCfg.heaterFullBelowDc=-100;
+    assert(!applyParam(PARAM_HEATER_FULL_BELOW_DC,50) && gCfg.heaterFullBelowDc==-100);
+    assert(applyParam(PARAM_HEATER_FULL_BELOW_DC,40) && gCfg.heaterFullBelowDc==40);
+    assert(applyParam(PARAM_HEATER_ON_BELOW_DC,-200) && gCfg.heaterFullBelowDc==-200);
+    assert(applyParam(PARAM_HEATER_FULL_BELOW_DC,-300) && gCfg.heaterOnBelowDc==-200);
+    gCfg.heaterOnBelowDc=40;gCfg.heaterFullBelowDc=-100;
+
+    // rain reset (downlink 0x01 / MQTT): the window total does not go back
+    rainMMSinceStart=3.0f;
+    float rainTotal=rainWindowTotalMm();
+    cmdResetRainAccumulator();
+    assert(rainMMSinceStart==0.0f && rainWindowTotalMm()==rainTotal);
 
     gCfg.heaterMode=gCfg.fanMode=1;
     gCfg.heaterDutyPct=60;gCfg.fanDutyPct=75;

@@ -34,10 +34,13 @@ void pushHistorySample();
 void buildHistoryJson(JsonDocument& doc, bool coarse);
 
 // Lookups in the fine tier (5-min buckets, 24 h) for trends and rolling sums.
-// Value about ageSec ago (closest bucket, at most 10 min off); false = no data
-// that old yet (e.g. less than 3 h since start for the pressure tendency).
+// Value about ageSec ago (closest bucket ending between ageSec - 5 min and
+// ageSec + 10 min ago); false = no data that old yet (e.g. less than about
+// 3 h since start for the pressure tendency, 1 h for the temperature trend).
 bool historyPressureAgo(uint32_t ageSec, float& qnhHpa);   // QNH, hPa
 bool historyTempAgo(uint32_t ageSec, float& tempC);        // selected temperature source, °C
-// Rain of the selected source over roughly the last windowSec (finished
-// buckets plus the open one), mm. Since start if the node runs shorter.
+// Rain of the selected source over the last windowSec at most: finished
+// buckets lying completely within the window plus the open one, so it may
+// miss up to one 5-min bucket at the old end, but never covers more. mm;
+// since start if the node runs shorter.
 float historyRainSum(uint32_t windowSec);

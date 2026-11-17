@@ -69,3 +69,17 @@ void wxAddSunshine(float sec);
 // found (empty = none / not checked) and a short status text.
 void wxUpdateAvailable(char* out, size_t len);
 void wxUpdateStatus(char* out, size_t len);
+
+// A version name from the update server is only accepted if it is non-empty
+// and consists of [0-9A-Za-z.+-] (e.g. "2.0.0-beta.3", "v2.1.0+build.7"):
+// it ends up on the status page and in MQTT/JSON.
+inline bool wxValidVersionTag(const char* s)
+{
+    if (!s || !*s) return false;
+    for (; *s; s++) {
+        char c = *s;
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              c == '.' || c == '+' || c == '-')) return false;
+    }
+    return true;
+}

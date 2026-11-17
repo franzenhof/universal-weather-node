@@ -37,8 +37,8 @@ struct IoState {
     float    auxAinV = 0.0f;         // cycle average, already scaled
     uint32_t auxPulsesCycle = 0;
     uint32_t auxPulsesTotal = 0;     // since power-on (kept across restarts)
-    float    wind2SpeedMs = 0.0f;    // 2nd anemometer (wind2Mode): cycle average
-    float    wind2GustMs = 0.0f;     // highest sub-sample of the cycle
+    float    wind2SpeedMs = 0.0f;    // 2nd anemometer (wind2Mode): cycle average (pulse-weighted)
+    float    wind2GustMs = 0.0f;     // highest 3-s gust of the cycle
     uint16_t wind2DirDeg = 0;        // vector average incl. wind2DirOffsetDeg (wind2Mode 2)
     bool     heaterOn = false;
     uint8_t  heaterDuty = 0;         // % currently driven

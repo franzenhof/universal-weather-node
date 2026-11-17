@@ -16,7 +16,7 @@ extern size_t     binLen;
 // (LoRaWANNode::getMaxPayloadLen()) and leave out the least important field
 // groups until the packet fits - see dropNextGroup() in payload.h. The groups
 // left out in the last uplink are in lastPayloadDropped ("" = complete).
-extern char lastPayloadDropped[128];
+extern char lastPayloadDropped[256];
 
 // Populates `lpp` from the current sensor globals (see globals.h).
 void buildLppPacket(size_t limit, const PathValues* pv = nullptr);

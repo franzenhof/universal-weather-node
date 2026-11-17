@@ -21,6 +21,7 @@ int main()
     hostNow++;loraPoll();assert(hostJoinCalls==3 && hostNodes==0);
     hostJoinOk=true;hostNow+=8*60000;loraPoll();
     assert(loraReady() && hostNodes==1);
+    assert(loRaNode->dutyCycle);   // regional duty-cycle limit enforced after the join
     int calls=hostJoinCalls;hostNow+=60000;loraPoll();
     assert(hostJoinCalls==calls);
     hostNow=ULONG_MAX-30000;loraReconnect();

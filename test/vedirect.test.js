@@ -87,4 +87,13 @@ eq(d.battV, 12.95, 'BMV battery V');
 eq(d.soc, 87.6, 'BMV SOC');
 eq(d.pvW, null, 'BMV has no PV');
 
+// 5) A label that becomes "---" later (BMV SOC while not synchronized) is
+//    unavailable again, not stuck at its last number.
+d = run(Buffer.concat([block([['V', '12950'], ['SOC', '876'], ['CS', '3']]),
+                       block([['V', '12940'], ['SOC', '---'], ['CS', '---']])]));
+eq(d.blocks, 2, 'blocks with "---"');
+eq(d.battV, 12.94, 'battery V still updated');
+eq(d.soc, null, 'SOC "---" clears the old value');
+eq(d.cs, -1, 'CS "---" clears the old value');
+
 console.log('VE.Direct parser tests passed.');

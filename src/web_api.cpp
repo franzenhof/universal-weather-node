@@ -553,7 +553,8 @@ void handleStatusPage()
             char id[12];
             snprintf(id, sizeof(id), "%08lX", (unsigned long)r.id);
             unsigned long ago = (millis() - r.lastMs) / 1000;
-            String v = String(ago) + " s ago &middot; RSSI " + String(r.rssi, 0) + " dBm";
+            bool gone = (r.staleMask & RF_VAL_ANY) && ago < SRC_RF_FRESH_MS / 1000;   // millis() wrapped
+            String v = (gone ? String("&gt;") + String(SRC_RF_FRESH_MS / 1000) : String(ago)) + " s ago &middot; RSSI " + String(r.rssi, 0) + " dBm";
             if (!r.batteryOk) v += " &middot; <b>battery low</b>";
             auto stale = [i](const char* key) { return srcRfValueFresh(i, key) ? String() : String(" <span class='dim'>(stale)</span>"); };
             if (r.hasTemp)     v += " &middot; " + String(temperatureForOutput(r.tempC, gCfg), 1) + "&deg;" + temperatureUnitLabel(gCfg) + stale("temp");
@@ -583,7 +584,10 @@ void handleStatusPage()
     if (gCfg.updateCheckEn) {
         char st[48]; wxUpdateStatus(st, sizeof(st));
         char up[24]; wxUpdateAvailable(up, sizeof(up));
-        addRow(html, "Firmware update", up[0] ? "<b>" + String(up) + " available</b>" : String(st));
+        String v;
+        if (up[0]) { v = "<b>"; appendEscaped(v, up); v += " available</b>"; }
+        else       appendEscaped(v, st);
+        addRow(html, "Firmware update", v);
     }
     addRow(html, "Last restart",       gResetReason);
     addRow(html, "Free heap",          String((float)ESP.getFreeHeap() / 1024.0f, 1) + " KiB &middot; minimum " +
@@ -614,6 +618,37 @@ bool requireAuth()
     return true;
 }
 
+// CSRF guard for state-changing POSTs. The browser re-sends cached Digest
+// credentials with any request to the node, so a foreign web page could
+// otherwise submit the settings form for a logged-in user. Browsers mark
+// the page a form was sent from in Origin (or at least Referer): its host
+// must be the one the request is addressed to (Host). Requests carrying
+// neither header (curl, scripts) are allowed - they carry no browser-cached
+// credentials. "Origin: null" (sandboxed/privacy contexts) is refused.
+bool sameOriginRequest()
+{
+    String src = server.header("Origin");
+    if (src.isEmpty()) src = server.header("Referer");
+    if (src.isEmpty()) return true;
+    int start = src.indexOf("://");
+    if (start < 0) return false;
+    start += 3;
+    int end = src.indexOf('/', start);
+    String host = end < 0 ? src.substring(start) : src.substring(start, end);
+    if (host.isEmpty() || !host.equalsIgnoreCase(server.hostHeader())) {
+        dbgSerial.printf("Web: cross-site POST refused (from '%s', host '%s')\n", host.c_str(), server.hostHeader().c_str());
+        return false;
+    }
+    return true;
+}
+
+bool requireSameOrigin()
+{
+    if (sameOriginRequest()) return true;
+    server.send(403, "text/plain", "Forbidden: cross-site request (open the settings page on the node itself and submit it there).");
+    return false;
+}
+
 
 void handleLogPage()
 {
@@ -631,7 +666,7 @@ void handleLogRaw()
 
 void handleLogClear()
 {
-    if (!requireAuth()) return;
+    if (!requireAuth() || !requireSameOrigin()) return;
     dbgSerial.clear();
     server.send(200, "text/plain", "cleared");
 }
@@ -731,7 +766,9 @@ void fieldCheck(String& html, const char* name, const char* label, bool checked,
     labelStart(html, label, hint);
     html += "<input type='checkbox' name='"; html += name; html += "'";
     if (checked) html += " checked";
-    html += "></label>";
+    // sent after the checkbox: arg() returns the first value ("on" if
+    // checked), so a missing field means "not in this form", not "off"
+    html += "><input type='hidden' name='"; html += name; html += "' value='0'></label>";
 }
 
 struct Option { int value; const char* text; };
@@ -795,8 +832,14 @@ void renderSettings(const String& message, bool isError, int httpCode)
                                          { 2, "Speed + direction (vane at AUX AIN)" } };
     #define OPTS(a) a, sizeof(a) / sizeof(a[0])
 
+    // One contiguous ~26 KB block. If the heap can't provide it (or a later
+    // grow fails), String silently drops the appends - answer 503 instead of
+    // serving a truncated form that would save half the settings.
     String html;
-    html.reserve(26000);
+    if (!html.reserve(26000)) {
+        server.send(503, "text/plain", "Not enough free memory for the settings page right now - please retry.");
+        return;
+    }
     pageStart(html, "settings", "/api/settings");
     html += "<p class='sub'><span class='tag live'>live</span> fields apply immediately. "
             "<span class='tag restart'>restart</span> fields save and restart the node (the in-RAM chart history is lost). "
@@ -1014,7 +1057,9 @@ void renderSettings(const String& message, bool isError, int httpCode)
 
     sectionStart(html, "Network &amp; MQTT", true);
     fieldText  (html, "wifissid",   "WiFi network (SSID)", WiFi.SSID(), 32,
-                "a change is tested for 60&nbsp;s without restart; if the node cannot connect, it returns to the current network");
+                "a change is tested for 60&nbsp;s without restart; if the node cannot connect or neither the gateway nor DNS "
+                "answers there, it returns to the current network. Another network needs DHCP: switch a static IP off "
+                "in the same step");
     fieldSecret(html, "wifipass",   "WiFi password", true, true, 63,
                 "leave empty to keep the current one; &ldquo;remove&rdquo; = open network");
     fieldCheck (html, "wifinotest", "Store WiFi without test (pre-provisioning)", false,
@@ -1047,6 +1092,10 @@ void renderSettings(const String& message, bool isError, int httpCode)
     #undef OPTS
 
     html += "<button type='submit'>Save</button></form></body></html>";
+    if (!html.endsWith("</form></body></html>")) {
+        server.send(503, "text/plain", "Not enough free memory for the settings page right now - please retry.");
+        return;
+    }
     server.send(httpCode, "text/html; charset=utf-8", html);
 }
 
@@ -1080,9 +1129,11 @@ bool isHex(const String& s, size_t len)
 }
 
 // Plain text field; sets `changed` if the stored value differs.
+// Only if the field is part of the request (a partial POST keeps the rest).
 template <size_t N>
 void storeText(char (&dst)[N], const char* name, bool& changed)
 {
+    if (!server.hasArg(name)) return;
     String v = formArg(name);
     if (v.length() >= N) v.remove(N - 1);
     if (strcmp(dst, v.c_str()) != 0) { strlcpy(dst, v.c_str(), N); changed = true; }
@@ -1105,6 +1156,7 @@ void storeSecret(char (&dst)[N], const char* name, bool& changed)
 
 void storeInt(int& dst, const char* name, long minV, long maxV, const char* label, String& rejected, bool& changed)
 {
+    if (!server.hasArg(name)) return;
     String v = formArg(name);
     long n = v.toInt();
     if (v.isEmpty() || n < minV || n > maxV) { addRejected(rejected, label); return; }
@@ -1115,6 +1167,7 @@ void storeInt(int& dst, const char* name, long minV, long maxV, const char* labe
 template <size_t N>
 void storeCoord(char (&dst)[N], const char* name, float limit, const char* label, String& rejected)
 {
+    if (!server.hasArg(name)) return;
     String v = formArg(name);
     if (v.length()) {
         char* end = nullptr;
@@ -1132,16 +1185,27 @@ bool validIp(const String& s)
 
 void handleSettingsPost()
 {
-    if (!requireAuth()) return;
+    if (!requireAuth() || !requireSameOrigin()) return;
     if (!server.hasArg("form")) {
         renderSettings("Incomplete form submission &mdash; nothing was saved.", true, 400);
         return;
     }
 
+    // Only fields present in the request are changed, so a partial POST
+    // (curl, scripts) leaves everything else alone. Checkboxes: the page
+    // sends a hidden "0" after each one (fieldCheck), so "unchecked" is
+    // distinguishable from "not part of the request".
     String rejected;
-    auto checked = [](const char* name) -> long { return server.hasArg(name) ? 1 : 0; };
+    auto present = [](const char* name) { return server.hasArg(name); };
+    auto checked = [](const char* name) -> long { String v = server.arg(name); return (v.length() && v != "0") ? 1 : 0; };
     auto apply = [&rejected](uint8_t id, long value, const char* label) {
         if (!applyParam(id, clampToParamValue(value))) addRejected(rejected, label);
+    };
+    auto applyNum = [&](uint8_t id, const char* name, const char* label) {
+        if (present(name)) apply(id, formArg(name).toInt(), label);
+    };
+    auto applyCheck = [&](uint8_t id, const char* name, const char* label) {
+        if (present(name)) apply(id, checked(name), label);
     };
     auto scaled1000 = [](const char* name) -> long {
         String text = formArg(name);
@@ -1156,74 +1220,78 @@ void handleSettingsPost()
 
     // ---- live: operational parameters (uplink before sample interval:
     // the sample interval is validated against the uplink interval) ----
-    apply(PARAM_UPLINK_INTERVAL_SEC,  formArg("uplinksec").toInt(), "measurement interval (5-3600 s)");
-    apply(PARAM_SAMPLE_SEC,           formArg("samplesec").toInt(), "wind sample interval (1 or 3 s)");
-    apply(PARAM_MQTT_INTERVAL_SEC,    formArg("mqttsec").toInt(),   "MQTT interval (0 or 2-3600 s)");
-    apply(PARAM_LORA_WIND_AGG,        formArg("lorawagg").toInt(),  "LoRaWAN wind values");
-    apply(PARAM_MQTT_WIND_AGG,        formArg("mqttwagg").toInt(),  "MQTT wind values");
-    apply(PARAM_RF_EN,                checked("rfen"),              "wireless sensors");
-    apply(PARAM_RF_PROTO,             formArg("rfproto").toInt(),   "wireless sensor type");
+    applyNum(PARAM_UPLINK_INTERVAL_SEC,      "uplinksec",   "measurement interval (5-3600 s)");
+    applyNum(PARAM_SAMPLE_SEC,               "samplesec",   "wind sample interval (1 or 3 s)");
+    applyNum(PARAM_MQTT_INTERVAL_SEC,        "mqttsec",     "MQTT interval (0 or 2-3600 s)");
+    applyNum(PARAM_LORA_WIND_AGG,            "lorawagg",    "LoRaWAN wind values");
+    applyNum(PARAM_MQTT_WIND_AGG,            "mqttwagg",    "MQTT wind values");
+    applyCheck(PARAM_RF_EN,                  "rfen",        "wireless sensors");
+    applyNum(PARAM_RF_PROTO,                 "rfproto",     "wireless sensor type");
     {
         static const char* const names[SG_COUNT] = { "srcair", "srcwind", "srcrain", "srcuv", "srclight" };
         for (int g = 0; g < SG_COUNT; g++)
             if (formArg(names[g]).length())
-                apply(PARAM_SRC_TEMP_HUM + g, formArg(names[g]).toInt(), "value source");
+                applyNum(PARAM_SRC_TEMP_HUM + g, names[g], "value source");
     }
-    apply(PARAM_WIND_EN,              checked("winden"),            "wind sensor");
-    apply(PARAM_RAIN_EN,              checked("rainen"),            "rain sensor");
-    apply(PARAM_LIPO_EN,              checked("lipoen"),            "LiPo measurement");
-    apply(PARAM_DEBUG_MODE,           checked("debugmode"),         "debug mode");
+    applyCheck(PARAM_WIND_EN,                "winden",      "wind sensor");
+    applyCheck(PARAM_RAIN_EN,                "rainen",      "rain sensor");
+    applyCheck(PARAM_LIPO_EN,                "lipoen",      "LiPo measurement");
+    applyCheck(PARAM_DEBUG_MODE,             "debugmode",   "debug mode");
     // Only when changed: applyParam() reprograms the CPU clock unconditionally.
-    if (formArg("cpufreq").toInt() != gCfg.cpuFreqMhz)
-        apply(PARAM_CPU_FREQ_MHZ,     formArg("cpufreq").toInt(),   "CPU frequency");
-    apply(PARAM_UNIT_SYSTEM,          formArg("unitsys").toInt(),   "unit system");
-    apply(PARAM_WIND_UNIT_MS,         formArg("windunit").toInt(),  "wind speed unit");
-    apply(PARAM_WIND_DIR_OFFSET_DEG,  formArg("windoff").toInt(),   "wind direction offset (-180 to 180)");
-    apply(PARAM_WIND_DIR_SENSOR_TYPE, formArg("winddirtyp").toInt(), "wind direction sensor");
-    apply(PARAM_PAYLOAD_FORMAT,       formArg("payfmt").toInt(),    "payload format");
+    if (present("cpufreq") && formArg("cpufreq").toInt() != gCfg.cpuFreqMhz)
+        applyNum(PARAM_CPU_FREQ_MHZ,             "cpufreq",     "CPU frequency");
+    applyNum(PARAM_UNIT_SYSTEM,              "unitsys",     "unit system");
+    applyNum(PARAM_WIND_UNIT_MS,             "windunit",    "wind speed unit");
+    applyNum(PARAM_WIND_DIR_OFFSET_DEG,      "windoff",     "wind direction offset (-180 to 180)");
+    applyNum(PARAM_WIND_DIR_SENSOR_TYPE,     "winddirtyp",  "wind direction sensor");
+    applyNum(PARAM_PAYLOAD_FORMAT,           "payfmt",      "payload format");
     if (ioV2()) {   // the section is only rendered on v2.0
         auto x10 = [](const char* name) -> long { return lroundf(formArg(name).toFloat() * 10.0f); };
         // 2nd wind sensor first: it takes over the AUX inputs it uses, the
         // AUX checkboxes then only apply to the inputs that are still free.
-        apply(PARAM_WIND2_MODE,          formArg("wind2").toInt(),     "2nd wind sensor");
-        apply(PARAM_WIND2_DIR_OFFSET_DEG, formArg("wind2off").toInt(), "2nd wind vane offset (-180 to 180)");
+        applyNum(PARAM_WIND2_MODE,               "wind2",       "2nd wind sensor");
+        applyNum(PARAM_WIND2_DIR_OFFSET_DEG,     "wind2off",    "2nd wind vane offset (-180 to 180)");
         if (gCfg.wind2Mode != 2)
-            apply(PARAM_AUX_AIN_EN,      checked("auxainen"),          "AUX analog input");
-        apply(PARAM_AUX_AIN_SCALE_X1000, lroundf(formArg("auxainscale").toFloat() * 1000.0f), "AUX analog scale (0.001-20)");
+            applyCheck(PARAM_AUX_AIN_EN,             "auxainen",    "AUX analog input");
+        if (present("auxainscale")) apply(PARAM_AUX_AIN_SCALE_X1000, lroundf(formArg("auxainscale").toFloat() * 1000.0f), "AUX analog scale (0.001-20)");
         if (!gCfg.wind2Mode)
-            apply(PARAM_AUX_PULSE_EN,    checked("auxpulseen"),        "AUX pulse counter");
-        apply(PARAM_HEATER_MODE,         formArg("heatmode").toInt(),  "heater mode");
-        apply(PARAM_HEATER_DUTY_PCT,     formArg("heatduty").toInt(),  "heater power (1-100 %)");
-        apply(PARAM_HEATER_ON_BELOW_DC,  x10("heatbelow"),             "heater threshold (-40 to 40 &deg;C)");
-        apply(PARAM_HEATER_MIN_DUTY_PCT, formArg("heatminduty").toInt(), "heater power at the threshold (1-100 %)");
-        apply(PARAM_HEATER_FULL_BELOW_DC, x10("heatfull"),             "heater full-power temperature (-40 to 40 &deg;C)");
-        apply(PARAM_FAN_MODE,            formArg("fanmode").toInt(),   "fan mode");
-        apply(PARAM_FAN_DUTY_PCT,        formArg("fanduty").toInt(),   "fan speed (1-100 %)");
-        apply(PARAM_FAN_ON_ABOVE_DC,     x10("fanabove"),              "fan threshold (-40 to 60 &deg;C)");
-        apply(PARAM_FAN_MIN_PV_W,        formArg("fanminpv").toInt(),  "fan minimum PV power (0-5000 W)");
-        apply(PARAM_TACHO_EN,            checked("tachoen"),           "fan tacho");
-        apply(PARAM_TACHO_PPR,           formArg("tachoppr").toInt(),  "tacho pulses per revolution (1-8)");
-        apply(PARAM_VEDIRECT_EN,         checked("vedirecten"),        "VE.Direct");
-        apply(PARAM_OUT_MIN_BATT_DV,     x10("outminbatt"),            "minimum battery voltage (0-60 V)");
-        apply(PARAM_UV_EN,               checked("uven"),              "UV sensor");
-        apply(PARAM_UV_AIN_SCALE_X1000,  scaled1000("uvscale"),
+            applyCheck(PARAM_AUX_PULSE_EN,           "auxpulseen",  "AUX pulse counter");
+        applyNum(PARAM_HEATER_MODE,              "heatmode",    "heater mode");
+        applyNum(PARAM_HEATER_DUTY_PCT,          "heatduty",    "heater power (1-100 %)");
+        if (present("heatbelow")) apply(PARAM_HEATER_ON_BELOW_DC,  x10("heatbelow"),             "heater threshold (-40 to 40 &deg;C)");
+        applyNum(PARAM_HEATER_MIN_DUTY_PCT,      "heatminduty", "heater power at the threshold (1-100 %)");
+        if (present("heatfull")) apply(PARAM_HEATER_FULL_BELOW_DC, x10("heatfull"),             "heater full-power temperature (-40 to 40 &deg;C)");
+        applyNum(PARAM_FAN_MODE,                 "fanmode",     "fan mode");
+        applyNum(PARAM_FAN_DUTY_PCT,             "fanduty",     "fan speed (1-100 %)");
+        if (present("fanabove")) apply(PARAM_FAN_ON_ABOVE_DC,     x10("fanabove"),              "fan threshold (-40 to 60 &deg;C)");
+        applyNum(PARAM_FAN_MIN_PV_W,             "fanminpv",    "fan minimum PV power (0-5000 W)");
+        applyCheck(PARAM_TACHO_EN,               "tachoen",     "fan tacho");
+        applyNum(PARAM_TACHO_PPR,                "tachoppr",    "tacho pulses per revolution (1-8)");
+        applyCheck(PARAM_VEDIRECT_EN,            "vedirecten",  "VE.Direct");
+        if (present("outminbatt")) apply(PARAM_OUT_MIN_BATT_DV,     x10("outminbatt"),            "minimum battery voltage (0-60 V)");
+        applyCheck(PARAM_UV_EN,                  "uven",        "UV sensor");
+        if (present("uvscale")) apply(PARAM_UV_AIN_SCALE_X1000,  scaled1000("uvscale"),
                                                                         "UV divider scale (1-5)");
-        apply(PARAM_UV_INDEX_EN,         checked("uvindexen"),         "UV index enable");
-        apply(PARAM_UV_INDEX_SLOPE_X1000,scaled1000("uvslope"),
+        applyCheck(PARAM_UV_INDEX_EN,            "uvindexen",   "UV index enable");
+        if (present("uvslope")) apply(PARAM_UV_INDEX_SLOPE_X1000,scaled1000("uvslope"),
                                                                         "UV index slope (0-30)");
-        apply(PARAM_UV_INDEX_OFFSET_X1000,scaled1000("uvoffset"),
+        if (present("uvoffset")) apply(PARAM_UV_INDEX_OFFSET_X1000,scaled1000("uvoffset"),
                                                                         "UV index offset (-10 to +10)");
-        apply(PARAM_UV_CALIBRATED,       checked("uvcal"),             "UV calibration flag");
+        applyCheck(PARAM_UV_CALIBRATED,          "uvcal",       "UV calibration flag");
     }
 
     // Calibration factors directly as float — applyParam()'s x1000 integer
     // encoding (made for the 2-byte downlink value) would round 1.00584 to 1.006.
-    float rainTip = formArg("rainmmtip").toFloat();
-    if (rainTip > 0.0f && rainTip <= 5.0f) gCfg.rainMmPerTip = rainTip;
-    else addRejected(rejected, "rain per tip (0-5 mm)");
-    float windPps = formArg("windmspp").toFloat();
-    if (windPps > 0.0f && windPps <= 10.0f) gCfg.windMsPerPps = windPps;
-    else addRejected(rejected, "wind speed per pulse/s (0-10)");
+    if (present("rainmmtip")) {
+        float rainTip = formArg("rainmmtip").toFloat();
+        if (rainTip > 0.0f && rainTip <= 5.0f) gCfg.rainMmPerTip = rainTip;
+        else addRejected(rejected, "rain per tip (0-5 mm)");
+    }
+    if (present("windmspp")) {
+        float windPps = formArg("windmspp").toFloat();
+        if (windPps > 0.0f && windPps <= 10.0f) gCfg.windMsPerPps = windPps;
+        else addRejected(rejected, "wind speed per pulse/s (0-10)");
+    }
 
     bool ignored = false;   // "changed" sink for live fields (no restart needed)
     int altitude = gCfg.altitudeM;
@@ -1254,13 +1322,17 @@ void handleSettingsPost()
     storeSecret(gCfg.osemToken,    "osemtok", ignored);
     storeText  (gCfg.osemSensors,  "osemmap", ignored);
     storeInt   (gCfg.osemIntervalSec, "osemint", 60, 3600, "openSenseMap interval (60-3600 s)", rejected, ignored);
-    gCfg.updateCheckEn = server.hasArg("updchk");
+    if (present("updchk")) gCfg.updateCheckEn = checked("updchk");
     if (formArg("updurl").startsWith("http")) storeText(gCfg.updateUrl, "updurl", ignored);
-    else if (gCfg.updateCheckEn) addRejected(rejected, "version list URL (http/https)");
-    if (formArg("tz").isEmpty())  addRejected(rejected, "time zone");
-    else                          storeText(gCfg.timeZone, "tz", timeChanged);
-    if (formArg("ntp").isEmpty()) addRejected(rejected, "NTP server");
-    else                          storeText(gCfg.ntpServer, "ntp", timeChanged);
+    else if (present("updurl") && gCfg.updateCheckEn) addRejected(rejected, "version list URL (http/https)");
+    if (present("tz")) {
+        if (formArg("tz").isEmpty()) addRejected(rejected, "time zone");
+        else                         storeText(gCfg.timeZone, "tz", timeChanged);
+    }
+    if (present("ntp")) {
+        if (formArg("ntp").isEmpty()) addRejected(rejected, "NTP server");
+        else                          storeText(gCfg.ntpServer, "ntp", timeChanged);
+    }
     wxUploadUnlock();
     if (timeChanged) timeSyncReconfigure();
     // Not clearable: an empty admin password would lock this page out.
@@ -1270,19 +1342,21 @@ void handleSettingsPost()
     // ---- restart: only read at boot. Collected into a copy (static: Config
     // is several KB, too big for this task's stack), so the running
     // transports never see a half-applied change before the restart. ----
-    apply(PARAM_LOW_POWER_EN, checked("lowpower"), "low-power mode");
-    apply(PARAM_VANE_POWER_SAVE, checked("vanesave"), "wind-vane power saving");
+    applyCheck(PARAM_LOW_POWER_EN,           "lowpower",    "low-power mode");
+    applyCheck(PARAM_VANE_POWER_SAVE,        "vanesave",    "wind-vane power saving");
     static Config next;
     next = gCfg;
     bool restart = false;
-    int loraEn = (int)checked("loraen");
-    if (next.loraEn != loraEn) { next.loraEn = loraEn; restart = true; }
+    if (present("loraen")) {
+        int loraEn = (int)checked("loraen");
+        if (next.loraEn != loraEn) { next.loraEn = loraEn; restart = true; }
+    }
     String eui = formArg("deveui");
     if (isHex(eui, 16)) { uint64_t v = hexToUint64(eui.c_str()); if (v != next.devEui) { next.devEui = v; restart = true; } }
-    else addRejected(rejected, "DevEUI (16 hex)");
+    else if (present("deveui")) addRejected(rejected, "DevEUI (16 hex)");
     eui = formArg("joineui");
     if (isHex(eui, 16)) { uint64_t v = hexToUint64(eui.c_str()); if (v != next.joinEui) { next.joinEui = v; restart = true; } }
-    else addRejected(rejected, "JoinEUI (16 hex)");
+    else if (present("joineui")) addRejected(rejected, "JoinEUI (16 hex)");
     String key = formArg("appkey");
     if (key.length()) {
         uint8_t k[16];
@@ -1295,11 +1369,13 @@ void handleSettingsPost()
     }
     String region = formArg("region");
     if (isSupportedRegion(region)) storeText(next.region, "region", restart);
-    else addRejected(rejected, "region");
+    else if (present("region")) addRejected(rejected, "region");
 
     storeText(next.deviceName, "devname", restart);
-    int staticIpEn = (int)checked("staticipen");
-    String ip = formArg("staticip"), gw = formArg("staticgw"), sn = formArg("staticsn"), dns = formArg("staticdns");
+    int staticIpEn = present("staticipen") ? (int)checked("staticipen") : next.staticIpEn;
+    auto argOr = [](const char* name, const char* stored) { return server.hasArg(name) ? formArg(name) : String(stored); };
+    String ip = argOr("staticip", next.staticIp), gw = argOr("staticgw", next.staticGateway),
+           sn = argOr("staticsn", next.staticSubnet), dns = argOr("staticdns", next.staticDns);
     if (staticIpEn && !(validIp(ip) && validIp(gw) && validIp(sn) && (dns.isEmpty() || validIp(dns)))) {
         addRejected(rejected, "static IP (invalid address)");
     } else {
@@ -1309,7 +1385,8 @@ void handleSettingsPost()
         storeText(next.staticSubnet,  "staticsn",  restart);
         storeText(next.staticDns,     "staticdns", restart);
     }
-    int mqttEn = (int)checked("mqtten"), mqttCtrlEn = (int)checked("mqttctrlen");
+    int mqttEn     = present("mqtten")     ? (int)checked("mqtten")     : next.mqttEn;
+    int mqttCtrlEn = present("mqttctrlen") ? (int)checked("mqttctrlen") : next.mqttCtrlEn;
     if (next.mqttEn != mqttEn)         { next.mqttEn = mqttEn; restart = true; }
     if (next.mqttCtrlEn != mqttCtrlEn) { next.mqttCtrlEn = mqttCtrlEn; restart = true; }
     storeText  (next.mqttHost,  "mqtthost",  restart);
@@ -1320,7 +1397,7 @@ void handleSettingsPost()
     storeInt   (next.mqttTlsMode, "mqtttls", MQTT_TLS_NONE, MQTT_TLS_VERIFY, "MQTT security", rejected, restart);
     if (server.arg("mqttcacert").length() >= sizeof(next.mqttCaCert)) addRejected(rejected, "CA certificate (too long)");
     else storeText(next.mqttCaCert, "mqttcacert", restart);
-    int pcb = formArg("pcbver").toInt();
+    int pcb = present("pcbver") ? formArg("pcbver").toInt() : next.pcbVersion;
     if (gIo.hwIdDetected && pcb != PCB_REV_2_0) addRejected(rejected, "PCB revision (the board identifies itself as v2.0)");
     else if (pcb == PCB_REV_1_2 || pcb == PCB_REV_1_3 || pcb == PCB_REV_2_0) { if (next.pcbVersion != pcb) { next.pcbVersion = pcb; restart = true; } }
     else addRejected(rejected, "PCB revision");
@@ -1328,15 +1405,24 @@ void handleSettingsPost()
     String rejectedMsg = rejected.length() ? "Invalid, kept the stored value: " + rejected + "." : String();
 
     // ---- WiFi network: tested with rollback (wifi_mqtt.cpp), not a restart field ----
+    // Another network (SSID) only together with DHCP: a static IP belongs to
+    // the current network - kept for the new one it would put the node into
+    // the wrong subnet. Switching the static IP off in the same submission
+    // is fine (the test then runs with DHCP, the restart applies it).
     bool wifiChange = false;
-    {
+    bool noTest     = checked("wifinotest");
+    if (present("wifissid")) {
         String ssid    = server.arg("wifissid");   // not trimmed: spaces may be part of an SSID
         String pass    = server.arg("wifipass");
         bool   clear   = server.hasArg("wifipass_clear");
         String curSsid = WiFi.SSID(), curPass = wifiCurrentPassword();
         String newPass = clear ? String() : (pass.length() ? pass : curPass);
-        if (ssid.length() && gCfg.wifiEn && !wifiChangeBusy() && (ssid != curSsid || newPass != curPass)) {
-            if (wifiRequestChange(ssid.c_str(), newPass.c_str(), !server.hasArg("wifinotest"))) wifiChange = true;
+        bool otherNetwork = ssid != curSsid;
+        if (ssid.length() && gCfg.wifiEn && !wifiChangeBusy() && (otherNetwork || newPass != curPass)) {
+            if (otherNetwork && next.staticIpEn)
+                addRejected(rejected, "WiFi network (a static IP is set for the current network &mdash; switch the static IP "
+                                      "off in the same step or before, and set it again on the new network)");
+            else if (wifiRequestChange(ssid.c_str(), newPass.c_str(), !noTest, next.staticIpEn == 0)) wifiChange = true;
             else addRejected(rejected, "WiFi (name 1-32 characters, password 8-63 characters or none)");
         } else if (ssid.isEmpty()) {
             addRejected(rejected, "WiFi network (empty)");
@@ -1349,7 +1435,7 @@ void handleSettingsPost()
         else         saveConfig(gCfg);
         String html;
         pageStart(html, "settings", "/api/settings", 75);
-        if (server.hasArg("wifinotest")) {
+        if (noTest) {
             html += "<div class='banner okb'>Saved. The new WiFi network is stored without a test; the node leaves "
                     "this network now";
             html += restart ? " and restarts to apply the other network/LoRaWAN settings" : "";
@@ -1360,7 +1446,8 @@ void handleSettingsPost()
             html += ". If it connects, it stays there &mdash; reach it again by its name or the IP on the display. "
                     "Otherwise it returns to the current network and this page shows a notice. It reloads in 75&nbsp;s.</div>";
         }
-        if (rejectedMsg.length()) { html += "<div class='banner badb'>"; appendEscaped(html, rejectedMsg.c_str()); html += "</div>"; }
+        // rejectedMsg is built from fixed labels only (already HTML, e.g. &deg;)
+        if (rejectedMsg.length()) { html += "<div class='banner badb'>"; html += rejectedMsg; html += "</div>"; }
         html += "</body></html>";
         server.send(200, "text/html; charset=utf-8", html);
         dbgSerial.println("Web settings: WiFi network change requested");
@@ -1436,6 +1523,9 @@ void webApiSetup()
     server.on("/api/settings", HTTP_GET,  handleSettingsGet);
     server.on("/api/settings", HTTP_POST, handleSettingsPost);
     server.on("/api/log",       HTTP_GET,  handleLogPage);
+    // Origin/Referer for the CSRF check (Authorization is always collected)
+    static const char* headerKeys[] = { "Origin", "Referer" };
+    server.collectHeaders(headerKeys, 2);
     server.on("/api/log/raw",   HTTP_GET,  handleLogRaw);
     server.on("/api/log/clear", HTTP_POST, handleLogClear);
     server.on("/api/history",        HTTP_GET,  handleApiHistory);

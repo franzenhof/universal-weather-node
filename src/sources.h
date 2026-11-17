@@ -48,7 +48,11 @@ uint16_t srcBits();
 // Called by rf_sensors.cpp for every decoded packet of gRfSensors[idx].
 // rainDeltaMm: increase of the sensor's rain total since its previous packet.
 // hasLight: the packet carries illuminance (sunshine duration, see derived.h).
-void srcRfPacket(int idx, bool hasWind, float rainDeltaMm, bool hasLight = false);
+// rainGapMs > 0: the previous rain value was that old (sensor not heard for
+// longer than SRC_RF_FRESH_MS); the increase is then not counted at once but
+// spread over the following packets at its average rate over the outage
+// (at most over 1 h), so the rain rate shows no burst and no rain is lost.
+void srcRfPacket(int idx, bool hasWind, float rainDeltaMm, bool hasLight = false, unsigned long rainGapMs = 0);
 
 // Snapshot of the non-path values at the end of each base cycle
 // (srcUpdateCycle(), after the board averages are final). Wind and rain

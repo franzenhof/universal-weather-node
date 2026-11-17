@@ -6,6 +6,10 @@
 unsigned long hostNow=100;
 int hostPins[64]={},hostModes[64]={},hostAdc[64]={},hostPwm[8]={},hostAttached[64]={};
 int16_t hostCounts[4]={};
+void (*hostPcntIsr[4])(void*)={};
+void* hostPcntArg[4]={};
+bool  hostBmeOk=false;
+float hostBmeT=20.0f,hostBmeP=101325.0f,hostBmeH=50.0f;
 int hostProbeCount=0;
 bool hostConversionComplete=false;
 float hostProbeTemps[3]={10.5f,12.5f,14.5f};

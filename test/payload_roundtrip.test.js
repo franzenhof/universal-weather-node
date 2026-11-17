@@ -144,4 +144,17 @@ const f11 = decode('fit11');
 eq(cases.fit11.length <= 11, true, `fit11 within 11 bytes (got ${cases.fit11.length})`);
 eq(f11.status.bme280_present, true, 'fit11 keeps at least the status byte');
 
+const bad = decode('nonfinite');
+eq(bad.wind_direction_deg, 90, 'nonfinite: wind direction kept');
+eq(bad.wind_speed_avg, undefined, 'nonfinite: NAN wind speed left out');
+eq(bad.wind_gust, undefined, 'nonfinite: INF gust left out');
+eq(bad.rain_rate_mmh, 1, 'nonfinite: rain rate kept');
+eq(bad.rain_cycle_mm, undefined, 'nonfinite: NAN rain left out');
+eq(bad.rain_since_start_mm, undefined, 'nonfinite: -INF rain total left out');
+eq(bad.bme280_temperature_c, undefined, 'nonfinite: NAN temperature left out');
+eq(bad.bme280_humidity_pct, undefined, 'nonfinite: NAN humidity left out');
+eq(bad.bme280_pressure_qnh_hpa, undefined, 'nonfinite: NAN pressure left out');
+eq(bad.bme280_pressure_abs_hpa, 950, 'nonfinite: valid pressure kept');
+eq(bad.light_lux, undefined, 'nonfinite: NAN light left out');
+
 console.log(`Payload round trip passed (full binary payload: ${cases.metric.length} bytes).`);

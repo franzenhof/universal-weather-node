@@ -17,6 +17,7 @@
 #include <MD5Builder.h>
 #include <esp_attr.h>
 #include <stddef.h>
+#include <functional>
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -112,38 +113,68 @@ struct DailyRain {
 constexpr uint32_t DAILY_RAIN_MAGIC = 0x52414E32;  // "RAN2"
 RTC_NOINIT_ATTR DailyRain rtcRain;
 
-uint32_t dailyRainCheck(const DailyRain& r)
+// Rain/sunshine collected while the clock is unknown (after a restart,
+// before the first NTP sync): the date in rtcRain is the one from before
+// the restart, so these can't be added to it yet - rollDailyRain() adds
+// them to "today" once the date is known. Without this, a sync on a new day
+// moved everything since the restart into "yesterday". Separate RTC struct
+// (own magic), so DailyRain's layout - and existing totals - stay valid.
+struct PendingRain {
+    uint32_t magic;
+    float    mm;
+    float    sunSec;
+    uint32_t check;
+};
+constexpr uint32_t PENDING_RAIN_MAGIC = 0x524E5031;  // "RNP1"
+RTC_NOINIT_ATTR PendingRain rtcPending;
+
+// FNV-1a over everything but the trailing check word.
+uint32_t fnv1a(const void* data, size_t len)
 {
-    // FNV-1a over everything but the check word itself.
-    const uint8_t* p = (const uint8_t*)&r;
+    const uint8_t* p = (const uint8_t*)data;
     uint32_t h = 2166136261u;
-    for (size_t i = 0; i < offsetof(DailyRain, check); i++) { h ^= p[i]; h *= 16777619u; }
+    for (size_t i = 0; i < len; i++) { h ^= p[i]; h *= 16777619u; }
     return h;
 }
 
-void sealDailyRain() { rtcRain.check = dailyRainCheck(rtcRain); }
+uint32_t dailyRainCheck(const DailyRain& r)     { return fnv1a(&r, offsetof(DailyRain, check)); }
+uint32_t pendingRainCheck(const PendingRain& r) { return fnv1a(&r, offsetof(PendingRain, check)); }
+
+void sealDailyRain()   { rtcRain.check = dailyRainCheck(rtcRain); }
+void sealPendingRain() { rtcPending.check = pendingRainCheck(rtcPending); }
 
 int32_t ymdOf(const struct tm& t) { return (t.tm_year + 1900) * 10000 + (t.tm_mon + 1) * 100 + t.tm_mday; }
 
 // Caller holds wxMutex. Moves today's totals to "yesterday" once the local
-// date has moved on from the one they were collected on. Totals collected
-// before NTP ever synced (ymd 0) are adopted as today's — at worst they're
+// date has moved on from the one they were collected on, then adds what was
+// collected while the clock was unknown (rtcPending) to today — at worst
 // off by whatever fell between midnight and the first sync after a reboot.
-void rollDailyRain()
+// Returns false (nothing changed) while the clock is unknown.
+bool rollDailyRain()
 {
     struct tm lt;
-    if (!localTimeNow(lt)) return;
+    if (!localTimeNow(lt)) return false;
     int32_t ymd = ymdOf(lt);
-    if (rtcRain.ymd == ymd) return;
-    if (rtcRain.ymd != 0) {
-        rtcRain.prevYmd    = rtcRain.ymd;
-        rtcRain.prevMm     = rtcRain.mm;
-        rtcRain.prevSunSec = rtcRain.sunSec;
-        rtcRain.mm     = 0.0f;
-        rtcRain.sunSec = 0.0f;
+    bool pending = rtcPending.mm != 0.0f || rtcPending.sunSec != 0.0f;
+    if (rtcRain.ymd == ymd && !pending) return true;
+    if (rtcRain.ymd != ymd) {
+        if (rtcRain.ymd != 0) {
+            rtcRain.prevYmd    = rtcRain.ymd;
+            rtcRain.prevMm     = rtcRain.mm;
+            rtcRain.prevSunSec = rtcRain.sunSec;
+            rtcRain.mm     = 0.0f;
+            rtcRain.sunSec = 0.0f;
+        }
+        rtcRain.ymd = ymd;
     }
-    rtcRain.ymd = ymd;
+    if (pending) {
+        rtcRain.mm     += rtcPending.mm;
+        rtcRain.sunSec += rtcPending.sunSec;
+        rtcPending.mm = rtcPending.sunSec = 0.0f;
+        sealPendingRain();
+    }
     sealDailyRain();
+    return true;
 }
 
 // Caller holds wxMutex: true if the stored "yesterday" date is the day before today.
@@ -224,7 +255,7 @@ String formatTime(const char* fmt, bool utc)
     time_t now = time(nullptr);
     struct tm t;
     if (utc) gmtime_r(&now, &t);
-    else     localtime_r(&now, &t);
+    else if (!localTimeNow(t)) localtime_r(&now, &t);
     char buf[24];
     strftime(buf, sizeof(buf), fmt, &t);
     return String(buf);
@@ -397,13 +428,16 @@ String osemBody(const Reading& r, const Creds& c)
     return body;
 }
 
+// The WiFi clients are declared before the HTTPClient using them: locals are
+// destroyed in reverse order, so ~HTTPClient (which may still touch its
+// client, e.g. after a failed begin()) runs while the client still exists.
 int httpPostJson(const String& url, const String& auth, const String& json, String& body)
 {
+    WiFiClientSecure tls;
     HTTPClient http;
     http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
     http.setTimeout(HTTP_TIMEOUT_MS);
     http.setReuse(false);
-    WiFiClientSecure tls;
     tls.setInsecure();
     tls.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
     if (!http.begin(tls, url)) return HTTPC_ERROR_CONNECTION_REFUSED;
@@ -418,15 +452,18 @@ int httpPostJson(const String& url, const String& auth, const String& json, Stri
 // Plain or TLS GET depending on the scheme. TLS is unverified (setInsecure)
 // — same tradeoff as MQTT_TLS_INSECURE: encrypted, not authenticated; no CA
 // bundle to keep up to date on the device for a handful of upload hosts.
-int httpGet(const String& url, String& body)
+// `onBody` (optional) reads a 200 reply straight from the stream instead of
+// into `body` - for replies too large to hold as a String.
+int httpGet(const String& url, String& body, std::function<void(Stream&)> onBody = nullptr)
 {
+    WiFiClient       plain;   // before `http`, see httpPostJson()
+    WiFiClientSecure tls;
     HTTPClient http;
     http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
     http.setTimeout(HTTP_TIMEOUT_MS);
     http.setReuse(false);
+    if (onBody) http.useHTTP10(true);   // no chunked encoding: getStream() is the raw body
 
-    WiFiClient       plain;
-    WiFiClientSecure tls;
     bool begun;
     if (url.startsWith("https://")) {
         tls.setInsecure();
@@ -438,7 +475,8 @@ int httpGet(const String& url, String& body)
     if (!begun) return HTTPC_ERROR_CONNECTION_REFUSED;
 
     int code = http.GET();
-    if (code > 0) body = http.getString();
+    if (code == HTTP_CODE_OK && onBody) onBody(http.getStream());
+    else if (code > 0)                  body = http.getString();
     http.end();
     return code;
 }
@@ -539,18 +577,30 @@ void updateCheckPoll()
     strlcpy(url, gCfg.updateUrl, sizeof(url));
     xSemaphoreGive(wxMutex);
 
+    // GitHub's releases list carries every release's notes and assets (easily
+    // >100 KB): ask for the newest few only, and parse the reply as it streams
+    // in (filtered to the names) instead of buffering it in the heap.
+    String u = url;
+    if (u.indexOf("api.github.com/") >= 0 && u.indexOf("/releases") >= 0 && u.indexOf("per_page=") < 0)
+        u += (u.indexOf('?') >= 0 ? "&per_page=5" : "?per_page=5");
+
+    JsonDocument filter;
+    filter[0]["name"] = true;
+    filter[0]["tag_name"] = true;
+    JsonDocument doc;
+    DeserializationError jsonErr = DeserializationError::EmptyInput;
     String body;
-    int code = httpGet(url, body);
+    int code = httpGet(u, body, [&](Stream& s) {
+        jsonErr = deserializeJson(doc, s, DeserializationOption::Filter(filter));
+    });
     char best[24] = "", status[48];
     if (code == HTTP_CODE_OK) {
-        JsonDocument filter;
-        filter[0]["name"] = true;
-        filter[0]["tag_name"] = true;
-        JsonDocument doc;
-        if (deserializeJson(doc, body, DeserializationOption::Filter(filter)) == DeserializationError::Ok) {
+        if (jsonErr == DeserializationError::Ok) {
             for (JsonObject o : doc.as<JsonArray>()) {
                 const char* n = o["tag_name"].is<const char*>() ? o["tag_name"].as<const char*>() : o["name"].as<const char*>();
-                if (!n || strlen(n) >= sizeof(best)) continue;
+                // the name is shown on the status page and sent via MQTT: only
+                // plain version characters are accepted (wxValidVersionTag)
+                if (!n || strlen(n) >= sizeof(best) || !wxValidVersionTag(n)) continue;
                 if (compareVersions(n, FIRMWARE_VERSION) > 0 && (!best[0] || compareVersions(n, best) > 0)) strlcpy(best, n, sizeof(best));
             }
             snprintf(status, sizeof(status), best[0] ? "newer firmware: %s" : "up to date", best);
@@ -591,7 +641,19 @@ void wxUploadTask(void*)
                 continue;
             }
             if (t.windowStartMs == 0) t.windowStartMs = now;
-            if (now - t.windowStartMs < (unsigned long)intervalSec * 1000UL) {
+            const unsigned long intervalMs = (unsigned long)intervalSec * 1000UL;
+            if (now - t.windowStartMs < intervalMs) {
+                xSemaphoreGive(wxMutex);
+                continue;
+            }
+            // Normally sent within seconds of the interval ending. Much older
+            // means WiFi or the clock was gone for a while (this loop skips
+            // everything without WiFi, pushCycle keeps aggregating): start a
+            // fresh window rather than upload an hours-long average as current.
+            if (now - t.windowStartMs >= 2 * intervalMs) {
+                t.agg = Agg{};
+                t.windowStartMs = now;
+                setReply(t.st, "window restarted after an outage");
                 xSemaphoreGive(wxMutex);
                 continue;
             }
@@ -632,6 +694,11 @@ void wxUploadTask(void*)
 
 void wxUploadSetup()
 {
+    if (rtcPending.magic != PENDING_RAIN_MAGIC || rtcPending.check != pendingRainCheck(rtcPending)) {
+        rtcPending = PendingRain{};
+        rtcPending.magic = PENDING_RAIN_MAGIC;
+        sealPendingRain();
+    }
     if (rtcRain.magic != DAILY_RAIN_MAGIC || rtcRain.check != dailyRainCheck(rtcRain)) {
         rtcRain = DailyRain{};
         rtcRain.magic = DAILY_RAIN_MAGIC;
@@ -681,10 +748,14 @@ void wxUploadPushCycle(const WindStats& w10)
     }
 
     if (srcActive(SG_RAIN)) {
-        rollDailyRain();
-        rtcRain.mm += rainMM;
-        if (rainMM > 0.0f && timeIsValid()) rtcRain.lastRainEpoch = (int64_t)time(nullptr);
-        sealDailyRain();
+        if (rollDailyRain()) {
+            rtcRain.mm += rainMM;
+            if (rainMM > 0.0f) rtcRain.lastRainEpoch = (int64_t)time(nullptr);
+            sealDailyRain();
+        } else if (rainMM > 0.0f) {   // clock unknown: today's date isn't known yet
+            rtcPending.mm += rainMM;
+            sealPendingRain();
+        }
     }
 
     xSemaphoreGive(wxMutex);
@@ -706,9 +777,8 @@ void wxUploadStatus(WxTargetStatus out[WX_TARGET_COUNT])
 float wxDailyRainMm(bool& valid)
 {
     xSemaphoreTake(wxMutex, portMAX_DELAY);
-    rollDailyRain();
-    valid = rtcRain.ymd != 0;
-    float mm = rtcRain.mm;
+    valid = rollDailyRain() && rtcRain.ymd != 0;
+    float mm = valid ? rtcRain.mm : rtcRain.mm + rtcPending.mm;
     xSemaphoreGive(wxMutex);
     return mm;
 }
@@ -717,8 +787,7 @@ void wxDailyStats(WxDailyStats& out)
 {
     out = WxDailyStats{};
     xSemaphoreTake(wxMutex, portMAX_DELAY);
-    rollDailyRain();
-    out.valid      = rtcRain.ymd != 0;
+    out.valid      = rollDailyRain() && rtcRain.ymd != 0;
     out.rainTodayMm = rtcRain.mm;
     out.sunTodaySec = rtcRain.sunSec;
     out.yesterdayValid   = prevIsYesterday();
@@ -732,9 +801,13 @@ void wxAddSunshine(float sec)
 {
     if (sec <= 0.0f) return;
     xSemaphoreTake(wxMutex, portMAX_DELAY);
-    rollDailyRain();
-    rtcRain.sunSec += sec;
-    sealDailyRain();
+    if (rollDailyRain()) {
+        rtcRain.sunSec += sec;
+        sealDailyRain();
+    } else {
+        rtcPending.sunSec += sec;
+        sealPendingRain();
+    }
     xSemaphoreGive(wxMutex);
 }
 

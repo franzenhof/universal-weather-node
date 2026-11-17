@@ -3,6 +3,7 @@
 #include <esp_sleep.h>
 #include <esp_task_wdt.h>
 #include <driver/gpio.h>
+#include <driver/pcnt.h>
 #include "config.h"
 #include "globals.h"
 #include "sensors.h"
@@ -29,10 +30,10 @@ void lowPowerSleep(unsigned long maxMs)
     // sensor pulse is the falling edge there (Rev 1.2: rising) - the same
     // edge the PCNT units count. The AUX pulse input (v2.0) is always inverted.
     const bool inverted = (gCfg.pcbVersion >= PCB_REV_1_3);
-    struct Input { bool en; int pin; volatile uint32_t* count; bool inv; int level; };
-    Input in[3] = { { gCfg.windEn != 0,      gPins.windSpeed, &sleepPulsesWind, inverted, 0 },
-                    { gCfg.rainEn != 0,      gPins.rain,      &sleepPulsesRain, inverted, 0 },
-                    { auxPulseInputUsed(),   PIN_AUX_PULSE,   &sleepPulsesAux,  true,     0 } };
+    struct Input { bool en; int pin; pcnt_unit_t unit; volatile uint32_t* count; bool inv; int level; int16_t pcnt; };
+    Input in[3] = { { gCfg.windEn != 0,    gPins.windSpeed, PCNT_UNIT_WINDSPEED, &sleepPulsesWind, inverted, 0, 0 },
+                    { gCfg.rainEn != 0,    gPins.rain,      PCNT_UNIT_RAIN,      &sleepPulsesRain, inverted, 0, 0 },
+                    { auxPulseInputUsed(), PIN_AUX_PULSE,   PCNT_UNIT_AUX_PULSE, &sleepPulsesAux,  true,     0, 0 } };
 
     Serial.flush();
     const int64_t end = esp_timer_get_time() + (int64_t)maxMs * 1000;
@@ -45,6 +46,7 @@ void lowPowerSleep(unsigned long maxMs)
         for (Input& i : in) {
             if (!i.en) continue;
             i.level = digitalRead(i.pin);
+            pcnt_get_counter_value(i.unit, &i.pcnt);
             gpio_wakeup_enable((gpio_num_t)i.pin, i.level ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
         }
         gpio_wakeup_enable((gpio_num_t)PIN_BUTTON, GPIO_INTR_LOW_LEVEL);
@@ -55,10 +57,18 @@ void lowPowerSleep(unsigned long maxMs)
         for (Input& i : in) {
             if (!i.en) continue;
             int now = digitalRead(i.pin);
-            if (now != i.level && (i.inv ? now == LOW : now == HIGH)) (*i.count)++;
+            // Count in software only if the PCNT did not: an edge just before
+            // the sleep started (or right after the wake) reached the counter.
+            int16_t pcnt = 0;
+            pcnt_get_counter_value(i.unit, &pcnt);
+            if (now != i.level && (i.inv ? now == LOW : now == HIGH) && pcnt == i.pcnt) (*i.count)++;
             gpio_wakeup_disable((gpio_num_t)i.pin);
         }
         gpio_wakeup_disable((gpio_num_t)PIN_BUTTON);
+        // gpio_wakeup_enable() switched the button's interrupt to LOW_LEVEL and
+        // gpio_wakeup_disable() does not restore it - the CHANGE interrupt
+        // (buttonISR, main.cpp) would fire continuously while pressed.
+        gpio_set_intr_type((gpio_num_t)PIN_BUTTON, GPIO_INTR_ANYEDGE);
         esp_task_wdt_reset();
         if (digitalRead(PIN_BUTTON) == LOW) break;   // let loop() handle the button
     }

@@ -85,7 +85,26 @@ int main()
     assert(near(lr.amount(total), 0.8f) && near(mr.amount(total), 0.2f));
     assert(near(lr.rateMmH(total, 3600000), 0.8f));
     assert(lr.rateMmH(total, 500) == 0.0f);   // < 1 s: no rate
-    assert(near(lr.amount(0.4f), 0.4f));      // total reset (downlink 0x01): count from zero
+    assert(near(lr.amount(0.4f), 0.4f));      // safety net: a total below the mark counts from zero
+
+    // ---- more than 65535 pulses in one sample (high-pulse anemometer) ----
+    WindRing rb;
+    g = rb.push(100000, 3000, 0, false, 0.001f);
+    assert(near(g, 100000.0f / 3.0f * 0.001f));
+    st = rb.stats(WIND_SPAN_10MIN_MS, 0.001f);
+    assert(st.valid && !st.dirValid);       // no vane reading stored as "no direction"
+    WindAcc big;
+    big.add(100000, 2000, 0, false, 0.0f);
+    assert(near(big.result(0.001f).meanMs, 50.0f));
+
+    // ---- WindGust (2nd anemometer): same 3-s window as the ring ----
+    WindGust wg;
+    float wgMax = 0;
+    for (uint16_t p : p1) { float x = wg.push(p, 1000, 1.0f); if (x > wgMax) wgMax = x; }
+    assert(near(wgMax, 4.0f));
+    wg.clear();
+    assert(near(wg.push(24, 3000, 1.0f), 8.0f));
+    assert(near(wg.push(3, 990, 1.0f), 27.0f / 3.99f));   // 3990 ms incl. the previous sample
 
     // ---- wind sample interval steps ----
     assert(windSampleSecNormalized(1) == 1 && windSampleSecNormalized(2) == 1);

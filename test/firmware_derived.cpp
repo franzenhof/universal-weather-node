@@ -66,5 +66,10 @@ int main()
     assert(compareVersions("v1.1.1", "1.1.1") == 0);
     assert(compareVersions("1.10.0", "1.9.9") > 0);
     assert(compareVersions("dev", "2.0.0") == 0);
+    assert(compareVersions("2.0.0-dirty", "2.0.0") == 0);              // bare git-describe "dirty"
+    assert(compareVersions("2.0.0-DIRTY", "2.0.0-beta.1") > 0);
+    assert(compareVersions("2.0.0-RC.1", "2.0.0-beta.3") > 0);         // tags compare case-insensitively
+    assert(compareVersions("2.0.0-Beta.3", "2.0.0-beta.3") == 0);
+    assert(compareVersions("2.0.0-rc.1-dirty", "2.0.0-rc.1") == 0);
     return 0;
 }

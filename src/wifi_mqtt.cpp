@@ -11,6 +11,9 @@
 
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <ping/ping_sock.h>
+#include <lwip/dns.h>
+#include <lwip/tcpip.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
@@ -29,7 +32,11 @@ enum class WifiState { Idle, Connecting, Up, Backoff, Testing };
 constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000;
 constexpr unsigned long WIFI_BACKOFF_MS         = 30000;
 constexpr unsigned long WIFI_DROP_BACKOFF_MS    = 5000;
-constexpr unsigned long MQTT_RETRY_INTERVAL_MS  = 15000;
+// MQTT reconnect: 15 s after a failure, doubling up to 5 min while the
+// broker stays unreachable (each attempt can block loop() for a few seconds),
+// back to 15 s after a successful connection.
+constexpr unsigned long MQTT_RETRY_MIN_MS       = 15000;
+constexpr unsigned long MQTT_RETRY_MAX_MS       = 300000;
 
 // WiFiClientSecure/PubSubClient default to a 30 s TCP connect timeout, a
 // 120 s TLS handshake timeout, and a 15 s MQTT CONNACK wait respectively —
@@ -41,9 +48,9 @@ constexpr unsigned long MQTT_RETRY_INTERVAL_MS  = 15000;
 // for anywhere near that long. Applied to both clients (plain WiFiClient's
 // own default connect timeout is already a short 3 s, but set explicitly
 // here too so it doesn't silently drift if that default ever changes).
-constexpr uint32_t MQTT_CONNECT_TIMEOUT_S   = 5;
+constexpr uint32_t MQTT_CONNECT_TIMEOUT_S   = 3;
 constexpr uint32_t MQTT_HANDSHAKE_TIMEOUT_S = 5;
-constexpr uint16_t MQTT_SOCKET_TIMEOUT_S    = 5;
+constexpr uint16_t MQTT_SOCKET_TIMEOUT_S    = 4;
 
 constexpr const char* HA_DISCOVERY_PREFIX = "homeassistant";
 constexpr const char* AVAIL_ONLINE        = "online";
@@ -57,29 +64,47 @@ WifiState     wifiState          = WifiState::Idle;
 unsigned long wifiStateAtMs      = 0;
 unsigned long wifiBackoffUntilMs = 0;
 unsigned long lastMqttAttemptMs  = 0;
+unsigned long mqttRetryMs        = 0;   // 0 = no failed attempt yet (connect right away)
 
 // WiFi change request (web task -> pollWifi). changeMux guards the strings.
 portMUX_TYPE  changeMux          = portMUX_INITIALIZER_UNLOCKED;
 volatile bool changePending      = false;
 volatile bool changeTesting      = false;
 bool          changeNoTest       = false;   // pre-provisioning: store directly
+bool          changeDhcp         = false;   // test/store the new network with DHCP
 unsigned long changeRequestedMs  = 0;
 char          changeSsid[33]     = {};
 char          changePass[65]     = {};
-char          prevSsid[33]       = {};
-char          prevPass[65]       = {};
-char          changeResult[160]  = {};
+wifi_config_t prevConf           = {};      // driver config of the previous network (rollback)
+char          changeResult[256]  = {};
 constexpr unsigned long WIFI_CHANGE_DELAY_MS = 1500;   // let the settings response go out first
+// After the test network connected: time for the reachability probe
+// (gateway ping / DNS lookup) before the change counts as failed.
+constexpr unsigned long WIFI_PROBE_TIMEOUT_MS = 10000;
+bool          probeStarted       = false;
+unsigned long probeStartedMs     = 0;
+// Probe results, set from the ping task / lwIP thread. probeGen tags each
+// test so a late callback of an earlier test is ignored.
+volatile uint32_t probeGen       = 0;
+volatile bool     probeOk        = false;
+char              probeHost[64]  = {};
 
 char topicData[96]  = {};
 char topicCmd[96]   = {};
 char topicAvail[96] = {};
 
+// '+' and '#' are MQTT wildcards and not allowed in a publish topic (the
+// broker drops the connection) - replaced by '_'. Everything else (also
+// spaces and '/') is valid in topics and kept, so existing topics stay.
 const char* topicPrefix()
 {
-    if (gCfg.mqttTopic[0]  != '\0') return gCfg.mqttTopic;
-    if (gCfg.deviceName[0] != '\0') return gCfg.deviceName;
-    return "weathernode";
+    static char prefix[sizeof(gCfg.mqttTopic)];
+    const char* src = gCfg.mqttTopic[0]  != '\0' ? gCfg.mqttTopic
+                    : gCfg.deviceName[0] != '\0' ? gCfg.deviceName
+                    : "weathernode";
+    strlcpy(prefix, src, sizeof(prefix));
+    for (char* c = prefix; *c; c++) if (*c == '+' || *c == '#') *c = '_';
+    return prefix;
 }
 
 void buildTopics()
@@ -89,13 +114,20 @@ void buildTopics()
     snprintf(topicAvail, sizeof(topicAvail), "%s/status", topicPrefix());
 }
 
+// MQTT client id and Home Assistant node_id/unique_id prefix: the device
+// name restricted to [A-Za-z0-9_-] (mqttSafeId), else "weathernode-" plus
+// the full 48-bit MAC (unique per board; the lower 32 bits alone are the
+// shared Espressif OUI + one byte).
 const char* mqttClientId()
 {
     static char id[40];
     if (gCfg.deviceName[0] != '\0') {
-        strlcpy(id, gCfg.deviceName, sizeof(id));
+        mqttSafeId(gCfg.deviceName, id, sizeof(id));
     } else {
-        snprintf(id, sizeof(id), "weathernode-%08X", (uint32_t)ESP.getEfuseMac());
+        uint64_t mac = ESP.getEfuseMac();   // byte 0 of the MAC in the lowest bits
+        snprintf(id, sizeof(id), "weathernode-%02X%02X%02X%02X%02X%02X",
+                 (unsigned)(mac & 0xFF), (unsigned)((mac >> 8) & 0xFF), (unsigned)((mac >> 16) & 0xFF),
+                 (unsigned)((mac >> 24) & 0xFF), (unsigned)((mac >> 32) & 0xFF), (unsigned)((mac >> 40) & 0xFF));
     }
     return id;
 }
@@ -133,7 +165,16 @@ void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
     device["model"]        = "Universal Weather Node";
     device["sw_version"]   = FIRMWARE_VERSION;
 
-    char payload[768];
+    // measured first: serializeJson() into a too small buffer silently cuts
+    // the JSON off, and HA would reject the truncated config.
+    char payload[1024];
+    size_t len = measureJson(doc);
+    size_t packetSize = MQTT_MAX_HEADER_SIZE + 2 + strlen(configTopic) + len;
+    if (doc.overflowed() || len >= sizeof(payload) ||
+        (packetSize > mqttClient.getBufferSize() && !mqttClient.setBufferSize((uint16_t)packetSize))) {
+        dbgSerial.printf("MQTT discovery '%s': config too large (%u bytes), skipped\n", key, (unsigned)len);
+        return;
+    }
     size_t n = serializeJson(doc, payload, sizeof(payload));
     mqttClient.publish(configTopic, (const uint8_t*)payload, n, /*retain=*/true);
 }
@@ -362,11 +403,19 @@ void handleCommandMessage(char* /*topic*/, byte* payload, unsigned int length)
 }
 
 // Station mode, hostname and (optional) static IP before every WiFi.begin().
-bool prepareSta()
+// forceDhcp: ignore the configured static IP (a WiFi change to another
+// network - the static address belongs to the current one) and switch the
+// DHCP client back on if a static address was set before.
+bool prepareSta(bool forceDhcp = false)
 {
     WiFi.mode(WIFI_STA);
     if (gCfg.deviceName[0] != '\0') WiFi.setHostname(gCfg.deviceName);
     bool useStaticIp = gCfg.staticIpEn && gCfg.staticIp[0] != '\0';
+    if (useStaticIp && forceDhcp) {
+        const IPAddress none(0, 0, 0, 0);   // not INADDR_NONE: lwIP defines that as 255.255.255.255
+        WiFi.config(none, none, none);      // 0.0.0.0 = DHCP client on
+        return false;
+    }
     if (useStaticIp) {
         IPAddress ip, gw, sn, dns;
         ip.fromString(gCfg.staticIp);
@@ -388,6 +437,73 @@ void setChangeResult(const char* fmt, const char* a, const char* b = "")
     portEXIT_CRITICAL(&changeMux);
 }
 
+// prevConf's SSID as a C string (the driver field has no terminator at 32 chars).
+void prevSsidText(char (&out)[33])
+{
+    memcpy(out, prevConf.sta.ssid, 32);
+    out[32] = '\0';
+}
+
+// Puts the previous network's driver config back - in RAM and flash. Needed
+// on every rollback: WiFi.begin() without arguments re-applies whatever
+// config is active, which would otherwise persist the tested network.
+void restorePrevWifiConfig()
+{
+    esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+    esp_wifi_set_config(WIFI_IF_STA, &prevConf);
+}
+
+// --- Reachability probe of the tested network: ping the gateway (3 echo
+// requests) and look up the NTP server name in parallel; either answer
+// counts. Both run asynchronously (ping task / lwIP thread), pollWifi()
+// only checks probeOk, so loop() never blocks on it. ---
+void onProbePingOk(esp_ping_handle_t, void* gen)
+{
+    if ((uint32_t)(uintptr_t)gen == probeGen) probeOk = true;
+}
+
+void onProbePingEnd(esp_ping_handle_t hdl, void*)
+{
+    esp_ping_delete_session(hdl);
+}
+
+void onProbeDnsFound(const char*, const ip_addr_t* addr, void* gen)
+{
+    if (addr && (uint32_t)(uintptr_t)gen == probeGen) probeOk = true;
+}
+
+void probeDnsLookup(void* gen)   // runs in the lwIP thread (tcpip_callback)
+{
+    ip_addr_t addr;
+    // ERR_OK = answered from the cache (possibly from the previous network),
+    // proves nothing - only an answer from the network (callback) counts.
+    dns_gethostbyname(probeHost, &addr, onProbeDnsFound, gen);
+}
+
+void startProbe()
+{
+    uint32_t gen = probeGen;
+    probeOk = false;
+
+    IPAddress gw = WiFi.gatewayIP();
+    if ((uint32_t)gw != 0) {
+        esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+        cfg.count       = 3;
+        cfg.interval_ms = 500;
+        cfg.timeout_ms  = 1000;
+        IP_ADDR4(&cfg.target_addr, gw[0], gw[1], gw[2], gw[3]);
+        esp_ping_callbacks_t cbs = {};
+        cbs.cb_args         = (void*)(uintptr_t)gen;
+        cbs.on_ping_success = onProbePingOk;
+        cbs.on_ping_end     = onProbePingEnd;
+        esp_ping_handle_t hdl;
+        if (esp_ping_new_session(&cfg, &cbs, &hdl) == ESP_OK && esp_ping_start(hdl) != ESP_OK)
+            esp_ping_delete_session(hdl);
+    }
+    strlcpy(probeHost, gCfg.ntpServer[0] ? gCfg.ntpServer : "pool.ntp.org", sizeof(probeHost));
+    tcpip_callback(probeDnsLookup, (void*)(uintptr_t)gen);
+}
+
 // Starts testing the requested network: the driver config goes to RAM only,
 // so the stored (flash) credentials stay those of the previous network.
 void startWifiTest(unsigned long now)
@@ -397,6 +513,7 @@ void startWifiTest(unsigned long now)
     memcpy(ssid, changeSsid, sizeof(ssid));
     memcpy(pass, changePass, sizeof(pass));
     bool noTest   = changeNoTest;
+    bool dhcp     = changeDhcp;
     changePending = false;
     changeTesting = !noTest;
     portEXIT_CRITICAL(&changeMux);
@@ -407,7 +524,7 @@ void startWifiTest(unsigned long now)
         if (mqttClient.connected()) mqttClient.disconnect();
         WiFi.disconnect();
         esp_wifi_set_storage(WIFI_STORAGE_FLASH);
-        prepareSta();
+        prepareSta(dhcp);
         WiFi.begin(ssid, pass[0] ? pass : nullptr);
         dbgSerial.printf("WiFi: stored '%s' without a test (pre-provisioning), connecting...\n", ssid);
         setChangeResult("Stored the WiFi network \u201c%s\u201d without a test%s.", ssid, "");
@@ -416,25 +533,41 @@ void startWifiTest(unsigned long now)
         return;
     }
 
-    strlcpy(prevSsid, WiFi.SSID().c_str(), sizeof(prevSsid));
-    strlcpy(prevPass, WiFi.psk().c_str(), sizeof(prevPass));
+    // The previous network straight from the driver (= flash, nothing is
+    // in RAM-only mode here): WiFi.SSID() is empty while not associated,
+    // and a rollback to an empty config could never connect again.
+    if (esp_wifi_get_config(WIFI_IF_STA, &prevConf) != ESP_OK || prevConf.sta.ssid[0] == 0) {
+        dbgSerial.println("WiFi: change aborted - could not read the current network's config");
+        setChangeResult("Could not start the WiFi change to \u201c%s\u201d: the current network's settings could "
+                        "not be read, so there would be nothing to return to. Nothing was changed%s.", ssid, "");
+        changeTesting = false;
+        return;
+    }
+
     if (mqttClient.connected()) mqttClient.disconnect();
     WiFi.disconnect();
     esp_wifi_set_storage(WIFI_STORAGE_RAM);
-    prepareSta();
+    prepareSta(dhcp);
     WiFi.begin(ssid, pass[0] ? pass : nullptr);
+    char prevSsid[33];
+    prevSsidText(prevSsid);
     dbgSerial.printf("WiFi: testing new network '%s' for %lus (previous: '%s')\n",
                      ssid, WIFI_CHANGE_TEST_MS / 1000, prevSsid);
+    probeGen      = probeGen + 1;
+    probeStarted  = false;
+    probeOk       = false;
     wifiState     = WifiState::Testing;
     wifiStateAtMs = now;
 }
 
-void finishWifiTest(bool ok, unsigned long now)
+// ok: connected and reachable. reason: why not (log/result text).
+void finishWifiTest(bool ok, unsigned long now, const char* reason = nullptr)
 {
     char ssid[33];
     portENTER_CRITICAL(&changeMux);
     memcpy(ssid, changeSsid, sizeof(ssid));
     portEXIT_CRITICAL(&changeMux);
+    probeGen = probeGen + 1;   // ignore late probe answers
 
     if (ok) {
         // Store the working config (flash) - it is the one in use right now.
@@ -445,13 +578,16 @@ void finishWifiTest(bool ok, unsigned long now)
         setChangeResult("Switched to the WiFi network \u201c%s\u201d (IP %s).", ssid, WiFi.localIP().toString().c_str());
         wifiState = WifiState::Up;
     } else {
+        char prevSsid[33];
+        prevSsidText(prevSsid);
         WiFi.disconnect();
-        esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+        restorePrevWifiConfig();
         prepareSta();
-        WiFi.begin(prevSsid, prevPass[0] ? prevPass : nullptr);
-        dbgSerial.printf("WiFi: '%s' not reachable within %lus - back to '%s'\n", ssid, WIFI_CHANGE_TEST_MS / 1000, prevSsid);
-        setChangeResult("Could not connect to \u201c%s\u201d within 60 s \u2014 back on the previous network \u201c%s\u201d. "
-                        "Check the network name and password.", ssid, prevSsid);
+        WiFi.begin();
+        dbgSerial.printf("WiFi: '%s' %s - back to '%s'\n", ssid, reason, prevSsid);
+        char msg[sizeof(changeResult)];
+        snprintf(msg, sizeof(msg), "Could not switch to \u201c%%s\u201d: %s \u2014 back on the previous network \u201c%%s\u201d.", reason);
+        setChangeResult(msg, ssid, prevSsid);
         wifiState     = WifiState::Connecting;
         wifiStateAtMs = now;
     }
@@ -462,7 +598,12 @@ void pollWifi(unsigned long now)
 {
     if (!gCfg.wifiEn) {
         changePending = false;
-        if (changeTesting) { esp_wifi_set_storage(WIFI_STORAGE_FLASH); changeTesting = false; }
+        if (changeTesting) {
+            // test cut short: the tested network must not end up in flash
+            probeGen = probeGen + 1;
+            restorePrevWifiConfig();
+            changeTesting = false;
+        }
         if (wifiState != WifiState::Idle) {
             if (mqttClient.connected()) mqttClient.disconnect();
             WiFi.disconnect(true);
@@ -506,12 +647,28 @@ void pollWifi(unsigned long now)
             break;
 
         case WifiState::Backoff:
-            if (now >= wifiBackoffUntilMs) wifiState = WifiState::Idle;
+            if ((long)(now - wifiBackoffUntilMs) >= 0) wifiState = WifiState::Idle;   // wrap-safe
             break;
 
         case WifiState::Testing:
-            if (WiFi.status() == WL_CONNECTED)                  finishWifiTest(true, now);
-            else if (now - wifiStateAtMs > WIFI_CHANGE_TEST_MS) finishWifiTest(false, now);
+            if (probeOk) {
+                finishWifiTest(true, now);
+            } else if (now - wifiStateAtMs > WIFI_CHANGE_TEST_MS) {
+                finishWifiTest(false, now, probeStarted
+                    ? "connected, but neither the gateway nor DNS answered (wrong network settings or no internet?)"
+                    : "not reachable within 60 s (check the network name and password)");
+            } else if (WiFi.status() == WL_CONNECTED) {
+                if (!probeStarted) {
+                    dbgSerial.printf("WiFi: test network connected, IP %s - checking gateway/DNS\n",
+                                     WiFi.localIP().toString().c_str());
+                    probeStarted   = true;
+                    probeStartedMs = now;
+                    startProbe();
+                } else if (now - probeStartedMs > WIFI_PROBE_TIMEOUT_MS) {
+                    finishWifiTest(false, now,
+                        "connected, but neither the gateway nor DNS answered (wrong network settings or no internet?)");
+                }
+            }
             break;
     }
 }
@@ -525,7 +682,7 @@ void pollMqtt(unsigned long now)
         return;
     }
 
-    if (now - lastMqttAttemptMs < MQTT_RETRY_INTERVAL_MS) return;
+    if (mqttRetryMs && now - lastMqttAttemptMs < mqttRetryMs) return;
     lastMqttAttemptMs = now;
 
     switch (gCfg.mqttTlsMode) {
@@ -560,13 +717,15 @@ void pollMqtt(unsigned long now)
                               topicAvail, 0, true, AVAIL_OFFLINE);
 
     if (connected) {
+        mqttRetryMs = 0;
         dbgSerial.printf("MQTT connected as '%s', topic prefix '%s'\n", mqttClientId(), topicPrefix());
         mqttClient.publish(topicAvail, AVAIL_ONLINE, /*retain=*/true);
         if (gCfg.mqttCtrlEn) mqttClient.subscribe(topicCmd);
         publishHomeAssistantDiscovery();
     } else {
+        mqttRetryMs = mqttRetryMs ? min(mqttRetryMs * 2, MQTT_RETRY_MAX_MS) : MQTT_RETRY_MIN_MS;
         dbgSerial.printf("MQTT connect failed, rc=%d (retry in %lus)\n",
-                      mqttClient.state(), MQTT_RETRY_INTERVAL_MS / 1000);
+                      mqttClient.state(), mqttRetryMs / 1000);
     }
 }
 
@@ -583,7 +742,7 @@ void wifiMqttSetup()
 
 bool wifiIsConnected() { return wifiState == WifiState::Up; }
 
-bool wifiRequestChange(const char* ssid, const char* pass, bool test)
+bool wifiRequestChange(const char* ssid, const char* pass, bool test, bool dhcp)
 {
     size_t sl = strlen(ssid), pl = strlen(pass);
     if (sl < 1 || sl > 32 || (pl != 0 && (pl < 8 || pl > 63))) return false;
@@ -591,6 +750,7 @@ bool wifiRequestChange(const char* ssid, const char* pass, bool test)
     strlcpy(changeSsid, ssid, sizeof(changeSsid));
     strlcpy(changePass, pass, sizeof(changePass));
     changeNoTest      = !test;
+    changeDhcp        = dhcp;
     changeResult[0]   = '\0';
     changeRequestedMs = millis();
     changePending     = true;
@@ -609,7 +769,15 @@ String wifiChangeResult()
     return String(r);
 }
 
-String wifiCurrentPassword() { return WiFi.psk(); }
+String wifiCurrentPassword()
+{
+    wifi_config_t conf;
+    if (esp_wifi_get_config(WIFI_IF_STA, &conf) != ESP_OK) return String();
+    char pass[sizeof(conf.sta.password) + 1];
+    memcpy(pass, conf.sta.password, sizeof(conf.sta.password));
+    pass[sizeof(conf.sta.password)] = '\0';   // a 64-char PSK has no terminator
+    return String(pass);
+}
 bool mqttIsConnected() { return gCfg.mqttEn && mqttClient.connected(); }
 
 void wifiMqttPoll()

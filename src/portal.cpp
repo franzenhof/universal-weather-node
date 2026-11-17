@@ -13,10 +13,39 @@
 #include <WiFiManager.h>
 #include <ArduinoOTA.h>
 #include <ArduinoJson.h>
+#include <Update.h>
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
 #endif
+
+// WiFiManager inserts parameter values unescaped into value='...': a ' in
+// a stored value (password, device name, ...) cut it off on the next save.
+// Values are therefore shown HTML-escaped; the browser decodes the entities
+// and submits the original text.
+static String htmlAttr(const char* s)
+{
+    String out;
+    for (; *s; s++) {
+        switch (*s) {
+            case '&':  out += "&amp;";  break;
+            case '<':  out += "&lt;";   break;
+            case '>':  out += "&gt;";   break;
+            case '"':  out += "&quot;"; break;
+            case '\'': out += "&#39;";  break;
+            default:   out += *s;       break;
+        }
+    }
+    return out;
+}
+
+// Firmware upload page for the password-protected /update (see below).
+static const char OTA_PAGE_HTML[] PROGMEM =
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
+    "<title>Firmware update</title></head><body style='font-family:sans-serif;max-width:480px;margin:1rem auto;padding:0 1rem;'>"
+    "<h3>Firmware update</h3><form method='POST' action='/u' enctype='multipart/form-data'>"
+    "<input type='file' name='update' accept='.bin,application/octet-stream'><br/><br/>"
+    "<button type='submit'>Update</button></form><p><a href='/'>Back</a></p></body></html>";
 
 // ============================================================================
 // WI-FI CONFIGURATION PORTAL
@@ -36,6 +65,12 @@ Config runConfigPortal(const Config& cur)
     // the form's sensor-type field still shows the pre-calibration value -
     // without this, closing the portal would write the old table back.
     bool calibratedThisSession = false;
+
+    // Admin password as stored when the portal opened: protects ArduinoOTA
+    // and the browser firmware upload (/update) below. static: used from the
+    // web server/OTA callbacks, runConfigPortal() is never reentered.
+    static char otaPass[sizeof(cur.webAdminPass)];
+    strlcpy(otaPass, cur.webAdminPass, sizeof(otaPass));
 
     // If the parallel WiFi/MQTT transport (wifi_mqtt.cpp) already has an
     // active STA connection at this point, WiFiManager's own "disconnect
@@ -79,7 +114,7 @@ Config runConfigPortal(const Config& cur)
     display.drawString(0, 0, "Starting config portal...");
     display.display();
 
-    char b_dev[17], b_join[17], b_key[33], b_region[8], b_pcb[4], b_alt[8], b_uplink[8], b_sample[4], b_mqttsec[8], b_lorawagg[2], b_mqttwagg[2], b_rfen[2], b_rfproto[2], b_windoff[6], b_windunit[2], b_debug[2], b_cpu[4], b_payfmt[2], b_unitsys[2];
+    char b_dev[17], b_join[17], b_region[8], b_pcb[4], b_alt[8], b_uplink[8], b_sample[4], b_mqttsec[8], b_lorawagg[2], b_mqttwagg[2], b_rfen[2], b_rfproto[2], b_windoff[6], b_windunit[2], b_debug[2], b_cpu[4], b_payfmt[2], b_unitsys[2];
     char b_rainmmtip[12], b_windmspp[12], b_winddirtyp[2];
     char b_loraen[2], b_lowpower[2], b_vanesave[2];
     itoa(cur.loraEn,          b_loraen,  10);
@@ -87,7 +122,6 @@ Config runConfigPortal(const Config& cur)
     itoa(cur.vanePowerSave,   b_vanesave, 10);
     uint64ToHex(cur.devEui, b_dev, sizeof(b_dev));
     uint64ToHex(cur.joinEui, b_join, sizeof(b_join));
-    bytesToHex(cur.appKey, 16, b_key, sizeof(b_key));
     strlcpy(b_region, cur.region, sizeof(b_region));
     itoa(cur.pcbVersion,       b_pcb,     10);
     itoa(cur.altitudeM,        b_alt,     10);
@@ -163,6 +197,10 @@ Config runConfigPortal(const Config& cur)
              cur.mqttCaCert);
     static char capturedCaCert[sizeof(cur.mqttCaCert)];
     bool capturedCaCertSet = false;
+    // Set once the parameter form was submitted (setSaveParamsCallback). Until
+    // then the text/secret parameters hold their display values (escaped,
+    // empty secrets, checkbox values) - buildConfig() keeps the stored ones.
+    bool paramsSubmitted = false;
 
     // Static IP fields ("ip"/"gw"/"sn"/"dns") are WiFiManager's own built-in
     // form fields on the "Configure WiFi" page, not WiFiManagerParameters, so
@@ -180,7 +218,10 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_vanesave("vanesave", "Low-power mode: switch the wind-vane supply off between readings (PCB v2.0; 0=No, 1=Yes)", b_vanesave, 2);
     WiFiManagerParameter p_dev    ("dev",      "DevEUI (16 hex chars)",                        b_dev,     17);
     WiFiManagerParameter p_join   ("join",     "JoinEUI (16 hex chars)",                       b_join,    17);
-    WiFiManagerParameter p_key    ("key",      "AppKey (32 hex chars)",                        b_key,     33);
+    // Secrets are never prefilled (the portal AP is open): empty field, an
+    // empty submission keeps the stored value.
+    WiFiManagerParameter p_key    ("key",      "AppKey (32 hex chars; leave empty to keep the stored key)", "", 33,
+                                   "placeholder='(unchanged)' autocomplete='off'");
     WiFiManagerParameter p_region ("region",   "LoRaWAN region (EU868, US915, AU915, AS923, IN865, KR920, CN470, RU864)", b_region, 8);
     WiFiManagerParameter p_pcb    ("pcbver",   "PCB revision (12=Rev1.2, 13=Rev1.3, 20=v2.0; v2.0 is detected automatically)", b_pcb, 3);
     WiFiManagerParameter p_alt    ("altitude", "Altitude above sea level in m (0-4000)",       b_alt,     6);
@@ -191,7 +232,11 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_mqttwagg("mqttwagg","MQTT wind values: 0 = interval since the last publish, 1 = 10-min (WMO)", b_mqttwagg, 2);
     WiFiManagerParameter p_rfen    ("rfen",    "Wireless sensors (868 MHz): 1 = receive with the LoRa chip between uplinks", b_rfen, 2);
     WiFiManagerParameter p_rfproto ("rfproto", "Wireless sensor type: 1 = Bresser, 6 = TFA/LaCrosse IT+ (both rates), 2 = IT+ 17.241 kbit/s only, 4 = IT+ 9.579 kbit/s only, 7 = Bresser + IT+ alternating (misses packets, not recommended)", b_rfproto, 2);
-    WiFiManagerParameter p_rfids   ("rfids",   "Wireless sensor IDs (hex, comma-separated, max 4; empty = any)", cur.rfIds, sizeof(cur.rfIds) - 1);
+    // Free-text fields: shown HTML-escaped (htmlAttr), so the field length is
+    // at least the escaped length; Config's own buffer limits the saved text.
+    auto shownLen = [](int maxLen, const String& shown) { return max(maxLen, (int)shown.length()); };
+    const String e_rfids = htmlAttr(cur.rfIds);
+    WiFiManagerParameter p_rfids   ("rfids",   "Wireless sensor IDs (hex, comma-separated, max 4; empty = any)", e_rfids.c_str(), shownLen(sizeof(cur.rfIds) - 1, e_rfids));
     WiFiManagerParameter p_srcs    ("srcs",    "Value sources temp/hum, wind, rain, UV, light (0 auto, 1 board, 2-5 wireless 1-4, 6 off)", b_srcs, 15);
     WiFiManagerParameter p_windoff("windoff",  "Wind direction offset in degrees (-180 to +180)", b_windoff, 5);
 
@@ -259,16 +304,25 @@ Config runConfigPortal(const Config& cur)
     // menu, not here.
     WiFiManagerParameter p_net_section("<div style='margin:1rem 0 0.75rem 0;'><h3>WiFi + MQTT Parameter</h3><p style='margin:0;'>WiFi network credentials and static IP (optional, default DHCP) are configured separately via the \"Configure WiFi\" menu.</p><p style='margin:0.35rem 0 0 0;'>Weather network uploads (AWEKAS, Weather Underground, ...) and time zone are set on the node's web settings page (http://&lt;node-ip&gt;/api/settings) once WiFi is up.</p></div>");
     WiFiManagerParameter p_wifien    ("wifien",     "WiFi enabled (0=No, 1=Yes) - master switch for MQTT/Web API", b_wifien, 2);
-    WiFiManagerParameter p_devname   ("devname",    "Device name (WiFi hostname, MQTT client id, default topic prefix)", cur.deviceName, 33);
+    const String e_devname = htmlAttr(cur.deviceName), e_mqtthost = htmlAttr(cur.mqttHost),
+                 e_mqttuser = htmlAttr(cur.mqttUser), e_mqtttopic = htmlAttr(cur.mqttTopic);
+    WiFiManagerParameter p_devname   ("devname",    "Device name (WiFi hostname, MQTT client id, default topic prefix)", e_devname.c_str(), shownLen(33, e_devname));
     WiFiManagerParameter p_webapien  ("webapien",   "Web REST API + settings page enabled (0=No, 1=Yes)", b_webapien, 2);
-    WiFiManagerParameter p_webadminpw("webadminpw", "Web settings page admin password (required to change settings remotely)", cur.webAdminPass, 33);
+    WiFiManagerParameter p_webadminpw("webadminpw", "Admin password for the web settings page and firmware updates (OTA, /update); leave empty to keep", "", 33,
+                                      cur.webAdminPass[0] ? "type='password' autocomplete='new-password' placeholder='(unchanged)'"
+                                                          : "type='password' autocomplete='new-password' placeholder='(not set)'");
+    WiFiManagerParameter p_webadminpwclr("webadminpwclr", "Remove the stored admin password (settings page locked, OTA unprotected)", "1", 2,
+                                         "type='checkbox'", WFM_LABEL_AFTER);
     WiFiManagerParameter p_mqtten    ("mqtten",     "MQTT publish/control enabled (0=No, 1=Yes)",   b_mqtten,     2);
     WiFiManagerParameter p_mqttctrlen("mqttctrlen", "MQTT command topic enabled (0=No, 1=Yes)",     b_mqttctrlen, 2);
-    WiFiManagerParameter p_mqtthost  ("mqtthost",   "MQTT broker host",                             cur.mqttHost, 65);
+    WiFiManagerParameter p_mqtthost  ("mqtthost",   "MQTT broker host",                             e_mqtthost.c_str(), shownLen(65, e_mqtthost));
     WiFiManagerParameter p_mqttport  ("mqttport",   "MQTT broker port (standard: 1883 = plain/no TLS, 8883 = TLS)", b_mqttport, 7);
-    WiFiManagerParameter p_mqttuser  ("mqttuser",   "MQTT username (optional)",                     cur.mqttUser, 33);
-    WiFiManagerParameter p_mqttpass  ("mqttpass",   "MQTT password (optional)",                     cur.mqttPass, 33);
-    WiFiManagerParameter p_mqtttopic ("mqtttopic",  "MQTT topic prefix (optional, default = device name)", cur.mqttTopic, 65);
+    WiFiManagerParameter p_mqttuser  ("mqttuser",   "MQTT username (optional)",                     e_mqttuser.c_str(), shownLen(33, e_mqttuser));
+    WiFiManagerParameter p_mqttpass  ("mqttpass",   "MQTT password (optional; leave empty to keep)", "", 33,
+                                      cur.mqttPass[0] ? "type='password' autocomplete='new-password' placeholder='(unchanged)'"
+                                                      : "type='password' autocomplete='new-password' placeholder='(not set)'");
+    WiFiManagerParameter p_mqttpassclr("mqttpassclr", "Remove the stored MQTT password", "1", 2, "type='checkbox'", WFM_LABEL_AFTER);
+    WiFiManagerParameter p_mqtttopic ("mqtttopic",  "MQTT topic prefix (optional, default = device name)", e_mqtttopic.c_str(), shownLen(65, e_mqtttopic));
     WiFiManagerParameter p_mqtttls   ("mqtttls",    "MQTT security (0=plain/no TLS, 1=TLS/trust any cert, 2=TLS/verify cert below)", b_mqtttls, 2);
     WiFiManagerParameter p_cacert_html(b_cacert_html);
 
@@ -300,6 +354,48 @@ Config runConfigPortal(const Config& cur)
     // - /calibrate*: guided wind-direction calibration for resistor-ladder/
     //   reed-switch vanes (see include/calibrate_page.h)
     wm.setWebServerCallback([&wm, &calibratedThisSession]() {
+        // Firmware upload with an admin password set: registered before
+        // WiFiManager's own /update and /u (this callback runs first, the
+        // first matching handler wins), same upload flow plus Digest auth.
+        // Without a password, WiFiManager's open handlers stay in place.
+        if (otaPass[0]) {
+            static bool uploadAuthOk = false, uploadOk = false;
+            wm.server->on("/update", HTTP_ANY, [&wm]() {
+                if (!wm.server->authenticate("admin", otaPass)) {
+                    wm.server->requestAuthentication(DIGEST_AUTH, "WeatherNode firmware update");
+                    return;
+                }
+                wm.server->send_P(200, "text/html; charset=utf-8", OTA_PAGE_HTML);
+            });
+            wm.server->on("/u", HTTP_POST, [&wm]() {
+                if (!uploadAuthOk) {
+                    wm.server->requestAuthentication(DIGEST_AUTH, "WeatherNode firmware update");
+                    return;
+                }
+                wm.server->send(200, "text/plain", uploadOk ? "Update successful, restarting..."
+                                                            : String("Update failed: ") + Update.errorString());
+                if (uploadOk) { delay(1000); ESP.restart(); }
+            }, [&wm]() {
+                HTTPUpload& up = wm.server->upload();
+                if (up.status == UPLOAD_FILE_START) {
+                    uploadAuthOk = wm.server->authenticate("admin", otaPass);
+                    uploadOk     = false;
+                    dbgSerial.printf("Portal OTA: upload %s\n", uploadAuthOk ? "started" : "refused (not authenticated)");
+                    if (uploadAuthOk && !Update.begin(UPDATE_SIZE_UNKNOWN)) dbgSerial.printf("Portal OTA: %s\n", Update.errorString());
+                } else if (!uploadAuthOk) {
+                    return;   // the body is read and discarded
+                } else if (up.status == UPLOAD_FILE_WRITE) {
+                    if (Update.isRunning()) Update.write(up.buf, up.currentSize);
+                } else if (up.status == UPLOAD_FILE_END) {
+                    if (Update.isRunning()) {
+                        uploadOk = Update.end(true);
+                        if (!uploadOk) dbgSerial.printf("Portal OTA: %s\n", Update.errorString());
+                    }
+                } else if (up.status == UPLOAD_FILE_ABORTED) {
+                    Update.abort();
+                }
+            });
+        }
         wm.server->on("/decoder", [&wm]() {
             wm.server->sendHeader("Content-Disposition",
                                   "attachment; filename=\"weather-node-decoder.js\"");
@@ -438,7 +534,7 @@ Config runConfigPortal(const Config& cur)
         // >= 0, not > 0: 0 m (sea level) is a valid altitude and must not be
         // silently rejected in favor of the previously stored value.
         if (atoi(p_alt.getValue()) >= 0) c.altitudeM = atoi(p_alt.getValue());
-        if (atoi(p_uplink.getValue()) > 0) c.uplinkIntervalSec = atoi(p_uplink.getValue());
+        { int u = atoi(p_uplink.getValue()); if (u >= 5 && u <= 3600) c.uplinkIntervalSec = u; }
         int ss = atoi(p_sample.getValue());
         c.sampleSec        = (ss > 0) ? windSampleSecNormalized(ss) : c.sampleSec;
         c.loraWindAgg      = atoi(p_lorawagg.getValue()) == 1 ? 1 : 0;
@@ -447,7 +543,7 @@ Config runConfigPortal(const Config& cur)
         c.mqttIntervalSec  = (ms == 0 || (ms >= 2 && ms <= 3600)) ? ms : c.mqttIntervalSec;
         { int v = atoi(p_rfen.getValue()); c.rfEn = v == RF_RADIO_SX1262 ? RF_RADIO_SX1262 : RF_RADIO_OFF; }
         { int v = atoi(p_rfproto.getValue()); if (v >= 1 && v <= RF_PROTO_ALL) c.rfProto = v; }
-        strlcpy(c.rfIds, p_rfids.getValue(), sizeof(c.rfIds));
+        if (paramsSubmitted) strlcpy(c.rfIds, p_rfids.getValue(), sizeof(c.rfIds));
         {
             const char* p = p_srcs.getValue();
             for (int i = 0; i < 5 && *p; i++) {
@@ -486,7 +582,7 @@ Config runConfigPortal(const Config& cur)
         c.lowPowerEn = atoi(p_lowpower.getValue()) ? 1 : 0;
         c.vanePowerSave = atoi(p_vanesave.getValue()) ? 1 : 0;
         c.wifiEn     = atoi(p_wifien.getValue()) ? 1 : 0;
-        strlcpy(c.deviceName, p_devname.getValue(), sizeof(c.deviceName));
+        if (paramsSubmitted) strlcpy(c.deviceName, p_devname.getValue(), sizeof(c.deviceName));
         // Static IP fields only come from the separate "Configure WiFi" page
         // (see setPreSaveConfigCallback below) — leave c.staticIpEn/staticIp
         // untouched (keep whatever cur/previous NVS state had) unless that
@@ -507,15 +603,21 @@ Config runConfigPortal(const Config& cur)
             }
         }
         c.webApiEn   = atoi(p_webapien.getValue()) ? 1 : 0;
-        strlcpy(c.webAdminPass, p_webadminpw.getValue(), sizeof(c.webAdminPass));
+        if (paramsSubmitted) {
+            if (!strcmp(p_webadminpwclr.getValue(), "1")) c.webAdminPass[0] = '\0';
+            else if (p_webadminpw.getValue()[0])          strlcpy(c.webAdminPass, p_webadminpw.getValue(), sizeof(c.webAdminPass));
+        }
         c.mqttEn     = atoi(p_mqtten.getValue()) ? 1 : 0;
         c.mqttCtrlEn = atoi(p_mqttctrlen.getValue()) ? 1 : 0;
-        strlcpy(c.mqttHost, p_mqtthost.getValue(), sizeof(c.mqttHost));
+        if (paramsSubmitted) strlcpy(c.mqttHost, p_mqtthost.getValue(), sizeof(c.mqttHost));
         int mqttPortVal = atoi(p_mqttport.getValue());
         if (mqttPortVal > 0 && mqttPortVal <= 65535) c.mqttPort = mqttPortVal;
-        strlcpy(c.mqttUser, p_mqttuser.getValue(), sizeof(c.mqttUser));
-        strlcpy(c.mqttPass, p_mqttpass.getValue(), sizeof(c.mqttPass));
-        strlcpy(c.mqttTopic, p_mqtttopic.getValue(), sizeof(c.mqttTopic));
+        if (paramsSubmitted) {
+            strlcpy(c.mqttUser, p_mqttuser.getValue(), sizeof(c.mqttUser));
+            if (!strcmp(p_mqttpassclr.getValue(), "1")) c.mqttPass[0] = '\0';
+            else if (p_mqttpass.getValue()[0])          strlcpy(c.mqttPass, p_mqttpass.getValue(), sizeof(c.mqttPass));
+            strlcpy(c.mqttTopic, p_mqtttopic.getValue(), sizeof(c.mqttTopic));
+        }
         int mqttTlsVal = atoi(p_mqtttls.getValue());
         c.mqttTlsMode = (mqttTlsVal >= MQTT_TLS_NONE && mqttTlsVal <= MQTT_TLS_VERIFY) ? mqttTlsVal : MQTT_TLS_NONE;
         // Only overwrite the stored CA cert if the /param form was actually
@@ -531,10 +633,11 @@ Config runConfigPortal(const Config& cur)
     // WiFiManagerParameter, so it isn't populated by doParamSave() the usual
     // way. setSaveParamsCallback() fires right after params are saved, while
     // wm.server still has the submitted request's args available.
-    wm.setSaveParamsCallback([&wm, &capturedCaCertSet, &buildConfig]() {
+    wm.setSaveParamsCallback([&wm, &capturedCaCertSet, &paramsSubmitted, &buildConfig]() {
         String v = wm.server->arg("mqttcacert");
         strlcpy(capturedCaCert, v.c_str(), sizeof(capturedCaCert));
         capturedCaCertSet = true;
+        paramsSubmitted   = true;
 
         // Persist immediately. The "Universal-Weather-Node Parameter" page
         // (/param) is a separate form from "Configure WiFi", and
@@ -604,11 +707,12 @@ Config runConfigPortal(const Config& cur)
 
     wm.addParameter(&p_net_section);
     wm.addParameter(&p_wifien);   wm.addParameter(&p_devname);
-    wm.addParameter(&p_webapien); wm.addParameter(&p_webadminpw);
+    wm.addParameter(&p_webapien); wm.addParameter(&p_webadminpw); wm.addParameter(&p_webadminpwclr);
     wm.addParameter(&p_mqtten);   wm.addParameter(&p_mqttctrlen);
     wm.addParameter(&p_mqtthost); wm.addParameter(&p_mqttport); wm.addParameter(&p_mqttuser);
     wm.addParameter(&p_mqttsec);  wm.addParameter(&p_mqttwagg);
-    wm.addParameter(&p_mqttpass); wm.addParameter(&p_mqtttopic);wm.addParameter(&p_mqtttls);
+    wm.addParameter(&p_mqttpass); wm.addParameter(&p_mqttpassclr);
+    wm.addParameter(&p_mqtttopic);wm.addParameter(&p_mqtttls);
     wm.addParameter(&p_cacert_html);
 
     // Safety net for an abandoned portal session: WiFiManager's default
@@ -635,8 +739,12 @@ Config runConfigPortal(const Config& cur)
         display.display();
     });
 
-    // ArduinoOTA running in parallel to the portal in its own task (firmware update without USB)
+    // ArduinoOTA running in parallel to the portal in its own task (firmware
+    // update without USB). The portal AP is open, so with an admin password
+    // set, OTA needs it (espota/PlatformIO: --auth / upload_flags). Without
+    // one, OTA stays open like before.
     ArduinoOTA.setHostname("weather-node");
+    if (otaPass[0]) ArduinoOTA.setPassword(otaPass);
     ArduinoOTA.onStart([]()  { dbgSerial.println("OTA: Start"); });
     ArduinoOTA.onEnd([]()    { dbgSerial.println("OTA: Done"); });
     ArduinoOTA.onError([](ota_error_t e) { dbgSerial.printf("OTA Error %u\n", e); });

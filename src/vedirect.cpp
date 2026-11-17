@@ -85,6 +85,8 @@ void VeDirectParser::storeField()
 
 // Applies a checksum-verified block. Only numeric labels this node uses are
 // read; everything else (PID, SER#, FW, LOAD, alarms, history) is ignored.
+// A label sent as "---" (or any non-number) is not available right now (e.g.
+// SOC while a BMV is not synchronized): NAN / -1, not the last number.
 void VeDirectParser::commit()
 {
     for (size_t i = 0; i < fieldCount; i++) {
@@ -92,15 +94,17 @@ void VeDirectParser::commit()
         const char* v = fields[i].value;
         char* end = nullptr;
         long x = strtol(v, &end, 10);
-        if (end == v || *end != '\0') continue;   // "---" (not available) or text
-        if      (!strcmp(n, "V"))   vals.battV         = x / 1000.0f;
-        else if (!strcmp(n, "I"))   vals.battA         = x / 1000.0f;
-        else if (!strcmp(n, "VPV")) vals.pvV           = x / 1000.0f;
-        else if (!strcmp(n, "PPV")) vals.pvW           = (float)x;
-        else if (!strcmp(n, "H20")) vals.yieldTodayKwh = x / 100.0f;
-        else if (!strcmp(n, "SOC")) vals.socPct        = x / 10.0f;
-        else if (!strcmp(n, "IL"))  vals.loadA         = x / 1000.0f;
-        else if (!strcmp(n, "CS"))  vals.chargeState   = (int)x;
-        else if (!strcmp(n, "ERR")) vals.error         = (int)x;
+        const bool  num = end != v && *end == '\0';
+        const float f   = num ? (float)x : NAN;
+        const int   k   = num ? (int)x : -1;
+        if      (!strcmp(n, "V"))   vals.battV         = f / 1000.0f;
+        else if (!strcmp(n, "I"))   vals.battA         = f / 1000.0f;
+        else if (!strcmp(n, "VPV")) vals.pvV           = f / 1000.0f;
+        else if (!strcmp(n, "PPV")) vals.pvW           = f;
+        else if (!strcmp(n, "H20")) vals.yieldTodayKwh = f / 100.0f;
+        else if (!strcmp(n, "SOC")) vals.socPct        = f / 10.0f;
+        else if (!strcmp(n, "IL"))  vals.loadA         = f / 1000.0f;
+        else if (!strcmp(n, "CS"))  vals.chargeState   = k;
+        else if (!strcmp(n, "ERR")) vals.error         = k;
     }
 }

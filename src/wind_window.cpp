@@ -40,9 +40,9 @@ float WindRing::gustEndingAt(size_t i, float msPerPps) const
     return speedOf(p, ms, msPerPps);
 }
 
-float WindRing::push(uint16_t pulses, uint16_t elapsedMs, uint16_t dirDeg, bool hasDir, float msPerPps)
+float WindRing::push(uint32_t pulses, uint16_t elapsedMs, uint16_t dirDeg, bool hasDir, float msPerPps)
 {
-    buf[head] = { pulses, elapsedMs, (uint16_t)(dirDeg % 360), hasDir };
+    buf[head] = { pulses, elapsedMs, hasDir ? (uint16_t)(dirDeg % 360) : NO_DIR };
     head = (head + 1) % WIND_RING_SIZE;
     if (n < WIND_RING_SIZE) n++;
     return gustEndingAt(0, msPerPps);
@@ -60,7 +60,7 @@ WindStats WindRing::stats(uint32_t spanMs, float msPerPps) const
         uint32_t endAge = ms;   // time from now back to the end of entry i
         p  += e.pulses;
         ms += e.ms;
-        if (e.hasDir) { s += sinf(e.dir * DEG2RAD); c += cosf(e.dir * DEG2RAD); dirs++; }
+        if (e.dir != NO_DIR) { s += sinf(e.dir * DEG2RAD); c += cosf(e.dir * DEG2RAD); dirs++; }
         if (endAge + WIND_GUST_SPAN_MS * 9 / 10 <= spanMs || i == 0) {
             float g = gustEndingAt(i, msPerPps);
             if (g > gust) gust = g;
@@ -77,7 +77,7 @@ WindStats WindRing::stats(uint32_t spanMs, float msPerPps) const
 // ----------------------------------------------------------------- WindAcc
 void WindAcc::reset() { *this = WindAcc(); }
 
-void WindAcc::add(uint16_t p, uint16_t elapsedMs, uint16_t dirDeg, bool hasDir, float gustMs)
+void WindAcc::add(uint32_t p, uint16_t elapsedMs, uint16_t dirDeg, bool hasDir, float gustMs)
 {
     pulses += p;
     ms     += elapsedMs;

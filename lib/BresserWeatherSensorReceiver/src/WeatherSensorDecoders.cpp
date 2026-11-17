@@ -64,6 +64,13 @@
 #include "WeatherSensorCfg.h"
 #include "WeatherSensor.h"
 
+// Fork: MSG_OK_* bits from per-message flags.
+static uint8_t msgOkBits(bool temp, bool hum, bool wind, bool rain, bool uv, bool light)
+{
+    return (temp ? MSG_OK_TEMP : 0) | (hum ? MSG_OK_HUMIDITY : 0) | (wind ? MSG_OK_WIND : 0) |
+           (rain ? MSG_OK_RAIN : 0) | (uv ? MSG_OK_UV : 0) | (light ? MSG_OK_LIGHT : 0);
+}
+
 //
 // Find slot in sensor data array
 //
@@ -128,6 +135,7 @@ int WeatherSensor::findSlot(uint32_t id, DecodeStatus *status)
         log_v("find_slot(): Updating slot #%d", update_slot);
         *status = DECODE_OK;
         lastSlot = update_slot;   // fork: tell the application which slot changed
+        sensor[update_slot].msg_ok = 0; // fork: set by the decoder for weather messages
         return update_slot;
     }
     else if (free_slot > -1)
@@ -136,6 +144,7 @@ int WeatherSensor::findSlot(uint32_t id, DecodeStatus *status)
         log_v("find_slot(): Storing into slot #%d", free_slot);
         *status = DECODE_OK;
         lastSlot = free_slot;     // fork: tell the application which slot changed
+        sensor[free_slot].msg_ok = 0; // fork: set by the decoder for weather messages
         return free_slot;
     }
     else
@@ -344,6 +353,8 @@ DecodeStatus WeatherSensor::decodeBresser5In1Payload(const uint8_t *msg, uint8_t
     sensor[slot].w.light_ok = false;
     sensor[slot].w.uv_ok = false;
     sensor[slot].w.rain_ok = true;
+    sensor[slot].msg_ok = msgOkBits(sensor[slot].w.temp_ok, sensor[slot].w.humidity_ok, sensor[slot].w.wind_ok,
+                                    true, false, false); // fork
 
     const int i = slot;
     log_d("sensor[%d]: v=%d id=0x%08X t=%d c=%d", i, sensor[i].valid, (unsigned int)sensor[i].sensor_id, sensor[i].s_type, sensor[i].complete);
@@ -588,6 +599,7 @@ DecodeStatus WeatherSensor::decodeBresser6In1Payload(const uint8_t *msg, uint8_t
     sensor[slot].w.uv_ok |= uv_ok;
     sensor[slot].w.wind_ok |= wind_ok;
     sensor[slot].w.rain_ok |= rain_ok;
+    sensor[slot].msg_ok = msgOkBits(temp_ok, humidity_ok, wind_ok, rain_ok, uv_ok, false); // fork: this message only
     log_d("Flags: Temp=%d  Hum=%d  Wind=%d  Rain=%d  UV=%d", temp_ok, humidity_ok, wind_ok, rain_ok, uv_ok);
 
     sensor[slot].valid = true;
@@ -800,6 +812,7 @@ DecodeStatus WeatherSensor::decodeBresser7In1Payload(const uint8_t *msg, uint8_t
         sensor[slot].w.rain_ok = true;
         sensor[slot].w.light_ok = wind_light_ok;
         sensor[slot].w.uv_ok = wind_light_ok;
+        sensor[slot].msg_ok = msgOkBits(true, true, wind_light_ok, true, wind_light_ok, wind_light_ok); // fork
         sensor[slot].w.temp_c = temp_c;
         sensor[slot].w.humidity = humidity;
 #ifdef WIND_DATA_FLOATINGPOINT

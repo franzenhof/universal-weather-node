@@ -26,5 +26,9 @@ Not included: `RainGauge`, `Lightning`, `RollingCounter`, `InitBoard`, examples,
    (`WeatherSensorCfg.h`), so the SX1262 is selected.
 7. **`lastSlot`**: index of the slot written by the last successful decode (set in `findSlot()`), so the
    application can copy exactly the sensor that was just received.
+8. **`msg_ok`** (`MSG_OK_*` bits) per slot: the values carried by the *last* message (reset in `findSlot()`, set by the
+   5/6/7-in-1 decoders). The 6-in-1 decoder ORs its per-message flags into `w.*_ok`, which are only cleared by
+   `clearSlots()`, so the application could not tell which values a packet actually contained (per-value freshness).
+   The cumulative `w.*_ok` behaviour is unchanged.
 
-Decoders (`WeatherSensorDecoders.cpp`) are unchanged.
+Decoders (`WeatherSensorDecoders.cpp`) are otherwise unchanged.

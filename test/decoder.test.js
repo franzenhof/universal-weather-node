@@ -175,9 +175,41 @@ function testLppLightAndSources() {
 }
 
 function testBinaryUnknownVersion() {
-  const d = decodeUplink({ fPort: 3, bytes: [0x09, 0, 0, 0, 0] }).data;
-  assert.ok(typeof d.error === 'string' && d.error.indexOf('unsupported binary protocol version') !== -1,
+  const r = decodeUplink({ fPort: 3, bytes: [0x09, 0, 0, 0, 0] });
+  // ChirpStack v4: errors[] carries the message, data stays empty
+  eq(Object.keys(r.data).length, 0, 'binary unknown version: no data');
+  assert.ok(r.errors.length === 1 && r.errors[0].indexOf('unsupported binary protocol version') !== -1,
     'binary unknown version rejected');
+  // v3 entry point unchanged: { error }
+  const d = Decode(3, [0x09, 0, 0, 0, 0]);
+  assert.ok(typeof d.error === 'string' && d.error.indexOf('unsupported binary protocol version') !== -1,
+    'v3 binary unknown version rejected');
+}
+
+function testLppTruncated() {
+  const full = [1, 132, 0x01, 0x0E, 1, 2, 0x02, 0x9A, 2, 0, 0x83];
+  eq(decodeUplink({ fPort: 1, bytes: full }).errors.length, 0, 'complete LPP payload');
+  // cut inside a field's data, and after a lone channel byte
+  for (const cut of [full.length - 1, 6, 9]) {
+    const r = decodeUplink({ fPort: 1, bytes: full.slice(0, cut) });
+    eq(Object.keys(r.data).length, 0, 'truncated LPP (' + cut + ' bytes): no data');
+    assert.ok(r.errors.length === 1 && r.errors[0].indexOf('truncated CayenneLPP') !== -1,
+      'truncated LPP (' + cut + ' bytes) rejected');
+    const d = Decode(1, full.slice(0, cut));
+    assert.ok(typeof d.error === 'string' && d.error.indexOf('truncated CayenneLPP') !== -1,
+      'v3: truncated LPP (' + cut + ' bytes) rejected');
+  }
+  // a generic sensor (4 bytes) with only 3 data bytes
+  const g = decodeUplink({ fPort: 1, bytes: [10, 100, 0x00, 0x01, 0x02] });
+  assert.ok(g.errors.length === 1, 'truncated LPP generic sensor rejected');
+}
+
+function testBinaryTruncatedV4() {
+  // wind dir + speed announced (bits 0, 1), speed missing
+  const r = decodeUplink({ fPort: 3, bytes: [4, 0x03, 0x01, 0x0E] });
+  assert.ok(r.errors.length === 1 && r.errors[0].indexOf('truncated binary payload') !== -1,
+    'truncated v4 binary payload rejected');
+  eq(Object.keys(r.data).length, 0, 'truncated v4 binary payload: no data');
 }
 
 function testDerivedValues() {
@@ -202,5 +234,7 @@ testBinaryVersion1StillDecoded();
 testBinaryV2VictronBlockStillDecoded();
 testLppLightAndSources();
 testBinaryUnknownVersion();
+testLppTruncated();
+testBinaryTruncatedV4();
 testDerivedValues();
 console.log('All decoder tests passed.');

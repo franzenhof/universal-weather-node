@@ -305,7 +305,8 @@ function convPressure(v, from, to) {
   return to === 'inHg' ? hpa / 33.8639 : hpa;
 }
 var UNIT_TARGETS = {
-  metric:   { tempUnit: 'C', windUnit: 'km/h', rainRateUnit: 'mm/h', rainUnit: 'mm', pressureUnit: 'hPa' },
+  // windUnit: replaced by the device's own metric wind unit in render()
+  metric:   { tempUnit: 'C', windUnit: 'm/s', rainRateUnit: 'mm/h', rainUnit: 'mm', pressureUnit: 'hPa' },
   imperial: { tempUnit: 'F', windUnit: 'mph',  rainRateUnit: 'in/h', rainUnit: 'in', pressureUnit: 'inHg' }
 };
 // Converts either an array (history: one value per bucket) or a single
@@ -879,6 +880,10 @@ function render(rawHist, rawCurrent) {
     unitPref = (rawCurrent.tempUnit || rawCurrent.ds18b20Unit) === 'F' ? 'imperial' : 'metric';
     updateUnitsButtonLabel();
   }
+  // Metric wind unit: whatever the device is set to (m/s or km/h, settings
+  // "Wind speed unit"), so the dashboard matches the status page/MQTT.
+  var devWind = rawCurrent.windUnit || rawHist.windUnit;
+  if (devWind === 'm/s' || devWind === 'km/h') UNIT_TARGETS.metric.windUnit = devWind;
   var data = applyUnitPref(rawHist);
   var current = applyUnitPref(rawCurrent);
   // /api/data's `ds18b20` is a slot-indexed array (null for a disconnected

@@ -7,6 +7,8 @@
 #include "sources.h"
 #include "rf_sensors.h"
 #include "derived_now.h"
+#include "sensors.h"
+#include <esp_timer.h>
 #include <time.h>
 
 const char* gResetReason = "unknown";
@@ -68,12 +70,13 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
     doc.clear();
     PathValues g;
     if (!pv) {   // REST/status page: the base cycle's values (globals)
+        g.windValid = windCycleValid;
         g.windSpeedMs = windSpeedMs; g.windGustMs = windGustMs; g.windDirDeg = windDirection;
         g.rainMm = rainMM; g.rainRateMmH = rainRateMmH;
         pv = &g;
     }
 
-    if (srcActive(SG_WIND)) {
+    if (srcActive(SG_WIND) && pv->windValid) {   // no valid sample in the window: left out
         doc["windDirDeg"] = pv->windDirDeg;
         doc["windSpeed"]  = windSpeedForOutput(pv->windSpeedMs, gCfg);
         doc["windGust"]   = windSpeedForOutput(pv->windGustMs,  gCfg);
@@ -223,7 +226,10 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
             o["type"]      = r.type;
             o["protocol"]  = rfProtoName(r.proto);
             o["rssi"]      = (int)lroundf(r.rssi);
-            o["ageSec"]    = (millis() - r.lastMs) / 1000;
+            // after a millis() wrap the raw difference is meaningless once the sensor is stale
+            unsigned long age = (millis() - r.lastMs) / 1000;
+            if ((r.staleMask & RF_VAL_ANY) && age < SRC_RF_FRESH_MS / 1000) age = SRC_RF_FRESH_MS / 1000;
+            o["ageSec"]    = age;
             o["batteryOk"] = r.batteryOk;
             if (r.hasTemp)     o["temp"]     = temperatureForOutput(r.tempC, gCfg);
             if (r.hasHumidity) o["humidityPct"] = r.humidity;
@@ -250,6 +256,7 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
     if (gCfg.debugMode) {
         doc["cycle"]       = loopCount;
         doc["freeHeapKiB"] = (float)ESP.getFreeHeap() / 1024.0f;
-        doc["uptimeH"]     = (float)millis() / 3600000.0f;
+        // esp_timer (64 bit) rather than millis(), which wraps after 49.7 days.
+        doc["uptimeH"]     = (float)(esp_timer_get_time() / 1000000LL) / 3600.0f;
     }
 }

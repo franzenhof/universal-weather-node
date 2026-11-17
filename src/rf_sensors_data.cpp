@@ -23,6 +23,87 @@ std::vector<uint32_t> rfParseIds(const char* s)
     return ids;
 }
 
+unsigned long rfValueMs(const RfSensorReading& r, uint8_t bit)
+{
+    switch (bit) {
+        case RF_VAL_TEMP:  return r.tempMs;
+        case RF_VAL_HUM:   return r.humMs;
+        case RF_VAL_WIND:  return r.windMs;
+        case RF_VAL_RAIN:  return r.rainMs;
+        case RF_VAL_UV:    return r.uvMs;
+        case RF_VAL_LIGHT: return r.lightMs;
+        default:           return r.lastMs;
+    }
+}
+
+float rfStoreValues(RfSensorReading& r, const RfValues& v, unsigned long now, unsigned long& rainGapMs)
+{
+    const uint8_t wasStale = r.staleMask;
+    r.lastMs = now;
+    r.staleMask &= (uint8_t)~(v.ok | RF_VAL_ANY);
+    // Values not in this packet are kept (a 6-in-1 sends two alternating messages).
+    if (v.ok & RF_VAL_TEMP) { r.hasTemp = true;     r.tempC = v.tempC;       r.tempMs = now; }
+    if (v.ok & RF_VAL_HUM)  { r.hasHumidity = true; r.humidity = v.humidity; r.humMs = now; }
+    if (v.ok & RF_VAL_WIND) {
+        r.hasWind    = true;
+        r.windMs     = now;
+        r.windAvgMs  = v.windAvgMs;
+        r.windGustMs = v.windGustMs;
+        r.windDirDeg = v.windDirDeg;
+    }
+    float rainDelta = 0.0f;
+    rainGapMs = 0;
+    if (v.ok & RF_VAL_RAIN) {
+        // Increase since the previous packet; a smaller total = sensor reset
+        // (battery change). No previous value (node start): 0 - the rain while
+        // the node was down is unknown.
+        if (r.hasRain) {
+            rainDelta = v.rainTotalMm >= r.rainTotalMm ? v.rainTotalMm - r.rainTotalMm : v.rainTotalMm;
+            unsigned long age = now - r.rainMs;
+            // expired across a millis() wrap: the age is unknown, at least the window
+            if (age > SRC_RF_FRESH_MS || (wasStale & RF_VAL_RAIN))
+                rainGapMs = age > SRC_RF_FRESH_MS ? age : SRC_RF_FRESH_MS + 1;
+        }
+        r.hasRain = true;  r.rainTotalMm = v.rainTotalMm;  r.rainMs = now;
+    }
+    if (v.ok & RF_VAL_UV)    { r.hasUv = true;    r.uvIndex = v.uvIndex;   r.uvMs = now; }
+    if (v.ok & RF_VAL_LIGHT) { r.hasLight = true; r.lightLux = v.lightLux; r.lightMs = now; }
+    return rainDelta;
+}
+
+int rfSlotFor(uint32_t id, unsigned long now, unsigned long takeOverMs, int onlyProto)
+{
+    int freeIdx = -1, oldIdx = -1;
+    unsigned long oldAge = 0;
+    for (int i = 0; i < RF_MAX_SENSORS; i++) {
+        const RfSensorReading& r = gRfSensors[i];
+        if (r.used && r.id == id) return i;
+        if (!r.used) { if (freeIdx < 0) freeIdx = i; continue; }
+        if (onlyProto && r.proto != onlyProto) continue;
+        // expired (staleMask): older than any timestamp, also after a millis() wrap
+        unsigned long age = (r.staleMask & RF_VAL_ANY) ? ~0UL : now - r.lastMs;
+        if (age > takeOverMs && (oldIdx < 0 || age > oldAge)) { oldIdx = i; oldAge = age; }
+    }
+    if (freeIdx >= 0) return freeIdx;
+    if (oldIdx >= 0) gRfSensors[oldIdx] = RfSensorReading();   // sensor gone (battery change: new ID)
+    return oldIdx;
+}
+
+void rfSensorsClear()
+{
+    for (RfSensorReading& r : gRfSensors) r = RfSensorReading();
+}
+
+void rfExpireValues(unsigned long now)
+{
+    static const uint8_t bits[] = { RF_VAL_TEMP, RF_VAL_HUM, RF_VAL_WIND, RF_VAL_RAIN, RF_VAL_UV, RF_VAL_LIGHT, RF_VAL_ANY };
+    for (RfSensorReading& r : gRfSensors) {
+        if (!r.used) continue;
+        for (uint8_t b : bits)
+            if (!(r.staleMask & b) && now - rfValueMs(r, b) > SRC_RF_FRESH_MS) r.staleMask |= b;
+    }
+}
+
 const char* rfProtoName(int proto)
 {
     switch (proto) {

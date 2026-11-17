@@ -152,6 +152,14 @@ function setChargeState(result, cs) {
 
 // ── Main Decoder ──────────────────────────────────────────────────────────
 
+// Data bytes per CayenneLPP type (after the channel and type bytes).
+var LPP_SIZE = {};
+LPP_SIZE[LPP_DIGITAL_INPUT] = 1; LPP_SIZE[LPP_DIGITAL_OUTPUT] = 1; LPP_SIZE[LPP_PERCENTAGE] = 1;
+LPP_SIZE[LPP_HUMIDITY] = 1;      LPP_SIZE[LPP_POWER] = 2;          LPP_SIZE[LPP_ANALOG_INPUT] = 2;
+LPP_SIZE[LPP_TEMPERATURE] = 2;   LPP_SIZE[LPP_BAROMETRIC] = 2;     LPP_SIZE[LPP_VOLTAGE] = 2;
+LPP_SIZE[LPP_DIRECTION] = 2;     LPP_SIZE[LPP_ENERGY] = 4;         LPP_SIZE[LPP_DISTANCE] = 4;
+LPP_SIZE[LPP_GENERIC_SENSOR] = 4;
+
 function parseLPP(bytes) {
     var result = {};
     var i = 0;
@@ -164,8 +172,14 @@ function parseLPP(bytes) {
     var digiCount    = {};
 
     while (i < bytes.length) {
+        // A truncated field would read past the end (undefined -> NaN/0):
+        // reject the payload instead of returning made-up values.
+        if (i + 2 > bytes.length)
+            return { error: "truncated CayenneLPP payload at offset " + i };
         var channel = bytes[i++];
         var type    = bytes[i++];
+        if (LPP_SIZE[type] !== undefined && i + LPP_SIZE[type] > bytes.length)
+            return { error: "truncated CayenneLPP field (channel " + channel + ", type " + type + ") at offset " + (i - 2) };
 
         switch (type) {
 
@@ -530,6 +544,8 @@ function addDerived(r) {
 function decodeUplink(input) {
     try {
         var data = addDerived((input.fPort === 3) ? parseBin(input.bytes) : parseLPP(input.bytes));
+        // ChirpStack v4: a payload that can't be decoded is an error, not data
+        if (data && typeof data.error === "string") return { data: {}, errors: [data.error] };
         return { data: data, errors: [] };
     } catch (e) {
         return { data: {}, errors: [e.toString()] };

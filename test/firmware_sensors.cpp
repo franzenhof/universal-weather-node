@@ -1,8 +1,14 @@
 #include "sensors.h"
 #include "globals.h"
 #include "DallasTemperature.h"
+#include "wind_window.h"
+#include "driver/pcnt.h"
 #include <cassert>
 #include <climits>
+#include <cmath>
+
+extern bool hostBmeOk;
+extern float hostBmeT,hostBmeP,hostBmeH;
 
 int main()
 {
@@ -45,4 +51,39 @@ int main()
     hostConversionComplete=true;
     startOneWireConversion();
     assert(pollOneWireConversion() && bus1Temps[0]==10.5f);
+
+    // ---- PCNT: any number of counter wraps between two reads ----
+    gCfg.windEn=1;gCfg.windMsPerPps=0.001f;   // high-pulse anemometer
+    hostCounts[PCNT_UNIT_WINDSPEED]=0;readPulseCounters();
+    hostPcntIsr[PCNT_UNIT_WINDSPEED](hostPcntArg[PCNT_UNIT_WINDSPEED]);
+    hostPcntIsr[PCNT_UNIT_WINDSPEED](hostPcntArg[PCNT_UNIT_WINDSPEED]);
+    hostCounts[PCNT_UNIT_WINDSPEED]=100;hostNow+=60000;
+    PulseSample ps=readPulseCounters();
+    assert(ps.windValid && ps.windPulses==2u*32767u+100u);   // > 65535: no uint16 truncation
+    // wrapped, but the interrupt has not run yet: counted once, not twice
+    hostCounts[PCNT_UNIT_WINDSPEED]=50;hostNow+=1000;
+    ps=readPulseCounters();assert(ps.windPulses==32767u-50u);
+    hostPcntIsr[PCNT_UNIT_WINDSPEED](hostPcntArg[PCNT_UNIT_WINDSPEED]);
+    hostCounts[PCNT_UNIT_WINDSPEED]=60;hostNow+=1000;
+    ps=readPulseCounters();assert(ps.windPulses==10u);
+    gCfg.windMsPerPps=1.00584f;
+
+    // ---- BME280: out-of-range readings count as a failed read ----
+    hostBmeOk=true;hostBmeT=21.5f;hostBmeP=95000.0f;hostBmeH=55.0f;
+    assert(readBme280() && bme280Present && bme280TempC==21.5f && bme280PressAbs==950.0f);
+    hostBmeH=150.0f;
+    assert(!readBme280() && !bme280Present && bme280Humidity==55.0f);
+    hostBmeH=55.0f;hostBmeT=-60.0f;assert(!readBme280());
+    hostBmeT=21.5f;hostBmeP=20000.0f;assert(!readBme280());
+    hostBmeP=95000.0f;assert(readBme280() && bme280Present);   // re-probed
+    hostBmeOk=false;
+
+    // ---- rain reset: the per-path windows keep counting ----
+    rainMMSinceStart=5.0f;
+    RainWindow w;w.reset(rainWindowTotalMm(),0);
+    rainMMSinceStart+=0.4f;                  // rain before the reset
+    resetRainAccumulator();
+    assert(rainMMSinceStart==0.0f);
+    rainMMSinceStart+=0.2f;                  // and after it
+    assert(std::fabs(w.amount(rainWindowTotalMm())-0.6f)<0.001f);
 }

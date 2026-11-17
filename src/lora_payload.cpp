@@ -10,11 +10,12 @@
 #include "board_io.h"
 #include "uv_calibration.h"
 #include "sources.h"
+#include "sensors.h"
 
 CayenneLPP lpp(200);
 uint8_t    binBuf[BIN_MAX_SIZE];
 size_t     binLen = 0;
-char       lastPayloadDropped[128] = "";
+char       lastPayloadDropped[256] = "";
 
 // ============================================================================
 // MEASUREMENTS FOR THIS CYCLE (shared by both wire formats)
@@ -41,13 +42,14 @@ static Measurements currentMeasurements(const PathValues* pv)
     // base cycle's values and are only the fallback.
     PathValues g;
     if (!pv) {
+        g.windValid = windCycleValid;
         g.windSpeedMs = windSpeedMs; g.windGustMs = windGustMs; g.windDirDeg = windDirection;
         g.rainMm = rainMM; g.rainRateMmH = rainRateMmH;
         pv = &g;
     }
     Measurements m;
     m.status = computeStatusByte();
-    m.hasWind = srcActive(SG_WIND);
+    m.hasWind = srcActive(SG_WIND) && pv->windValid;   // no valid sample: left out, not stale/0
     m.windDirDeg = pv->windDirDeg;
     m.windSpeed  = windSpeedForOutput(pv->windSpeedMs, gCfg);
     m.windGust   = windSpeedForOutput(pv->windGustMs,  gCfg);
@@ -119,16 +121,36 @@ static Measurements currentMeasurements(const PathValues* pv)
 // and nudge a quarter step away from zero so the cast lands on the rounded
 // value. Values outside the field's range are clamped instead of wrapping:
 // CayenneLPP::addField() doesn't range-check, so an analog input above
-// ±327.67 would wrap silently.
+// ±327.67 would wrap silently. Callers skip non-finite values (fin()): NAN
+// would otherwise go on air as a plausible-looking number.
+static bool  fin(float v) { return isfinite(v); }
 static float lppPrep(float v, float mult, float lo, float hi)
 {
     v = constrain(v, lo, hi);
     float steps = roundf(v * mult);
     return (steps + (steps >= 0.0f ? 0.25f : -0.25f)) / mult;
 }
-static void lppAnalog(uint8_t ch, float v) { lpp.addAnalogInput(ch, lppPrep(v, 100.0f, -327.68f, 327.67f)); }
-static void lppTemp  (uint8_t ch, float v) { lpp.addTemperature(ch, lppPrep(v, 10.0f, -3276.8f, 3276.7f)); }
-static void lppUInt  (uint8_t ch, float v) { lpp.addGenericSensor(ch, lppPrep(v, 1.0f, 0.0f, 4294967295.0f)); }
+static void lppAnalog(uint8_t ch, float v) { if (fin(v)) lpp.addAnalogInput(ch, lppPrep(v, 100.0f, -327.68f, 327.67f)); }
+static void lppTemp  (uint8_t ch, float v) { if (fin(v)) lpp.addTemperature(ch, lppPrep(v, 10.0f, -3276.8f, 3276.7f)); }
+static void lppVolt  (uint8_t ch, float v) { if (fin(v)) lpp.addVoltage(ch, lppPrep(v, 100.0f, 0.0f, 655.35f)); }
+static void lppDist  (uint8_t ch, float v) { if (fin(v)) lpp.addDistance(ch, lppPrep(v, 1000.0f, 0.0f, 4294967.0f)); }
+
+// Generic Sensor, exact: addGenericSensor() takes a float (exact only up to
+// 2^24, so a large AUX pulse total would be rounded) - add the field, then
+// write the exact big-endian uint32 into its four data bytes.
+static void lppUInt(uint8_t ch, uint32_t v)
+{
+    if (!lpp.addGenericSensor(ch, 0.0f)) return;   // buffer full (error noted by the library)
+    uint8_t* p = lpp.getBuffer() + lpp.getSize() - 4;
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v;
+}
+// Measured values (lux, rpm, ...): rounded and clamped to 0..2^32-1.
+static void lppUIntF(uint8_t ch, float v)
+{
+    if (!fin(v)) return;
+    double d = v;
+    lppUInt(ch, d <= 0.0 ? 0u : d >= 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)llround(d));
+}
 
 static void encodeLpp(const Measurements& m)
 {
@@ -142,20 +164,21 @@ static void encodeLpp(const Measurements& m)
         lppAnalog(3, m.rainRate);
         // Distance field is intentionally used as a mm/in carrier for rain
         // values (x1000 uint32; unit indicated by the status byte's imperial bit).
-        lpp.addDistance(1, lppPrep(m.rainCycle,      1000.0f, 0.0f, 4294967.0f));
-        lpp.addDistance(2, lppPrep(m.rainSinceStart, 1000.0f, 0.0f, 4294967.0f));
+        lppDist(1, m.rainCycle);
+        lppDist(2, m.rainSinceStart);
     }
 
     lpp.addDigitalInput(2, m.status);
-    if (m.hasBattery) lpp.addVoltage(1, lppPrep(m.batteryV, 100.0f, 0.0f, 655.35f));
-    if (m.hasBme && m.hasHumidity) lpp.addRelativeHumidity(1, lppPrep(m.humidityPct, 2.0f, 0.0f, 127.5f));
+    if (m.hasBattery) lppVolt(1, m.batteryV);
+    if (m.hasBme && m.hasHumidity && fin(m.humidityPct))
+        lpp.addRelativeHumidity(1, lppPrep(m.humidityPct, 2.0f, 0.0f, 127.5f));
     if (m.hasPressure) {
         // Barometric is uint16 x10. In imperial mode the value is sent x10
         // (field holds inHg x100) - 0.1 inHg would be 3.4 hPa resolution;
         // the decoder divides by 10 again when the imperial bit is set.
         const float pScale = m.imperial() ? 10.0f : 1.0f;
-        lpp.addBarometricPressure(1, lppPrep(m.pressureQnh * pScale, 10.0f, 0.0f, 6553.5f));
-        lpp.addBarometricPressure(2, lppPrep(m.pressureAbs * pScale, 10.0f, 0.0f, 6553.5f));
+        if (fin(m.pressureQnh)) lpp.addBarometricPressure(1, lppPrep(m.pressureQnh * pScale, 10.0f, 0.0f, 6553.5f));
+        if (fin(m.pressureAbs)) lpp.addBarometricPressure(2, lppPrep(m.pressureAbs * pScale, 10.0f, 0.0f, 6553.5f));
     }
     if (m.hasBme) lppTemp(1, m.bmeTemp);
     for (int i = 0; i < 3; i++)
@@ -164,31 +187,32 @@ static void encodeLpp(const Measurements& m)
     // PCB v2.0 I/O block
     if (m.hasIoStatus)  lpp.addDigitalInput(3, m.ioStatus);
     if (m.hasAuxAin)    lppAnalog(5, m.auxAinV);
-    if (m.hasAuxPulses) { lppUInt(10, (float)m.auxPulses); lppUInt(11, (float)m.auxPulsesTotal); }
+    if (m.hasAuxPulses) { lppUInt(10, m.auxPulses); lppUInt(11, m.auxPulsesTotal); }
     if (m.hasWind2) {
         if (m.hasWind2Dir) lpp.addDirection(2, m.wind2DirDeg);
         lppAnalog(6, m.wind2Speed);
         lppAnalog(7, m.wind2Gust);
     }
     if (m.hasUv) {
-        const bool volts = isfinite(m.uvSensorVolts);   // absent for a wireless UV sensor
-        if (volts) lpp.addVoltage(12, lppPrep(m.uvSensorVolts, 100.0f, 0.0f, 655.35f));
-        if (isfinite(m.uvIndex) && m.uvIndex >= 0.0f)
-            lppAnalog(13, fminf(m.uvIndex, UV_INDEX_REPORT_MAX));
-        lpp.addDigitalInput(14, (uint8_t)((volts ? 0x01 : 0x00) | (isfinite(m.uvIndex) ? 0x02 : 0x00)));
+        const bool volts = fin(m.uvSensorVolts);   // absent for a wireless UV sensor
+        const bool index = fin(m.uvIndex) && m.uvIndex >= 0.0f;
+        if (volts) lppVolt(12, m.uvSensorVolts);
+        if (index) lppAnalog(13, fminf(m.uvIndex, UV_INDEX_REPORT_MAX));
+        // the flags say exactly which of the two values are in this uplink
+        lpp.addDigitalInput(14, (uint8_t)((volts ? 0x01 : 0x00) | (index ? 0x02 : 0x00)));
     }
-    if (m.hasLight)   lppUInt(15, m.lightLux);
+    if (m.hasLight)   lppUIntF(15, m.lightLux);
     if (m.hasSources) lppUInt(16, m.sources);
     if (m.hasOutputs)   { lpp.addDigitalOutput(20, m.heaterDuty); lpp.addDigitalOutput(21, m.fanDuty); }
-    if (m.hasFanRpm)    lppUInt(22, m.fanRpm);
+    if (m.hasFanRpm)    lppUIntF(22, m.fanRpm);
     if (m.hasVe) {
-        if (!isnan(m.veBattV))    lpp.addVoltage(30, lppPrep(m.veBattV, 100.0f, 0.0f, 655.35f));
-        if (!isnan(m.veBattA))    lppAnalog(30, m.veBattA);
-        if (!isnan(m.veLoadA))    lppAnalog(31, m.veLoadA);
-        if (!isnan(m.vePvV))      lpp.addVoltage(31, lppPrep(m.vePvV, 100.0f, 0.0f, 655.35f));
-        if (!isnan(m.vePvW))      lpp.addPower(30, lppPrep(m.vePvW, 1.0f, 0.0f, 65535.0f));
-        if (!isnan(m.veYieldKwh)) lpp.addEnergy(30, lppPrep(m.veYieldKwh, 1000.0f, 0.0f, 4294967.0f));
-        if (!isnan(m.veSocPct))   lpp.addPercentage(30, (uint32_t)lroundf(constrain(m.veSocPct, 0.0f, 100.0f)));
+        lppVolt(30, m.veBattV);
+        lppAnalog(30, m.veBattA);
+        lppAnalog(31, m.veLoadA);
+        lppVolt(31, m.vePvV);
+        if (fin(m.vePvW))      lpp.addPower(30, lppPrep(m.vePvW, 1.0f, 0.0f, 65535.0f));
+        if (fin(m.veYieldKwh)) lpp.addEnergy(30, lppPrep(m.veYieldKwh, 1000.0f, 0.0f, 4294967.0f));
+        if (fin(m.veSocPct))   lpp.addPercentage(30, (uint32_t)lroundf(constrain(m.veSocPct, 0.0f, 100.0f)));
         if (m.veChargeState >= 0) lpp.addDigitalInput(30, (uint8_t)min(m.veChargeState, 255));
         if (m.veError >= 0)       lpp.addDigitalInput(31, (uint8_t)min(m.veError, 255));
     }
@@ -198,8 +222,8 @@ static void encodeLpp(const Measurements& m)
         lpp.addDigitalInput(200, m.dbgCycle);
         lppTemp            (201, m.dbgCpuTemp);
         lpp.addDigitalInput(202, m.dbgSendFail);
-        lppUInt            (203, m.dbgHeapKib);           // KiB
-        lppUInt            (204, m.dbgUptimeH * 10.0f);   // 0.1 h
+        lppUIntF           (203, m.dbgHeapKib);           // KiB
+        lppUIntF           (204, m.dbgUptimeH * 10.0f);   // 0.1 h
     }
 
     if (lpp.getError() != LPP_ERROR_OK)
@@ -224,8 +248,14 @@ void buildLppPacket(size_t limit, const PathValues* pv)
     while (lpp.getSize() > limit) {
         const char* g = dropNextGroup(m);
         if (!g) break;
-        int n = snprintf(lastPayloadDropped + used, sizeof(lastPayloadDropped) - used, "%s%s", used ? ", " : "", g);
-        if (n > 0) used = min(used + (size_t)n, sizeof(lastPayloadDropped) - 1);
+        // "a, b, c"; if the buffer is too small, the list ends in "..."
+        const size_t room = sizeof(lastPayloadDropped);
+        size_t len = strlen(g);
+        if (used + len + 2 + 4 < room) {
+            used += snprintf(lastPayloadDropped + used, room - used, "%s%s", used ? ", " : "", g);
+        } else if (used + 4 < room && (used < 3 || strcmp(lastPayloadDropped + used - 3, "...") != 0)) {
+            used += snprintf(lastPayloadDropped + used, room - used, "...");
+        }
         encodeLpp(m);
     }
     noteDropped("CayenneLPP", lpp.getSize(), limit);

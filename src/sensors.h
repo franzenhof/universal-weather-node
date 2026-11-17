@@ -61,6 +61,16 @@ extern PinSet gPins;
 // added to the PCNT counts by readPulseCounters()
 extern volatile uint32_t sleepPulsesWind, sleepPulsesRain;
 
+// false = the last base cycle had no valid wind sample (all rejected, or a
+// wireless wind source without fresh data): windSpeedMs/windGustMs are 0
+// then and the payloads leave wind out. Written by main.cpp.
+extern bool windCycleValid;
+
+// Running rain total for the per-path rain windows (main.cpp): never goes
+// backwards, unlike rainMMSinceStart, which resetRainAccumulator() sets to 0.
+float rainWindowTotalMm();
+void  resetRainAccumulator();   // rainMMSinceStart = 0, the windows keep counting
+
 // Early ADC pin setup — must run before any possible WiFiManager portal call,
 // including the very first boot, so the wind-direction ADC is already usable
 // for the portal's "Calibrate Wind Direction" page (see /calibrate/sample in
@@ -78,7 +88,7 @@ uint16_t readWindDirection();
 // 3-s gust, per-path windows) happens in wind_window.h / main.cpp.
 struct PulseSample {
     bool     windValid  = false;   // wind enabled and the rate is plausible
-    uint16_t windPulses = 0;
+    uint32_t windPulses = 0;
     uint16_t elapsedMs  = 0;       // time the pulses were counted over
     float    rainMm     = 0.0f;    // also added to rainMMSinceStart
 };

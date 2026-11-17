@@ -70,6 +70,10 @@ void loraPoll()
         loRaNode = nullptr;
         joinFailed();
     } else {
+        // RadioLib leaves the regional duty-cycle limit off by default (EU868:
+        // 1 %); with it on, sendReceive() refuses an uplink that would exceed
+        // it (RADIOLIB_ERR_UPLINK_UNAVAILABLE, see sendLoRa() in main.cpp).
+        loRaNode->setDutyCycle(true);
         lastAttemptMs = millis();
         retryMs = RETRY_MIN_MS;
         dbgSerial.println("LoRaWAN joined; uplinks resume at the next measurement cycle.");

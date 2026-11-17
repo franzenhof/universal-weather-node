@@ -57,7 +57,8 @@ uint8_t weatherWarnings(float tempC, float humidityPct, bool humValid);
 constexpr float SUNSHINE_LUX_THRESHOLD = 15000.0f;
 
 // Version strings like "2.0.0", "2.0.0-beta.3", optionally with a leading
-// "v" or a "-N-gHASH[-dirty]" git-describe suffix (ignored). Returns <0, 0, >0
-// like strcmp; a pre-release sorts before its release (2.0.0-beta.3 < 2.0.0).
+// "v" or a "-N-gHASH[-dirty]" / bare "-dirty" git-describe suffix (ignored).
+// Returns <0, 0, >0 like strcmp; a pre-release sorts before its release
+// (2.0.0-beta.3 < 2.0.0); pre-release tags compare case-insensitively.
 // Unparsable strings compare as equal (0).
 int compareVersions(const char* a, const char* b);
