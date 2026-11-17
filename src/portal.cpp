@@ -14,6 +14,7 @@
 #include <ArduinoOTA.h>
 #include <ArduinoJson.h>
 #include <Update.h>
+#include "ota_check.h"
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -39,12 +40,12 @@ static String htmlAttr(const char* s)
     return out;
 }
 
-// Firmware upload page for the password-protected /update (see below).
+// Firmware upload page for /update (see below).
 static const char OTA_PAGE_HTML[] PROGMEM =
     "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
     "<title>Firmware update</title></head><body style='font-family:sans-serif;max-width:480px;margin:1rem auto;padding:0 1rem;'>"
     "<h3>Firmware update</h3><form method='POST' action='/u' enctype='multipart/form-data'>"
-    "<input type='file' name='update' accept='.bin,application/octet-stream'><br/><br/>"
+    "<input type='file' name='update' accept='.bin,application/octet-stream'><br/><small>Use <b>universal-weather-node-&lt;version&gt;.bin</b> &mdash; not the <i>-factory</i> file (that one is for the first installation over USB).</small><br/><br/>"
     "<button type='submit'>Update</button></form><p><a href='/'>Back</a></p></body></html>";
 
 // ============================================================================
@@ -354,14 +355,17 @@ Config runConfigPortal(const Config& cur)
     // - /calibrate*: guided wind-direction calibration for resistor-ladder/
     //   reed-switch vanes (see include/calibrate_page.h)
     wm.setWebServerCallback([&wm, &calibratedThisSession]() {
-        // Firmware upload with an admin password set: registered before
-        // WiFiManager's own /update and /u (this callback runs first, the
-        // first matching handler wins), same upload flow plus Digest auth.
-        // Without a password, WiFiManager's open handlers stay in place.
-        if (otaPass[0]) {
-            static bool uploadAuthOk = false, uploadOk = false;
+        // Firmware upload, always our own handlers - registered before
+        // WiFiManager's /update and /u (this callback runs first, the first
+        // matching handler wins): Digest auth when an admin password is set,
+        // and the first chunk must be an application image (ota_check.h) -
+        // a -factory image or another file is refused before anything is
+        // written, so a wrong file can't leave a node that doesn't boot.
+        {
+            static bool uploadAuthOk = false, uploadOk = false, headerChecked = false;
+            static const char* uploadError = nullptr;
             wm.server->on("/update", HTTP_ANY, [&wm]() {
-                if (!wm.server->authenticate("admin", otaPass)) {
+                if (otaPass[0] && !wm.server->authenticate("admin", otaPass)) {
                     wm.server->requestAuthentication(DIGEST_AUTH, "WeatherNode firmware update");
                     return;
                 }
@@ -372,19 +376,32 @@ Config runConfigPortal(const Config& cur)
                     wm.server->requestAuthentication(DIGEST_AUTH, "WeatherNode firmware update");
                     return;
                 }
-                wm.server->send(200, "text/plain", uploadOk ? "Update successful, restarting..."
-                                                            : String("Update failed: ") + Update.errorString());
+                String msg = uploadOk ? String("Update successful, restarting...")
+                           : uploadError ? String("Update refused: ") + uploadError
+                                         : String("Update failed: ") + Update.errorString();
+                wm.server->send(uploadOk ? 200 : 400, "text/plain; charset=utf-8", msg);
                 if (uploadOk) { delay(1000); ESP.restart(); }
             }, [&wm]() {
                 HTTPUpload& up = wm.server->upload();
                 if (up.status == UPLOAD_FILE_START) {
-                    uploadAuthOk = wm.server->authenticate("admin", otaPass);
-                    uploadOk     = false;
+                    uploadAuthOk  = !otaPass[0] || wm.server->authenticate("admin", otaPass);
+                    uploadOk      = false;
+                    headerChecked = false;
+                    uploadError   = nullptr;
                     dbgSerial.printf("Portal OTA: upload %s\n", uploadAuthOk ? "started" : "refused (not authenticated)");
                     if (uploadAuthOk && !Update.begin(UPDATE_SIZE_UNKNOWN)) dbgSerial.printf("Portal OTA: %s\n", Update.errorString());
                 } else if (!uploadAuthOk) {
                     return;   // the body is read and discarded
                 } else if (up.status == UPLOAD_FILE_WRITE) {
+                    if (!headerChecked) {
+                        headerChecked = true;
+                        OtaImageKind k = otaImageKind(up.buf, up.currentSize);
+                        if (k != OTA_IMAGE_APP) {
+                            uploadError = otaImageError(k);
+                            dbgSerial.printf("Portal OTA: refused - %s\n", uploadError);
+                            Update.abort();
+                        }
+                    }
                     if (Update.isRunning()) Update.write(up.buf, up.currentSize);
                 } else if (up.status == UPLOAD_FILE_END) {
                     if (Update.isRunning()) {

@@ -33,7 +33,7 @@ The transports can be enabled independently. Web serving and weather-network upl
 **Getting started**
 - [The Project in Pictures](#the-project-in-pictures)
 - [How It Fits Together](#how-it-fits-together)
-- [Quick Start](#quick-start)
+- [Quick Start](#quick-start) · [Installing the Firmware (browser, no software)](#installing-the-firmware-browser-no-software)
 - [Hardware](#hardware) · [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb) · [Ordering the PCB (JLCPCB)](#ordering-the-pcb-jlcpcb)
 
 **Using the node**
@@ -116,7 +116,7 @@ The node runs continuously (no deep sleep). It samples the sensors every few sec
 ## Quick Start
 
 1. **Prepare the hardware** — PCB, Heltec board and sensors (see [Hardware](#hardware)). For v2.0, follow the [assembly and first-power checklist](pcb/v2.0/CHECKLIST.md); connect sensor cables with power off.
-2. **Flash once over USB** — install PlatformIO, open a terminal in this repository and run `pio run -t upload` (see [Build & Flash](#build--flash)). On v2.0, disconnect external power and remove JP8 first. Later application updates can use OTA.
+2. **Flash once over USB** — easiest [in the browser, no software needed](#installing-the-firmware-browser-no-software); or with PlatformIO `pio run -t upload` (see [Build & Flash](#build--flash)). On v2.0, disconnect external power and remove JP8 first. Later application updates can use OTA.
 3. **Open first-time setup.** While powered by USB, the node opens Wi-Fi **`WeatherNode`**. Connect with your phone and open **http://192.168.4.1**. Do not hold the user button during boot.
 4. **Choose your PCB revision and connections.** Select `12` for Rev 1.2 or `13` for Rev 1.3; v2.0 is detected automatically. Disable absent wind/rain sensors and enter your station altitude. Choose the setup below, then *Save*; the node restarts.
 5. **Check operation.** The first complete measurement arrives after one cycle (default **5 minutes**). With Wi-Fi/web API enabled, open the IP shown on the display; set an admin password in the portal to use Settings or Log. Add weather-network accounts under **Settings**.
@@ -173,7 +173,7 @@ For a wireless station (Bresser 5/6/7-in-1, TFA / LaCrosse IT+ or Ecowitt / Frog
 | SDA | **41** |
 | SCL | **42** |
 
-**Settings** (portal or web settings, after [flashing](#build--flash)):
+**Settings** (portal or web settings, after [flashing](#installing-the-firmware-browser-no-software)):
 
 1. *Wind sensor* and *Rain sensor* **off** (nothing is connected to the board inputs); *PCB revision* stays at 13.
 2. *Wireless sensors* **on**, *Wireless sensor type* Bresser, TFA / LaCrosse IT+ or Fine Offset / Ecowitt / Froggit; enter the sensor ID shown on the status page under *Wireless sensor IDs*.
@@ -524,6 +524,35 @@ J18 (DC jack) is optional. Solder from low to high: pin sockets J1/J2 (fit them 
 
 ---
 
+## Installing the Firmware (browser, no software)
+
+The firmware is installed **once over USB, directly from the web browser** — no PlatformIO, no Python, no drivers on most computers. After that, updates go over Wi-Fi ([OTA](#firmware-update-ota)).
+
+**Two files per release in [`firmware/`](firmware/) — pick the right one:**
+
+| File | Contains | Use it for | How |
+|------|----------|------------|-----|
+| `universal-weather-node-<version>-factory.bin` | bootloader + partition table (with `cfgdata`) + firmware, one complete image | **first installation** of a new board, or repairing a board that no longer starts | over **USB**, in the browser (steps below) or esptool at address **`0x0`** |
+| `universal-weather-node-<version>.bin` | the firmware (application) only | **updates** of a node that already runs this firmware | over **Wi-Fi** ([OTA](#firmware-update-ota), portal → *Firmwareupdate*), or USB at address `0x10000` |
+
+> Never use the `-factory` file for OTA: it starts with the bootloader, which doesn't belong in the firmware slot. From 2.0.0-beta.3 on, the portal's update page checks the file and refuses a `-factory` image (or any non-firmware file) before writing anything.
+
+**You need:** a computer with **Chrome or Edge** (desktop; Firefox and Safari can't talk to USB devices), a **USB-C data cable** (some cables only charge — if no device shows up, try another one), the Heltec WiFi LoRa 32 V3 with its **868 MHz antenna screwed on** (never power the board without the antenna).
+
+1. **Download the firmware.** In [`firmware/`](firmware/) click the newest **`universal-weather-node-<version>-factory.bin`** and then *Download* (or *Raw*). Use the **`-factory`** file (see the table above).
+2. **Connect the board.** Plug the Heltec into the computer with the USB-C cable. On a v2.0 PCB: disconnect the external power and remove JP8 first.
+3. **Open the flasher.** In Chrome or Edge go to **[web.esphome.io](https://web.esphome.io)** (ESPHome's web flasher — it works for any ESP32 firmware, ESPHome itself is not needed).
+4. Click **CONNECT** and choose the serial port of the board in the browser's list, e.g. *CP2102 USB to UART*, *USB Serial*, *cu.usbserial-…* (macOS) or *COM3* (Windows), then *Connect*.
+   - **No port in the list?** Try another cable/USB port. On Windows, install the [Silicon Labs CP210x driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) once and try again.
+5. Click **INSTALL**, choose the downloaded **`…-factory.bin`** and confirm with **INSTALL**. Wait until *Installation complete* (about 1 minute). Don't unplug the board meanwhile.
+   - **Fails to connect / "failed to enter bootloader"?** Put the board into download mode by hand: hold the **PRG** button, press and release **RST**, release **PRG** — then click *INSTALL* again.
+6. Press **RST** on the board (or unplug and plug in again). The display shows **Config Portal** — continue with [Config Portal](#config-portal): connect your phone to the Wi-Fi **`WeatherNode`** and open http://192.168.4.1.
+
+**Good to know**
+- Our own partition layout (with the `cfgdata` settings partition) is part of the `-factory` file, so nothing has to be set up by hand. Settings stored by an earlier installation of this firmware are kept.
+- **Alternative flasher:** Espressif's [esptool-js](https://espressif.github.io/esptool-js/) (also in Chrome/Edge): *Connect*, then *Flash Address* **`0x0`**, choose the `-factory` file, *Program*. The old desktop *ESPHome-Flasher* program is no longer maintained — use the web flasher instead.
+- **Updating later:** use [OTA](#firmware-update-ota) with the normal `universal-weather-node-<version>.bin`. The `-factory` file over USB also works and keeps the settings.
+
 ## Configuration
 
 There are two places to change settings:
@@ -640,7 +669,7 @@ Saved settings survive ordinary restarts and application-only OTA updates. Facto
 
 1. Open the config portal (button 3 s or downlink `0x03`) and connect to **`WeatherNode`**.
 2. Open **http://192.168.4.1** and click **Firmwareupdate**.
-3. Upload the application `.bin` from [`firmware/`](firmware/) and wait for the restart. Keep power stable and do not close the upload page early.
+3. Upload **`universal-weather-node-<version>.bin`** from [`firmware/`](firmware/) — the file **without** `-factory` (see [which file](#installing-the-firmware-browser-no-software)) — and wait for the restart. From 2.0.0-beta.3 on, a `-factory` file or any other file is refused before anything is written. Keep power stable and do not close the upload page early.
 
 With a **web settings admin password** set, the portal's `/update` page asks for it (user `admin`) and ArduinoOTA (`pio run -t upload` over the network) needs it as well (`upload_flags = --auth=<password>`). Without an admin password both stay open while the portal is running.
 
@@ -1477,7 +1506,7 @@ pio device monitor      # serial log, 115200 baud
 ```
 
 - **A new board must be flashed over USB once** — this writes the custom partition table. After that, use OTA.
-- The `.bin` files in [`firmware/`](firmware/) are **application images only**, not complete first-flash packages. The recommended first-flash method is PlatformIO above. For manual esptool flashing, obtain the **matching** bootloader, partition table and OTA initializer from the build/toolchain; they are not included with the downloadable beta application. Example for this project's current 8 MB layout:
+- [`firmware/`](firmware/) contains per release the **application image** `universal-weather-node-<version>.bin` (OTA, or flashed at `0x10000`) and, from 2.0.0-beta.3, the **factory image** `universal-weather-node-<version>-factory.bin` (bootloader + partition table + boot_app0 + application, flashed at `0x0` — see [Installing the Firmware](#installing-the-firmware-browser-no-software)). The build writes it with `esptool merge_bin` ([`tools/version.py`](tools/version.py)); `pio run` leaves it in `.pio/build/<env>/firmware-factory.bin`. Manual esptool flashing with the separate parts, for this project's 8 MB layout:
 
 ```bash
 esptool.py --chip esp32s3 write_flash --flash_size 8MB \
@@ -1486,6 +1515,8 @@ esptool.py --chip esp32s3 write_flash --flash_size 8MB \
   0xe000  boot_app0.bin \
   0x10000 firmware.bin          # or firmware/universal-weather-node-<version>.bin
 ```
+
+Or everything in one go with the factory image: `esptool.py --chip esp32s3 write_flash 0x0 firmware/universal-weather-node-<version>-factory.bin`.
 
 - **Versioning:** [`tools/version.py`](tools/version.py) stamps the build with `git describe` and generates `include/generated_version.h`, `include/decoder_js.h` and `include/readme_md.h` (git-ignored). Only release builds — an exact tag on a clean tree, or `FW_VERSION=1.2.3 pio run` — are copied to `firmware/`. Tags are written without a leading `v` (e.g. `2.0.0-beta.1`); a leading `v` is stripped from the version anyway.
 - **README in the firmware:** blocks between `<!-- help:skip -->` and `<!-- /help:skip -->` (pictures, badges) are left out of the built-in help page, whose renderer supports plain Markdown only.
@@ -1643,6 +1674,8 @@ Firmware binary: [`universal-weather-node-2.0.0-beta.3.bin`](firmware/universal-
 * **868 MHz sensors:** WH65/WS69, WS68, WS80, WS85, WS90, WH31/DP50, WN34, WN38, WH40, WN20, WH51, WH57 — received in the same 17.241 kbit/s phase as IT+ (*Wireless sensor type* values 8, 10, 14, 9). New library `lib/FineOffsetSensorReceiver` (own, MIT). `rfSensors` gains `model`, `channel`, `soilMoisturePct`, `lightningCount`, `lightningDistKm`. Not yet tested with real sensors.
 
 **Docs**
+* **Installing in the browser:** step-by-step guide with [web.esphome.io](https://web.esphome.io) and the new **factory image** `universal-weather-node-<version>-factory.bin` (bootloader, partition table and firmware in one file, flashed at `0x0`) — no PlatformIO needed for the first installation.
+* **OTA file check:** the portal's firmware upload (`/update`) refuses a `-factory` image or any non-firmware file before writing anything (a factory image in the app slot would leave a node that doesn't boot); the upload page names the right file.
 * Wiring graphic for the [minimal wireless build](#minimal-wireless-build-no-custom-pcb) (Heltec V3 + BME280 on four wires, USB-C power); architecture note: sensors are read directly, Wi-Fi is output only.
 
 ### 2.0.0-beta.2

@@ -17,6 +17,7 @@ try {
     ['fineoffset', ['lib/FineOffsetSensorReceiver/src/FineOffsetDecoder.cpp', 'lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp',
       'src/rf_sensors_data.cpp']],
     ['netids', []],
+    ['otacheck', []],
     ['telemetry', [...common, 'src/json_payload.cpp', 'src/units.cpp']],
     ['rf', common],
     ['history', [...common.filter((f) => f !== 'test/host/runtime.cpp'), 'src/units.cpp']],   // includes runtime.cpp + history.cpp

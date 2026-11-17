@@ -127,4 +127,35 @@ def copy_firmware(*args, **kwargs):
     print(f"Firmware copied to {dst}")
 
 
+def make_factory_image(*args, **kwargs):
+    """Merges bootloader, partition table, boot_app0 and the app into one
+    image flashed at 0x0 (web flashers such as web.esphome.io take a single
+    file). Written to the build dir; release builds also copy it to
+    firmware/universal-weather-node-<version>-factory.bin."""
+    build_dir = Path(env.subst("$BUILD_DIR"))
+    prog_name = env.subst("$PROGNAME")
+    app = build_dir / f"{prog_name}.bin"
+    if not app.exists():
+        return
+    images = []
+    for offset, image in env.get("FLASH_EXTRA_IMAGES", []):
+        images += [env.subst(offset), env.subst(image)]
+    images += [env.subst("$ESP32_APP_OFFSET"), str(app)]
+    out = build_dir / f"{prog_name}-factory.bin"
+    cmd = [env.subst("$PYTHONEXE"), env.subst("$OBJCOPY"), "--chip", env.subst("$BOARD_MCU"),
+           "merge_bin", "-o", str(out),
+           "--flash_mode", env.subst("${__get_board_flash_mode(__env__)}"),
+           "--flash_freq", env.subst("${__get_board_f_flash(__env__)}"),
+           "--flash_size", env.BoardConfig().get("upload.flash_size", "8MB")] + images
+    if subprocess.call(cmd) != 0:
+        print("Factory image: esptool merge_bin failed")
+        return
+    print(f"Factory image: {out}")
+    if IS_RELEASE:
+        dst = Path(env.get("PROJECT_DIR")) / "firmware" / f"universal-weather-node-{version_string}-factory.bin"
+        shutil.copyfile(out, dst)
+        print(f"Factory image copied to {dst}")
+
+
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", copy_firmware)
+env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", make_factory_image)
