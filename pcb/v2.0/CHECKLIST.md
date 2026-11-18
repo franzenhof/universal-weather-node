@@ -2,8 +2,8 @@
 
 Step-by-step ordering (board settings, assembly options, THT parts): [README – Ordering the PCB (JLCPCB)](../../README.md#ordering-the-pcb-jlcpcb).
 
-Nothing on this board has been tested on real hardware yet. Use this list for the
-JLCPCB order and for the first prototypes (order 5, test, then more). Current layout:
+Use this list for the JLCPCB order and for bringing up the first boards (tip: order
+5, test, then more). Current layout:
 100 × 100 mm, with a 92 × 92 mm mounting-hole pattern (M3 holes, centres 4 mm
 from each adjacent board edge).
 
@@ -59,7 +59,7 @@ This is visual placement evidence, not hardware qualification.
 | Improvement | Installed selection | Verification / limits |
 |-------------|---------------------|-----------------------|
 | Local U5 supply bypass | C32: Samsung CL05B104KO5NNNC, C1525, 100 nF/16 V X7R 0402 | Supply pad within 3 mm of U5 pin 5; ground pad within 2 mm of U5 pin 3, with a nearby ground via. Scope U5 supply and Q3 gate during heater PWM/reset |
-| Buck input reserve | C1 + C33: Murata GRM32ER71H106KA12L, C77102, each 10 µF/50 V X7R 1210 (replaces the unavailable 100 V GRM32EC72A106KE05K, C5444485) | Operation up to 29.2 V (58% of rating); D1 clamps at max. 48.4 V, below 50 V. Estimated effective capacitance at 29.2 V/25 C roughly 3.5-4 µF each, 7-8 µF total (not taken from the manufacturer curve; earlier part: 9.17 µF). Still above the TI minimum of 4.7 µF; measure on the prototype |
+| Buck input reserve | C1 + C33: Murata GRM32ER71H106KA12L, C77102, each 10 µF/50 V X7R 1210 (replaces the unavailable 100 V GRM32EC72A106KE05K, C5444485) | Operation up to 29.2 V (58% of rating); D1 clamps at max. 48.4 V, below 50 V. Estimated effective capacitance at 29.2 V/25 C roughly 3.5-4 µF each, 7-8 µF total (not taken from the manufacturer curve; earlier part: 9.17 µF). Still above the TI minimum of 4.7 µF; measure on your board |
 | Buck output reserve | C34: Murata GRM32ER71E226KE15L, C21397, 22 µF/25 V X7R 1210; original C4/C5 retained | Manufacturer typical bias data at 5 V/25 C: 19.045 µF for C34; with -10% initial tolerance: 17.141 µF. C4/C5 are additional capacitance, not credited to a verified effective minimum |
 | Protected VIN buffering | C31: Nichicon UCD1J470MNL1GS, C445452, 47 µF/63 V, +/-20%, SMD 8 x 10 mm | Connected to +VLOAD/GND after Q7, outside the isolated VE.Direct area; positive pad 1 is on the right in top view. Feed widened to 0.8-1.0 mm; only the run between the Q7 pins stays 0.3-0.5 mm (ESR of C31 dominates anyway) |
 | Separate sensor 3.3 V rail | U7: Diodes AP2112K-3.3TRG1, C51118, 600 mA LDO, SOT-23-5, from +5V; EN tied to VIN. C35 (input) and C36 (output, before F3): Murata GRM32ER71H106KA12L, C77102 (same article as C1/C33), 10 µF/50 V X7R 1210 | Datasheet: stable with >= 1 µF ceramic output capacitance; input 2.5-6 V (6.5 V absolute maximum), so it is only for the 5 V rail. Typical sensor load 10-20 mA. Check TP4 = 3.3 V with VIN and with USB, and scope TP4 during Wi-Fi transmit |
@@ -204,13 +204,12 @@ Also compare the RJ11 jack JLCPCB offers for C3097716 with the footprint (pin ro
 peg positions) — the footprint is the Amphenol 54601 layout, chosen after a datasheet
 comparison with the EVERCOM 5301-6P6C.
 
-## B. Bring-up of the first prototypes
+## B. Bring-up of the first boards
 
 ### USB-C versus VIN: expected operation
 
 See the [complete power-source function matrix](../../README.md#functions-by-power-source-v20)
-for operating limits. The following expectations are to be checked on prototypes,
-not results of measurements already performed.
+for operating limits. Check the following expectations on your first board.
 
 | Check | USB-C 5 V only | VIN 6–29.2 V only |
 |-------|---------------|------------------|
@@ -254,7 +253,7 @@ Use a lab supply with current limit. Heltec module **not** inserted for steps 1�
    - The test must not remain at the 10 mA current limit; disconnect
      immediately if it does. Some TVS leakage is normal.
      Remove the temporary loads afterwards and repeat the positive-supply tests.
-   These are prototype acceptance tests, not measurements already performed.
+   These are acceptance tests for a new board.
 4. With VIN disconnected and the JP8 shunt removed, insert the Heltec and flash over USB.
    Unplug USB before refitting JP8 and reconnecting VIN. The log shows
    `HW revision ID (GPIO20): ~1650 mV -> PCB v2.0`; TP3 = 5 V, TP4 = 3.3 V (sensor LDO U7).
@@ -326,7 +325,7 @@ Use a lab supply with current limit. Heltec module **not** inserted for steps 1�
 
 ## C. External-line protection
 
-| Port | Installed protection | Limits / prototype checks |
+| Port | Installed protection | Limits / checks |
 |------|----------------------|---------------------------|
 | UV J17 SIGNAL | D32 PESD5V0S2BT to GND at the terminal, then R51 10k, D30 BAT54S rail clamps and C27 filter | D32 has 5 V standoff; it does not clamp the ADC directly to 3.3 V. Select JP10 for the signal range. No protection against sustained miswiring, direct lightning or powered-sensor backfeed with the controller off is guaranteed |
 | AUX J11 AIN / PULSE | D17 PESD5V0S2BT, series resistors, D18/D19 BAT54S and filters | ESD/transient protection, not an arbitrary-voltage input |
@@ -337,7 +336,7 @@ D32 uses the same JLCPCB part as the other data-line TVS devices (C49338).
 The [PESD5V0S2BT datasheet](https://assets.nexperia.com/documents/data-sheet/PESD5V0S2BT.pdf)
 specifies 5 V standoff and 100 nA maximum leakage at 5 V / 25 °C. Its pulse
 ratings apply to specified waveforms, not continuous faults or system-level
-surge certification. Verify analog accuracy over temperature on the prototype.
+surge certification. Verify analog accuracy over temperature on your board.
 
 Q7 is not an overvoltage disconnect or reverse-current blocker.
 Use one source at a time: unplug USB for VIN mode; disconnect VIN and remove
@@ -357,7 +356,7 @@ The fan-switch datasheet remains [DMP6023LE](https://www.diodes.com/assets/Datas
 | Silkscreen / routing hygiene | No dangling-via/track warnings and no text overlap/copper warnings in the final routed board. Nine remaining silk-edge warnings are standard terminal pin-1 triangles outside the outline, not electrical faults | Inspect fabrication preview for clipped terminal triangles; pin numbers/functions remain labelled inside the board |
 | TVS return paths | Local ground returns retained: nearest ground via about 0.85 mm from D1 and 1.30 mm from D17; D32 has a direct pad/via return. Isolation-domain check remains separate | Cable transient/ESD tests; this is not lightning or system-level surge certification |
 | Output diode voltage margin | D22/D23 changed from 40 V SS34 to 100 V / 2 A SS210 (basic; B360A-13-F 60 V / 3 A before), retaining the SMA footprint and cathode/anode nets | Check freewheel temperature under PWM and cable-induced ringing; the diode is still not an output TVS |
-| Test access / analog calibration | TP1–TP5 retained for GND, protected VIN, +5V and +3V3; TP6 (bottom, 1.5 mm pad) on 3V3_HELTEC and TP7 (top, 1.0 mm pad next to Q1) on the switched 1-Wire supply OW_SW; heater gate is probed at R31 pad 1 (HEAT_G); bottom S/N and DATE fields for marking prototypes; C17 and C27 provide ADC-side probe pads. R25 15k keeps a nominal 5 V input at 3.0 V ADC; firmware hints/downlink example updated without changing defaults/NVS | Probe access with the actual Heltec/enclosure; sensor-specific UV-to-UVI calibration and analog offset/gain/temperature tests. UV remains disabled until configured |
+| Test access / analog calibration | TP1–TP5 retained for GND, protected VIN, +5V and +3V3; TP6 (bottom, 1.5 mm pad) on 3V3_HELTEC and TP7 (top, 1.0 mm pad next to Q1) on the switched 1-Wire supply OW_SW; heater gate is probed at R31 pad 1 (HEAT_G); bottom S/N and DATE fields for marking boards; C17 and C27 provide ADC-side probe pads. R25 15k keeps a nominal 5 V input at 3.0 V ADC; firmware hints/downlink example updated without changing defaults/NVS | Probe access with the actual Heltec/enclosure; sensor-specific UV-to-UVI calibration and analog offset/gain/temperature tests. UV remains disabled until configured |
 
 Conservative resistance/loss estimates, **not thermal qualification**:
 
@@ -421,7 +420,7 @@ tacho NPN are approximations. Fan loads are resistive, not real BLDC motors.
 
 ESD/EFT/surge, reverse-polarity dynamics, buck stability, thermal behavior,
 environmental resistance and full firmware interaction were not simulated.
-The prototype acceptance tests above remain mandatory.
+The acceptance tests above remain mandatory.
 
 References: [LMR36520 datasheet](https://www.ti.com/lit/ds/symlink/lmr36520.pdf),
 [Bourns SRP5030T](https://www.bourns.com/docs/product-datasheets/srp5030t.pdf),

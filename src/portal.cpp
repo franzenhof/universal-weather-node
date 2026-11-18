@@ -15,6 +15,7 @@
 #include <ArduinoJson.h>
 #include <Update.h>
 #include "ota_check.h"
+#include "esp_flash.h"
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -45,7 +46,7 @@ static const char OTA_PAGE_HTML[] PROGMEM =
     "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
     "<title>Firmware update</title></head><body style='font-family:sans-serif;max-width:480px;margin:1rem auto;padding:0 1rem;'>"
     "<h3>Firmware update</h3><form method='POST' action='/u' enctype='multipart/form-data'>"
-    "<input type='file' name='update' accept='.bin,application/octet-stream'><br/><small>Use <b>universal-weather-node-&lt;version&gt;.bin</b> &mdash; not the <i>-factory</i> file (that one is for the first installation over USB).</small><br/><br/>"
+    "<input type='file' name='update' accept='.bin,application/octet-stream'><br/><small>Either <b>universal-weather-node-&lt;version&gt;.bin</b> or the <i>-factory</i> file (only its firmware part is written). Files that are no firmware are refused.</small><br/><br/>"
     "<button type='submit'>Update</button></form><p><a href='/'>Back</a></p></body></html>";
 
 // ============================================================================
@@ -357,13 +358,18 @@ Config runConfigPortal(const Config& cur)
     wm.setWebServerCallback([&wm, &calibratedThisSession]() {
         // Firmware upload, always our own handlers - registered before
         // WiFiManager's /update and /u (this callback runs first, the first
-        // matching handler wins): Digest auth when an admin password is set,
-        // and the first chunk must be an application image (ota_check.h) -
-        // a -factory image or another file is refused before anything is
-        // written, so a wrong file can't leave a node that doesn't boot.
+        // matching handler wins): Digest auth when an admin password is set.
+        // OtaUploadFilter (ota_check.h) takes the application image or the
+        // -factory image (of which only the application part is written, if
+        // its partition table matches this node's); anything else is refused
+        // before a byte is written, so a wrong file can't leave a node that
+        // doesn't boot.
         {
-            static bool uploadAuthOk = false, uploadOk = false, headerChecked = false;
+            static bool uploadAuthOk = false, uploadOk = false;
             static const char* uploadError = nullptr;
+            static OtaUploadFilter filter;
+            static uint8_t devicePt[OTA_FACTORY_PT_LEN];
+            static bool devicePtOk = false;
             wm.server->on("/update", HTTP_ANY, [&wm]() {
                 if (otaPass[0] && !wm.server->authenticate("admin", otaPass)) {
                     wm.server->requestAuthentication(DIGEST_AUTH, "WeatherNode firmware update");
@@ -383,31 +389,35 @@ Config runConfigPortal(const Config& cur)
                 if (uploadOk) { delay(1000); ESP.restart(); }
             }, [&wm]() {
                 HTTPUpload& up = wm.server->upload();
+                auto refuse = [](const char* why) {
+                    uploadError = why;
+                    dbgSerial.printf("Portal OTA: refused - %s\n", why);
+                    if (Update.isRunning()) Update.abort();
+                };
                 if (up.status == UPLOAD_FILE_START) {
-                    uploadAuthOk  = !otaPass[0] || wm.server->authenticate("admin", otaPass);
-                    uploadOk      = false;
-                    headerChecked = false;
-                    uploadError   = nullptr;
+                    uploadAuthOk = !otaPass[0] || wm.server->authenticate("admin", otaPass);
+                    uploadOk     = false;
+                    uploadError  = nullptr;
                     dbgSerial.printf("Portal OTA: upload %s\n", uploadAuthOk ? "started" : "refused (not authenticated)");
-                    if (uploadAuthOk && !Update.begin(UPDATE_SIZE_UNKNOWN)) dbgSerial.printf("Portal OTA: %s\n", Update.errorString());
-                } else if (!uploadAuthOk) {
-                    return;   // the body is read and discarded
+                    if (!uploadAuthOk) return;
+                    if (!devicePtOk)
+                        devicePtOk = esp_flash_read(nullptr, devicePt, OTA_FACTORY_PT_OFFSET, sizeof(devicePt)) == ESP_OK;
+                    filter.begin(devicePtOk ? devicePt : nullptr);
+                    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) dbgSerial.printf("Portal OTA: %s\n", Update.errorString());
+                } else if (!uploadAuthOk || uploadError) {
+                    return;   // the rest of the body is read and discarded
                 } else if (up.status == UPLOAD_FILE_WRITE) {
-                    if (!headerChecked) {
-                        headerChecked = true;
-                        OtaImageKind k = otaImageKind(up.buf, up.currentSize);
-                        if (k != OTA_IMAGE_APP) {
-                            uploadError = otaImageError(k);
-                            dbgSerial.printf("Portal OTA: refused - %s\n", uploadError);
-                            Update.abort();
-                        }
-                    }
-                    if (Update.isRunning()) Update.write(up.buf, up.currentSize);
+                    if (!Update.isRunning()) return;
+                    bool ok = filter.feed(up.buf, up.currentSize, [](const uint8_t* d, size_t n, void*) {
+                        return Update.write(const_cast<uint8_t*>(d), n) == n;
+                    }, nullptr);
+                    if (!ok) refuse(filter.error());
                 } else if (up.status == UPLOAD_FILE_END) {
-                    if (Update.isRunning()) {
-                        uploadOk = Update.end(true);
-                        if (!uploadOk) dbgSerial.printf("Portal OTA: %s\n", Update.errorString());
-                    }
+                    if (!Update.isRunning()) return;
+                    if (!filter.finish()) { refuse(filter.error()); return; }
+                    uploadOk = Update.end(true);
+                    if (uploadOk) dbgSerial.printf("Portal OTA: %s image written\n", filter.isFactory() ? "application part of the factory" : "application");
+                    else          dbgSerial.printf("Portal OTA: %s\n", Update.errorString());
                 } else if (up.status == UPLOAD_FILE_ABORTED) {
                     Update.abort();
                 }

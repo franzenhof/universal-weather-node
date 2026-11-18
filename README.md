@@ -1,12 +1,14 @@
 # Universal Weather Node — LoRaWAN + Wi-Fi Weather Station
 
-A DIY weather station on a custom PCB around the **Heltec WiFi LoRa 32 V3** (ESP32-S3). It measures **wind speed, wind direction, rain, temperature, humidity and air pressure** and sends the data wherever you need it — over LoRaWAN, over Wi-Fi, or both at once.
+A DIY weather station around the **Heltec WiFi LoRa 32 V3** (ESP32-S3). It measures **wind speed, wind direction, rain, temperature, humidity and air pressure** and sends the data wherever you need it — over Wi-Fi (MQTT, Home Assistant, web dashboard, weather networks), over LoRaWAN, or both at once.
 
-The sensors are your choice: a **Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station** , **TFA Dostmann / LaCrosse IT+ thermo-hygro sensors** or **Ecowitt / Froggit (Fine Offset) sensors** over 868 MHz (received by the board's LoRa chip — no wiring, no extra hardware), **Davis** wind and rain sensors on their original RJ11 plugs, or **generic wired** reed-switch sensors. A **BME280** adds the air pressure (wireless stations have no barometer) and is part of almost every setup.
+> **The simplest station is just two things:** a **Heltec WiFi LoRa 32 V3** and a **wireless outdoor station** (e.g. Bresser 7-in-1 or Ecowitt / Froggit WS69) — the Heltec receives it directly on 868 MHz. A **BME280** module on four wires is **recommended** for the air pressure. **No custom PCB and no LoRaWAN needed:** the [PCB](#hardware) is only for wired sensors (Davis, reed switches, DS18B20, outputs …), and **LoRaWAN is optional** — Wi-Fi alone is enough. See [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb).
+
+The sensors are your choice: a **Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station** , **TFA Dostmann / LaCrosse IT+ thermo-hygro sensors** or **Ecowitt / Froggit (Fine Offset) sensors** over 868 MHz (received by the board's LoRa chip — no wiring, no extra hardware), **Davis** wind and rain sensors on their original RJ11 plugs, or **generic wired** reed-switch sensors. A **BME280** adds the air pressure (most wireless stations have no barometer) and is recommended for every setup.
 
 - 🧩 **Everything runs on the node itself** — the ESP32-S3 of the Heltec V3 receives, measures, computes (dew point, trends, daily totals …) and uploads. No Linux PC, Raspberry Pi, ioBroker script or cloud service in between
 - 📻 **Wireless sensors out of the box** — Bresser stations, TFA / LaCrosse IT+ and Ecowitt / Froggit sensors (IT+ and Ecowitt not yet tested with real sensors) on 868 MHz, received between LoRaWAN uplinks; per value you choose which sensor counts (board, wireless, automatic fallback)
-- 📡 **LoRaWAN** to ChirpStack or TTN — compact binary format (default) or CayenneLPP, automatically fitted to the data rate
+- 📡 **LoRaWAN (optional)** to ChirpStack or TTN — for sites without Wi-Fi; compact binary format (default) or CayenneLPP, automatically fitted to the data rate
 - 📶 **Wi-Fi + MQTT** (TLS-capable) with **Home Assistant** auto-discovery
 - 🌐 **Built-in web dashboard** with live values, trend charts and hover details — works without internet
 - 🧮 **Computed on the device:** dew point, feels-like temperature, cloud base, 3-h pressure tendency with a weather trend, temperature trend, rain last hour / 24 h / today / yesterday, sunshine duration (Bresser 7-in-1), frost/fog/sultry warnings
@@ -24,7 +26,7 @@ The sensors are your choice: a **Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor statio
 
 The transports can be enabled independently. Web serving and weather-network uploads run in background tasks; sensor sampling and LoRaWAN share the main loop, so a radio exchange briefly pauses sampling.
 
-**Current status:** [2.0.0-beta.3](firmware/universal-weather-node-2.0.0-beta.3.bin) is the latest prepared firmware. PCB v2.0 fabrication files are ready for **prototypes**, not a hardware-qualified production run. Builds and host tests pass; physical v2.0 qualification and beta field tests on Rev 1.2/1.3 remain open. The photos below show older Rev 1.2 hardware; the v2.0 images are renders.
+**Current status:** [2.0.0-rc.1](firmware/universal-weather-node-2.0.0-rc.1.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.1-factory.bin) for the first installation) is the release candidate for 2.0.0. Builds and host tests pass. The photos below show Rev 1.2 hardware; the v2.0 images are renders.
 
 > **PCB v2.0 power safety:** use **one power source at a time**. JP8 is a two-pin manual buck disconnect, not a power mux. Before connecting USB-C, disconnect VIN and remove the JP8 shunt. J3 has VIN and GND only; there is no external 5 V input. Never select PCB revision `20` on a Rev 1.2/1.3 board.
 
@@ -115,7 +117,7 @@ The node runs continuously (no deep sleep). It samples the sensors every few sec
 
 ## Quick Start
 
-1. **Prepare the hardware** — PCB, Heltec board and sensors (see [Hardware](#hardware)). For v2.0, follow the [assembly and first-power checklist](pcb/v2.0/CHECKLIST.md); connect sensor cables with power off.
+1. **Prepare the hardware** — Heltec board and sensors; the PCB only for wired sensors (see [Hardware](#hardware) or, without PCB, [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb)). For v2.0, follow the [assembly and first-power checklist](pcb/v2.0/CHECKLIST.md); connect sensor cables with power off.
 2. **Flash once over USB** — easiest [in the browser, no software needed](#installing-the-firmware-browser-no-software); or with PlatformIO `pio run -t upload` (see [Build & Flash](#build--flash)). On v2.0, disconnect external power and remove JP8 first. Later application updates can use OTA.
 3. **Open first-time setup.** While powered by USB, the node opens Wi-Fi **`WeatherNode`**. Connect with your phone and open **http://192.168.4.1**. Do not hold the user button during boot.
 4. **Choose your PCB revision and connections.** Select `12` for Rev 1.2 or `13` for Rev 1.3; v2.0 is detected automatically. Disable absent wind/rain sensors and enter your station altitude. Choose the setup below, then *Save*; the node restarts.
@@ -143,7 +145,7 @@ For permanent VIN power on v2.0, disconnect USB first, then fit JP8 as described
 | DS18B20 | Up to 3 temperature probes (1-Wire, external) |
 | Bresser 5/6/7-in-1 station, TFA Dostmann / LaCrosse IT+ or Ecowitt / Froggit sensors (optional) | Wireless 868 MHz sensors, received by the Heltec's LoRa chip — no extra hardware; see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz) |
 | LiPo battery | Optional; voltage measured via voltage divider + ADC |
-| Custom PCB **v2.0** (default) or Rev 1.2 / 1.3 | Connectors plus ESD protection, pull-ups, RC filters, polyfuses; v2.0 also power supply 6–29.2 V / 5 V and a UV input |
+| Custom PCB **v2.0** or Rev 1.2 / 1.3 — *optional, only for wired sensors* | Connectors plus ESD protection, pull-ups, RC filters, polyfuses; v2.0 also power supply 6–29.2 V / 5 V and a UV input |
 
 > **Other sensors work too.** Rain gauges and anemometers are just reed-switch pulse counters — any similar sensor works after setting its ratio. See [Using Other Sensors](#using-other-sensors). **Without any wiring**, a Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station delivers wind, rain, temperature, humidity (and UV / light) over 868 MHz, TFA Dostmann / LaCrosse IT+ sensors temperature and humidity, Ecowitt / Froggit stations (WS69, WS80, WS90 …) all outdoor values — see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz); keep the BME280 for the air pressure. A wireless-only station even works **without the custom PCB** — see [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb).
 
@@ -154,7 +156,7 @@ For a wireless station (Bresser 5/6/7-in-1, TFA / LaCrosse IT+ or Ecowitt / Frog
 | Part | Notes |
 |------|-------|
 | Heltec WiFi LoRa 32 **V3 / V3.1 / V3.2** | with an **868 MHz** antenna (EU); never power it without the antenna |
-| BME280 module (I²C, 3.3 V) | address **0x76** (SDO to GND; many modules are 0x76, some 0x77 — check the jumper/solder bridge). Must be a BME280, not a BMP280 (no humidity) |
+| BME280 module (I²C, 3.3 V) — *recommended* | air pressure (+ optionally temperature / humidity); address **0x76** (SDO to GND; many modules are 0x76, some 0x77 — check the jumper/solder bridge). Must be a BME280, not a BMP280 (no humidity) |
 | USB-C power supply 5 V, ≥ 1 A | the Heltec's own USB-C socket |
 | Bresser station, TFA IT+ or Ecowitt / Froggit sensor | see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz) |
 
@@ -181,6 +183,12 @@ For a wireless station (Bresser 5/6/7-in-1, TFA / LaCrosse IT+ or Ecowitt / Frog
 4. Wi-Fi / MQTT / LoRaWAN / weather networks as needed.
 
 Everything else — dashboard, Home Assistant, LoRaWAN, weather networks, derived values — works as on the boards. Not available without the PCB: Davis / wired sensors, DS18B20, UV, AUX, heater/fan, Victron, the wide-range and protected power input.
+
+**Enclosure:** a 3D-printable wall-mount case for this build is in [`3dprint/`](3dprint/README.md#minimal-wireless-build-enclosure-bare-heltec-v3--bme280-no-pcb) (`case_minimal.py`, STL/STEP in `3dprint/minimal/`). The Heltec sits in the upper chamber — no screws through the board, display window, PRG/RST pushers, USB-C opening and an SMA bulkhead for an external 868 MHz antenna. The BME280 has its own louvred chamber below, separated by a double wall with a ventilated air gap so the ESP32's heat does not reach it; the only link is a 12.5 × 4.5 mm cable slot (wide enough for the Dupont plugs), sealed with hot glue after wiring. Print in PETG/ASA without supports; for a sheltered place (under a roof or eave), not waterproof. *Not yet printed — measure your BME280 module and check the fit first.*
+
+<!-- help:skip -->
+<p align="center"><img src="pictures/case-minimal.png" alt="3D-printed enclosure for the minimal wireless build: Heltec V3 chamber on top, ventilated air gap, louvred BME280 chamber below" width="40%"></p>
+<!-- /help:skip -->
 
 ### Custom PCB
 
@@ -214,7 +222,7 @@ Rev 1.2/1.3's BME280 RJ45 jack is replaced by J9 on v2.0; an existing cable can 
 | **VIN** (J3, or DC jack J18) | 6–29.2 V, including an 8s LiFePO4 battery at full charge (J18: up to 24 V) | Common fused P-channel reverse-polarity protection (Q7), bidirectional TVS SMBJ30CA, separately fused LMR36520 buck (5 V / 2 A nominal) | JP8 pins 1–2 |
 | **USB-C** (Heltec) | Regulated USB 5 V; measurement / bench test / flashing | USB VBUS connects to the module 5 V rail; source/cable/Heltec-path limits apply | JP8 removed; VIN disconnected |
 
-**DC jack J18 (optional, hand-soldered):** a 5.5 × 2.1 mm barrel jack (XKB DC-005-5A-2.0, LCSC C381116, in the THT list) **in parallel with J3**, in front of the fuse F7, so it uses the same reverse-polarity protection, TVS and fuse. **Centre positive** — the usual polarity of 12 V plug-in power supplies; a reversed supply is blocked by Q7 (not yet tested on a prototype). The jack is rated **5 A / 24 V**: fine for 12 V / 24 V supplies and the heater; use J3 for an 8s LiFePO4 battery (up to 29.2 V). Connect **either J3 or J18**, never both. The 3D-printed case has a 0.6 mm knock-out in the left wall in front of the jack.
+**DC jack J18 (optional, hand-soldered):** a 5.5 × 2.1 mm barrel jack (XKB DC-005-5A-2.0, LCSC C381116, in the THT list) **in parallel with J3**, in front of the fuse F7, so it uses the same reverse-polarity protection, TVS and fuse. **Centre positive** — the usual polarity of 12 V plug-in power supplies; a reversed supply is blocked by Q7. The jack is rated **5 A / 24 V**: fine for 12 V / 24 V supplies and the heater; use J3 for an 8s LiFePO4 battery (up to 29.2 V). Connect **either J3 or J18**, never both. The 3D-printed case has a 0.6 mm knock-out in the left wall in front of the jack.
 
 J3 is a two-pin terminal: **1 VIN, 2 GND**. The external 5 V branch
 (F2/D4/Q9/R56/U6/R57–R60/C28–C30) has been removed. JP8 is now a two-pin
@@ -232,8 +240,8 @@ leave U4 unpowered while GPIO34 still drives its input). C35/C36 (10 µF each) s
 
 The 5 V rail is shared by the Heltec, sensors and the optional 5 V fan; the buck's
 nominal 2 A rating is **not** spare
-fan capacity. The design target is a fan up to 0.5 A at 5 V. Thermal performance and available supply margin must
-be checked on a prototype in the intended enclosure. The reverse-polarity
+fan capacity. The design target is a fan up to 0.5 A at 5 V. Thermal performance and available supply margin should
+be checked in the intended enclosure. The reverse-polarity
 MOSFET includes a gate-source clamp (D31 12 V with R45 100k: about 0.17 mA
 standing current at 29.2 V); it is not an active overvoltage disconnect.
 
@@ -243,7 +251,7 @@ input within its normal voltage magnitude does not forward-bias a TVS and force
 the fuse to trip. This is
 reverse-polarity protection, not reverse-current isolation or a power mux:
 disconnect all power and discharge the rails before changing wiring.
-Prototype reverse-polarity tests are still required.
+Check the reverse-polarity behaviour once during bring-up ([CHECKLIST B](pcb/v2.0/CHECKLIST.md)).
 
 USB powers the Heltec, the 3.3 V sensor rail (via U7 from the module's 5 V pin), UV and other measurement interfaces.
 A 5 V fan is possible with JP9 pins 1–2, subject to the **combined USB and
@@ -337,13 +345,13 @@ minus left); recheck the final order. No hardware release is implied.
 **New in v2.0:**
 
 - **Heater**: **J12 HEATER** `+V HEAT-`, design target **3 A**, supplied from protected VIN (up to 29.2 V, not regulated). Low-side AON7264E on GPIO38, with a 5 V 74AHCT1G125 gate driver and a separate **4 A fuse F5**. The fuse rating is not an allowed continuous load current. Select a heater rated for the actual battery voltage, and size supply/wiring for its current.
-- **Fan**: **J13 FAN** `FAN+ GND TACH`, high-side switch on GPIO39. **JP9 1–2 = 5 V (default, max 0.5 A design target); JP9 2–3 = protected VIN (max 1 A design target)**. Fit only one shunt and change it with power disconnected. A usual 24 V fan is not automatically suitable for a fully charged 29.2 V battery. Heater and fan are PWM-capable and off at reset; current limits require thermal verification on the prototype.
+- **Fan**: **J13 FAN** `FAN+ GND TACH`, high-side switch on GPIO39. **JP9 1–2 = 5 V (default, max 0.5 A design target); JP9 2–3 = protected VIN (max 1 A design target)**. Fit only one shunt and change it with power disconnected. A usual 24 V fan is not automatically suitable for a fully charged 29.2 V battery. Heater and fan are PWM-capable and off at reset; check the current limits thermally in your build.
 - **Fan tacho** on GPIO40: transistor level conversion for an open-collector signal or an external pull-up, without feeding that voltage back into the 3.3 V rail; filter and Schmitt trigger follow the transistor
 - **Victron VE.Direct** (isolated, ADuM121N): J14 screw terminal and J15 JST-PH; pin 1 = isolated GND, pin 2 = node TX to Victron RX, pin 3 = Victron TX to node RX, pin 4 = Victron-side V+. GPIO33 receives, GPIO34 is the unused transmit direction. The MCU side of U4 runs from the Heltec 3.3 V, independent of the fused sensor rail. Never bridge isolated GND to board GND.
 - **AUX inputs** (terminal J11: `3V3 AIN PULSE GND`): **AIN** on GPIO4 (ADC1, works while Wi-Fi is on; electrical input limit 3.3 V with R25 absent, useful ADC range approximately 0–3.1 V). Populate **R25 = 15 kΩ** for 0–5 V sensors: with R24 = 10 kΩ, 5 V becomes 3.0 V at the ADC; set the input scale to **1.66667**. **PULSE** on GPIO48 is for a reed switch / open collector (4.7 kΩ pull-up, RC 0.47 ms, Schmitt trigger — inverted like rain and wind), e.g. a second rain gauge or an anemometer
 - **UV sensor input** (terminal J17: `GND SIGNAL 3V3 5V`): GPIO3 ADC1 with a connector-side D32 PESD5V0S2BT TVS, a 10 kΩ input resistor, BAT54S rail clamps and range-select divider. JP10 1–2 selects 0–3.3 V (scale 1.10989); 2–3 selects 0–5 V (scale 1.66534). D32 has 5 V standoff, not a 5 V clamp; the resistor/divider and BAT54S remain necessary. The 5 V pin is fed through its own PTC F8 (nominal 100 mA), so a shorted UV cable cannot pull down the shared 5 V rail. Supply the sensor from exactly one voltage pin; the UV index requires separate sensor calibration. This protection does not guarantee survival of sustained overvoltage or prevent backfeeding from an externally powered sensor when the controller is off.
 - **Hardware revision ID**: 1 MΩ / 1 MΩ divider on GPIO20 (≈ 1.65 V on v2.0, pin open on Rev 1.x; 1.65 µA)
-- **Test pads** TP1–TP5 (GND, VIN, 5V, 3V3), plus bare probe pads **TP6** (bottom, 1.5 mm) on the Heltec 3.3 V rail (3V3_HELTEC, also U4 pin 1) and **TP7** (top, 1.0 mm, next to Q1) on the switched 1-Wire supply OW_SW, for scoping the switch-on dip; the heater gate is probed at R31 pad 1. The bottom silkscreen has **S/N and date fields** for marking prototypes. None of these are BOM/CPL parts. **Expansion header J16** (`GND 3V3 SDA SCL IO19 5V`, 3.3 V logic, unprotected, not populated)
+- **Test pads** TP1–TP5 (GND, VIN, 5V, 3V3), plus bare probe pads **TP6** (bottom, 1.5 mm) on the Heltec 3.3 V rail (3V3_HELTEC, also U4 pin 1) and **TP7** (top, 1.0 mm, next to Q1) on the switched 1-Wire supply OW_SW, for scoping the switch-on dip; the heater gate is probed at R31 pad 1. The bottom silkscreen has **S/N and date fields** for marking boards. None of these are BOM/CPL parts. **Expansion header J16** (`GND 3V3 SDA SCL IO19 5V`, 3.3 V logic, unprotected, not populated)
 - **Wind-vane supply switched** by GPIO19 (P-MOSFET Q6, LOW = on; TVS SMLVT3V3 on the switched line): J5 `3V3` and the RJ11 3.3 V pin are only powered around each reading in low-power mode — see [Low-Power Mode](#low-power-mode-lora-only). GPIO3 is the UV analog input.
 - **Wind-vane pull-up R8** (4.7 kΩ) for reed-switch vanes, activated with jumper **JP2** (Rev 1.3: optional footprint R21)
 
@@ -353,7 +361,7 @@ minus left); recheck the final order. No hardware release is implied.
 
 **Energy budget (autonomous PV + LiFePO4):** rough planning assumptions, **not v2.0 measurements**: 0.25 W in LoRa-only mode means 6 Wh/day; 0.6–0.7 W with Wi-Fi means about 15–17 Wh/day. A nominal 20 Ah 4s LiFePO4 battery (256 Wh) would give about 40 days at 6 Wh/day before accounting for usable capacity, cold weather, conversion losses and peripherals. PV sizing depends on local winter sunlight and shading; 30–50 W is a starting estimate, not a year-round guarantee. Measure the actual installation, including fan/heater consumption. [Low-power savings](#low-power-mode-lora-only) remain unmeasured; limit heater use with the power settings and [battery interlock](#inputs-and-outputs-pcb-v20).
 
-**Manufacturing (prototypes):** exports were refreshed on **2026-11-03** from the verified current PCB, including the revised protection, buck/fuse/output-diode corrections, mounting keepouts and 0.8 mm back-side operating reference:
+**Manufacturing:** exports were refreshed on **2026-11-03** from the verified current PCB, including the revised protection, buck/fuse/output-diode corrections, mounting keepouts and 0.8 mm back-side operating reference:
 
 | File | Use |
 |------|-----|
@@ -378,7 +386,7 @@ changes; this visual check does not qualify the hardware or approve the order
 on your behalf.
 
 The [3D-print files and assembly guide](3dprint/README.md) include separate cases for
-Rev 1.2/1.3 and a new [v2.0 indoor prototype enclosure](3dprint/v20/) for the
+Rev 1.2/1.3 and a new [v2.0 indoor enclosure](3dprint/v20/) for the
 100 × 100 mm PCB. The v2.0 case has a display window, exterior PRG button,
 USB/connector openings, optional bottom M12 glands, an SMA opening and wall-mount
 ears. STL, STEP, editable CAD source and printing instructions are included.
@@ -518,7 +526,7 @@ The board is open hardware: everyone orders it for their own use. The SMD parts 
 - the **Heltec WiFi LoRa 32 V3 / V3.2** with an **868 MHz** antenna (EU),
 - a **BME280** module (I²C, 3.3 V) and your sensors.
 
-J18 (DC jack) is optional. Solder from low to high: pin sockets J1/J2 (fit them onto the Heltec while soldering so they line up), headers, JST, screw terminals, RJ11 jacks, DC jack. Use **lead-free solder**. Then follow [CHECKLIST B](pcb/v2.0/CHECKLIST.md#b-bring-up-of-the-first-prototypes) for the first power-up.
+J18 (DC jack) is optional. Solder from low to high: pin sockets J1/J2 (fit them onto the Heltec while soldering so they line up), headers, JST, screw terminals, RJ11 jacks, DC jack. Use **lead-free solder**. Then follow [CHECKLIST B](pcb/v2.0/CHECKLIST.md#b-bring-up-of-the-first-boards) for the first power-up.
 
 **Costs:** set-up, stencil and a per-type fee for every *extended* part are charged per order, so 2–5 assembled boards cost considerably more per board than a large batch; JLC's calculator shows the actual price, VAT and shipping before payment. A **group order** spreads these fixed costs: one person orders on behalf of and at the expense of the participants and the costs are split without a mark-up. Selling assembled boards is a different matter (CE, RoHS, WEEE obligations).
 
@@ -535,7 +543,7 @@ The firmware is installed **once over USB, directly from the web browser** — n
 | `universal-weather-node-<version>-factory.bin` | bootloader + partition table (with `cfgdata`) + firmware, one complete image | **first installation** of a new board, or repairing a board that no longer starts | over **USB**, in the browser (steps below) or esptool at address **`0x0`** |
 | `universal-weather-node-<version>.bin` | the firmware (application) only | **updates** of a node that already runs this firmware | over **Wi-Fi** ([OTA](#firmware-update-ota), portal → *Firmwareupdate*), or USB at address `0x10000` |
 
-> Never use the `-factory` file for OTA: it starts with the bootloader, which doesn't belong in the firmware slot. From 2.0.0-beta.3 on, the portal's update page checks the file and refuses a `-factory` image (or any non-firmware file) before writing anything.
+> **Which file for OTA?** Nodes running **2.0.0-rc.1 or newer** accept **both** files: of a `-factory` file only the firmware part is written (bootloader and partition table can't be changed over OTA; if the file's partition table differs from the node's, the upload is refused — flash it over USB then). Nodes running **2.0.0-beta.3** refuse the `-factory` file, and **2.0.0-beta.2 or older must never get it** (they would write the bootloader into the firmware slot and no longer start) — for those, always use the file **without** `-factory`. When in doubt, take the file without `-factory`; it works everywhere.
 
 **You need:** a computer with **Chrome or Edge** (desktop; Firefox and Safari can't talk to USB devices), a **USB-C data cable** (some cables only charge — if no device shows up, try another one), the Heltec WiFi LoRa 32 V3 with its **868 MHz antenna screwed on** (never power the board without the antenna).
 
@@ -551,7 +559,7 @@ The firmware is installed **once over USB, directly from the web browser** — n
 **Good to know**
 - Our own partition layout (with the `cfgdata` settings partition) is part of the `-factory` file, so nothing has to be set up by hand. Settings stored by an earlier installation of this firmware are kept.
 - **Alternative flasher:** Espressif's [esptool-js](https://espressif.github.io/esptool-js/) (also in Chrome/Edge): *Connect*, then *Flash Address* **`0x0`**, choose the `-factory` file, *Program*. The old desktop *ESPHome-Flasher* program is no longer maintained — use the web flasher instead.
-- **Updating later:** use [OTA](#firmware-update-ota) with the normal `universal-weather-node-<version>.bin`. The `-factory` file over USB also works and keeps the settings.
+- **Updating later:** use [OTA](#firmware-update-ota) — with the normal `universal-weather-node-<version>.bin` (always safe), or from 2.0.0-rc.1 on also with the `-factory` file. The `-factory` file over USB also works and keeps the settings.
 
 ## Configuration
 
@@ -669,7 +677,7 @@ Saved settings survive ordinary restarts and application-only OTA updates. Facto
 
 1. Open the config portal (button 3 s or downlink `0x03`) and connect to **`WeatherNode`**.
 2. Open **http://192.168.4.1** and click **Firmwareupdate**.
-3. Upload **`universal-weather-node-<version>.bin`** from [`firmware/`](firmware/) — the file **without** `-factory` (see [which file](#installing-the-firmware-browser-no-software)) — and wait for the restart. From 2.0.0-beta.3 on, a `-factory` file or any other file is refused before anything is written. Keep power stable and do not close the upload page early.
+3. Upload **`universal-weather-node-<version>.bin`** from [`firmware/`](firmware/) and wait for the restart. Keep power stable and do not close the upload page early. Nodes from 2.0.0-rc.1 on also accept the `-factory` file (only its firmware part is written); on 2.0.0-beta.2 or older never upload the `-factory` file — see [which file](#installing-the-firmware-browser-no-software). Files that are not firmware are refused before anything is written (from 2.0.0-beta.3).
 
 With a **web settings admin password** set, the portal's `/update` page asks for it (user `admin`) and ArduinoOTA (`pio run -t upload` over the network) needs it as well (`upload_flags = --auth=<password>`). Without an admin password both stay open while the portal is running.
 
@@ -1160,10 +1168,10 @@ The node can additionally receive wireless sensors on 868.3 MHz (FSK) **with the
 
 - **Shared radio:** the SX1262 listens for the sensors whenever LoRaWAN does not need it. Before every uplink (and its two receive windows) and every join, the firmware stops the reception and restarts it afterwards. LoRaWAN is not affected; a sensor packet that arrives during an uplink is lost — Bresser sensors repeat every 12–16 s, IT+ sensors about every 4 s, so at a 60 s LoRaWAN interval roughly 5 % of the packets are missed, and only the latest values are kept anyway.
 - **Sensor IDs:** with *Wireless sensor IDs* empty the node accepts any sensor of the selected type in range (up to 4); IT+ sensors and most Ecowitt / Froggit sensors get a new ID with every battery change. The status page lists every received ID with RSSI — enter yours (hex, comma-separated) to ignore the neighbours'. A sensor not heard for 5 minutes gives up its place to a new one (e.g. after a battery change), and changing the ID list clears the sensor table. An IT+ sensor that reports a fresh battery takes over the place of a silent IT+ sensor on the same data rate after 1 minute (with an ID list, only if the new ID is in it).
-- **Output:** status page box *Wireless sensors (868 MHz)* and the JSON field `rfSensors` in `/api/data` and the MQTT data topic — one object per sensor with `id`, `type`, `protocol` (`Bresser`, `IT+ 17.241 kbit/s`, `IT+ 9.579 kbit/s`, `Fine Offset`), for Fine Offset also `model` and `channel`, `rssi`, `ageSec`, `batteryOk` and, as far as the sensor sends them, `temp`, `humidityPct`, `windSpeed` / `windGust` / `windDirDeg` (the sensor's own mean and gust), `rainTotal` (the sensor's running total, resets on a battery change), `uvIndex`, `lightLux`, `soilMoisturePct`, `lightningCount` / `lightningDistKm` (WH51 / WH57, JSON and status page only), and `stale` — the values not received for more than 5 minutes although the sensor still sends others (e.g. a failed temperature element); the status page marks them *(stale)*. Units follow the unit settings. Which of these values go into LoRaWAN, MQTT, Home Assistant, the weather networks and the history is set with the [value sources](#value-sources).
+- **Output:** status page box *Wireless sensors (868 MHz)* and the JSON field `rfSensors` in `/api/data` and the MQTT data topic — one object per sensor with `id`, `type`, `protocol` (`Bresser`, `IT+ 17.241 kbit/s`, `IT+ 9.579 kbit/s`, `Fine Offset`), for Fine Offset also `model` and `channel`, `rssi`, `ageSec`, `batteryOk` and, as far as the sensor sends them, `temp`, `humidityPct`, `windSpeed` / `windGust` / `windDirDeg` (the sensor's own mean and gust), `rainTotal` (the sensor's running total, resets on a battery change), `uvIndex`, `lightLux`, `soilMoisturePct`, `lightningCount` / `lightningDistKm` (WH51 / WH57, JSON and status page only), `supercapV` (voltage of the solar-charged super capacitor — only WS85 / WS90 send it; the key is missing for all other sensors), and `stale` — the values not received for more than 5 minutes although the sensor still sends others (e.g. a failed temperature element); the status page marks them *(stale)*. Units follow the unit settings. Which of these values go into LoRaWAN, MQTT, Home Assistant, the weather networks and the history is set with the [value sources](#value-sources).
 - **Low-power mode** is not available while wireless sensors are on (the chip stays in receive mode, ~5 mA).
 - **TFA Dostmann / LaCrosse IT+ sensors** instead of Bresser: set *Wireless sensor type* (web settings, portal field `rfproto`, parameter 50) to *TFA / LaCrosse IT+*. Supported: temperature / humidity sensors at **17.241 kbit/s** (TFA 30.3143.IT, 30.3144.IT, 30.3147.IT, 30.3157.IT, 30.3159.IT; TX21/25/27/29-IT) and **9.579 kbit/s** (TFA 30.3155.WD, 30.3156.WD; TX35-IT). With *both data rates* the receiver alternates every 5 s (the sensors send about every 4 s); choose the single rate if you know it. **Bresser and IT+ at the same time** is only possible alternating (*Bresser + TFA IT+ alternating*: 17 s Bresser, 5 s each IT+ rate) — the single SX1262 can listen to one data rate / sync word at a time, so packets of both families are missed (e.g. a good part of the Bresser wind packets, which makes wireless wind coarser). **Not recommended**; use one sensor family where possible. IT+ sensors only have a 6-bit ID that changes with every battery change — they appear as **`170000xx`** (17.241 kbit/s) or **`090000xx`** (9.579 kbit/s); after a battery change, update *Wireless sensor IDs* (or leave the list empty). **Not yet tested with real sensors** — the decoder is checked against a published frame. TFA *WeatherHub* / Mobile Alerts sensors are not supported yet (scrambled 6 kbit/s format; see `lib/TfaWeatherSensorReceiver/README.md`).
-- **Fine Offset / Ecowitt / Froggit sensors** (868 MHz versions only): set *Wireless sensor type* to *Fine Offset / Ecowitt / Froggit* — or, together with IT+ thermo-hygro sensors, *TFA IT+ 17.241 kbit/s + Fine Offset*: both use 17.24 kbit/s with the same sync word and are received **in the same phase, nothing is missed**. Supported (formats from the rtl_433 documentation, each frame checked by CRC-8 and checksum): outdoor arrays **WH65 / WS69** (e.g. Froggit WH3000SE / WH4000SE; WS69 with pressure), **WS68**, **WS80**, **WS85**, **WS90**; thermo-hygro **WH31 / WN31 / DP50** (8 channels); probes **WN34 / DP35 / DP150**, **WN38** (globe temperature — select them as a temperature source deliberately); rain **WH40 / DP80**, **WN20**; soil moisture **WH51 / DP100** and lightning **WH57 / DP60** (JSON and status page only). IDs read **`FFiiiiii`** — `FF` the model code, `iiiiii` the sensor ID as the Ecowitt app or rtl_433 shows it, e.g. WS90 `9000342B`, WH31 channel 1 `300001C3`. The old **WH24** sends the same frame as the WH65 with other units and can't be told apart — values follow the WH65. Not supported: WH25/WH32, air-quality, leak and WH1080 sensors, 433/915 MHz versions. **Not yet tested with real sensors.**
+- **Fine Offset / Ecowitt / Froggit sensors** (868 MHz versions only): set *Wireless sensor type* to *Fine Offset / Ecowitt / Froggit* — or, together with IT+ thermo-hygro sensors, *TFA IT+ 17.241 kbit/s + Fine Offset*: both use 17.24 kbit/s with the same sync word and are received **in the same phase, nothing is missed**. Supported (formats from the rtl_433 documentation, each frame checked by CRC-8 and checksum): outdoor arrays **WH65 / WS69** (e.g. Froggit WH3000SE / WH4000SE; WS69 with pressure), **WS68**, **WS80**, **WS85**, **WS90**; thermo-hygro **WH31 / WN31 / DP50** (8 channels); probes **WN34 / DP35 / DP150**, **WN38** (globe temperature — select them as a temperature source deliberately); rain **WH40 / DP80**, **WN20** (the WS80, WS85, WS90, WS68 and WH65/WS69 arrays are solar-powered with a super capacitor, AA batteries only as backup — WS85 / WS90 also report the capacitor voltage); soil moisture **WH51 / DP100** and lightning **WH57 / DP60** (JSON and status page only). IDs read **`FFiiiiii`** — `FF` the model code, `iiiiii` the sensor ID as the Ecowitt app or rtl_433 shows it, e.g. WS90 `9000342B`, WH31 channel 1 `300001C3`. The old **WH24** sends the same frame as the WH65 with other units and can't be told apart — values follow the WH65. Not supported: WH25/WH32, air-quality, leak and WH1080 sensors, 433/915 MHz versions. **Not yet tested with real sensors.**
 - Decoding: Bresser with a fork of [BresserWeatherSensorReceiver](https://github.com/matthias-bs/BresserWeatherSensorReceiver) (MIT) in `lib/BresserWeatherSensorReceiver` — adapted to share the transceiver with LoRaWAN and to RadioLib 7; changes in its `FORK.md`. IT+ with `lib/TfaWeatherSensorReceiver` (own, MIT, same usage pattern — kept self-contained so it can become a stand-alone library). Fine Offset with `lib/FineOffsetSensorReceiver` (own, MIT, written from the rtl_433 format documentation, no code copied). 433 MHz (OOK) sensors are not supported (the SX1262 has no OOK receiver).
 
 ### Value Sources
@@ -1625,7 +1633,7 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 ├── partitions.csv           # Partition table (with cfgdata)
 ├── firmware/                # Release binaries (OTA)
 ├── pictures/                # Photos, screenshots, badges; overview.png is rendered from tools/overview/ (render.sh, headless Chrome)
-├── 3dprint/                 # Rev 1.2/1.3 cases + v20/ indoor prototype case, STL/STEP/CAD and assembly guide
+├── 3dprint/                 # Rev 1.2/1.3 cases + v20/ indoor case, STL/STEP/CAD and assembly guide
 ├── pcb/v2.0/                # KiCad project, renders, schematic PDF; production/ = Gerber, JLCPCB BOM/CPL
 ├── pcb/v1.3/                # Fritzing, schematic, layout, BOM, Gerber (Rev 1.2/1.3)
 ├── platformio.ini
@@ -1665,6 +1673,14 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 ---
 
 ## Changelog
+
+### 2.0.0-rc.1
+
+Firmware: [`universal-weather-node-2.0.0-rc.1.bin`](firmware/universal-weather-node-2.0.0-rc.1.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.1-factory.bin`](firmware/universal-weather-node-2.0.0-rc.1-factory.bin) (first installation, USB at `0x0`). Release candidate for 2.0.0; settings and payload format unchanged since 2.0.0-beta.3.
+
+* **OTA with either file:** the portal's firmware upload also accepts the `-factory` image and writes only its firmware part (from `0x10000`), after checking that its partition table matches the node's; otherwise refused with a hint to flash over USB. Nodes on 2.0.0-beta.2 or older still need the file without `-factory`.
+* **Fine Offset WS85 / WS90:** the voltage of the solar-charged super capacitor as `supercapV` in `rfSensors` and on the status page — only for these stations, other sensors don't get the key.
+* Docs: prototype disclaimers removed; PCB and LoRaWAN marked optional in the introduction (Heltec V3 + a wireless station is enough, BME280 recommended); 3D-printable enclosure for the minimal wireless build (`3dprint/case_minimal.py`, 12.5 × 4.5 mm cable slot for the Dupont plugs).
 
 ### 2.0.0-beta.3
 
@@ -1755,7 +1771,7 @@ Firmware binary: [`universal-weather-node-1.3.0-beta.2.bin`](firmware/universal-
 
 **Validation:** PlatformIO build and all four host test files passed, including five real-module C++ regression programs. This does not replace physical hardware or LoRaWAN field testing.
 
-**PCB documentation and exports:** the current v2.0 board includes 14 back-side operating-reference blocks / 100 lines at 0.8 mm or larger. Gerber/drill, BOM and CPL were refreshed on 2026-11-03; see [Custom PCB](#custom-pcb) and the [assembly checklist](pcb/v2.0/CHECKLIST.md) before ordering prototypes.
+**PCB documentation and exports:** the current v2.0 board includes 14 back-side operating-reference blocks / 100 lines at 0.8 mm or larger. Gerber/drill, BOM and CPL were refreshed on 2026-11-03; see [Custom PCB](#custom-pcb) and the [assembly checklist](pcb/v2.0/CHECKLIST.md) before ordering.
 
 ### 1.3.0-beta.1
 

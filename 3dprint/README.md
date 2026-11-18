@@ -5,8 +5,105 @@
 | Rev 1.2 | `heltec weather node pcb v1.2 Case-body.stl`, `… Case-top.stl`, `… button.stl` | `heltec weather node pcb v1.2.f3d` (Fusion 360) |
 | **Rev 1.3** | `rev13/heltec weather node pcb v1.3 case-body.stl`, `… case-lid.stl`, `… button-pin.stl` (+ STEP, assembly STEP) | [`case_rev13.py`](case_rev13.py) (build123d) |
 | **v2.0** | [`v20/`](v20/): body, lid, button pin, optional gland blank (STL + STEP), assembly STEP and preview | [`case_v20.py`](case_v20.py) (build123d; reads current KiCad PCB) |
+| **Minimal wireless build** (no PCB) | [`minimal/`](minimal/): body, two lids, PRG/RST pins (STL + STEP), assembly STEP and preview | [`case_minimal.py`](case_minimal.py) (build123d) |
 
-## v2.0 enclosure (indoor prototype)
+## Minimal wireless build enclosure (bare Heltec V3 + BME280, no PCB)
+
+For the [Minimal Wireless Build](../README.md#minimal-wireless-build-no-custom-pcb): a bare
+**Heltec WiFi LoRa 32 V3** (pin headers soldered, pins pointing down) and a 4-pin
+**GY-BME280** module on four female–female jumper wires (J3 pins 1 GND, 2 3V3, 7 GPIO42,
+8 GPIO41). Wall-mounted, **for a sheltered place** (under a roof or eave) — the louvres
+shed rain, but the case is **not waterproof** (no IP rating).
+
+![Minimal build enclosure](minimal/preview.png)
+
+**Size:** case 64.3 × 76.1 × 35.0 mm (W × H × D, closed); 75 × 104 mm including the
+screw lobes and the mounting ears.
+
+**Concept — two chambers, one above the other**
+
+- **Top: electronics chamber.** The Heltec sits display-forward, USB-C on the left. It
+  needs no screws (it has no mounting holes): four **saddles** carry the pin-header plastic,
+  the pins drop into end-capped slots (this locates the board in X and Y), and four ribs on
+  the lid end 2.2 mm above the board, just above the soldered pin tips, so it cannot lift off. 21 mm below
+  the board leave room for the Dupont housings (2.5 + 14 mm) and the wire bend; the saddles
+  avoid the wired pins J3 1, 2, 7, 8. Louvres in the side walls (left: rear half, below the USB opening;
+  right: front half, above the SMA nut) — none in the floor, i.e. none towards the sensor.
+- **Air gap.** The electronics floor and the sensor chamber ceiling are two separate walls
+  with an **8 mm air gap**, open to the front, both sides and (between three narrow bridge
+  strips) the back, so wind flushes it. Because the warm chamber is on top, the air in a
+  horizontal gap is stably layered — warm air cannot sink into the gap, heat can only cross
+  ~8 mm of still air and the thin bridges. (A vertical "chimney" gap would only work with the
+  chambers side by side; then rising warm air from the electronics would pass the sensor.)
+- **Bottom: BME280 chamber.** 45° louvres falling to the outside on both side walls and
+  in the lid, straight slots in the floor. The module lies horizontally in two card guides,
+  header at the rear edge with the pins pointing up, ≥ 6 mm from every wall; a finger on the
+  lid stops it from sliding out. The **only** connection between the chambers is a
+  12.5 × 4.5 mm cable slot (a 1×4 Dupont housing, or four single housings one after another
+  beside the wires already threaded, pass through) — **seal it with hot glue or a
+  foam plug** after wiring so warm air cannot flow down. `case_minimal.py` checks this: the
+  separating walls are solid except for the conduit bore.
+
+**Antenna:** Ø 6.5 mm hole in the right wall for an **SMA bulkhead** with an IPEX (U.FL)
+→ SMA pigtail (10–15 cm) and an external **868 MHz** antenna (recommended; a hinged
+antenna pointing up). Alternative: the small antenna supplied with the Heltec stuck inside
+the electronics chamber (lower range); close the SMA hole with a screw + nut or hot glue.
+Never power the Heltec without an antenna.
+
+**Print** (PETG or ASA, 0.2 mm layers, 3–4 perimeters, ≥ 2.4 mm walls, **no supports**):
+
+| Part | Count | Orientation | Notes |
+|---|---|---|---|
+| [case-body](minimal/universal-weather-node-minimal-case-body.stl) | 1 | back on the bed (as exported) | USB window bridges 13.5 mm; louvres, saddles and card guides are vertical |
+| [lid-electronics](minimal/universal-weather-node-minimal-lid-electronics.stl) | 1 | outer face on the bed | window, pusher guides, hold-down ribs |
+| [lid-sensor](minimal/universal-weather-node-minimal-lid-sensor.stl) | 1 | outer face on the bed | 45° louvres print without support |
+| [button-pin-prg](minimal/universal-weather-node-minimal-button-pin-prg.stl) (9.2 mm) | 1 | foot down | protrudes 1.8 mm |
+| [button-pin-rst](minimal/universal-weather-node-minimal-button-pin-rst.stl) (7.7 mm) | 1 | foot down | nearly flush — press with a pen tip, no accidental resets |
+
+STEP files, an [assembly STEP](minimal/universal-weather-node-minimal-assembly.step) (with
+Heltec/BME280 clearance envelopes), [validation.json](minimal/validation.json) and a
+[display-cover template](minimal/display-cover.svg) are in [`minimal/`](minimal/).
+
+**Hardware**
+
+- 8 × **M3 × 10 (–12) mm screws for plastic** (self-tapping, e.g. ST2.9 × 13 or PT/Delta
+  type, pan head) — 4 per lid, into Ø 2.5 mm pilot holes (12 mm deep).
+- 2 × wall screws Ø 3.5–4 mm (pan head ≤ 8 mm, head height ≤ 2.4 mm) + plugs: top ear =
+  keyhole (hang), bottom ear = Ø 4.4 mm hole (fix).
+- SMA female bulkhead with IPEX/U.FL pigtail (thread 1/4"-36, ≥ 5 mm thread length),
+  868 MHz antenna.
+- Optional: 1 mm clear PETG/acrylic sheet 30.6 × 19.6 mm, glued into the 0.8 mm recess
+  behind the display window (recommended outdoors).
+- Hot glue or a bit of foam for the cable conduit; optionally 1 mm foam pads on the lid ribs.
+
+**Assembly**
+
+1. Insert both button pins into the lid guides from the inside (foot towards the Heltec).
+2. Push the four jumper wires onto the BME280 (VIN, GND, SCL, SDA), feed the free ends one by
+   one up through the conduit, slide the module into its card guides from the front (header
+   at the back, pins up) until it stops.
+3. Plug the wires onto the Heltec J3 pins 1 (GND), 2 (3V3), 7 (GPIO42 → SCL), 8 (GPIO41 →
+   SDA); lay the slack behind the board. Fit the SMA bulkhead and connect the pigtail to the
+   Heltec's IPEX socket (press straight down, do not pull on the thin cable).
+4. Lower the Heltec onto the saddles (USB-C to the left, display to the front); the pins must
+   drop into the saddle slots. Seal the conduit with hot glue / foam.
+5. Screw on both lids; check that PRG/RST are not held down and the USB-C plug fits.
+
+**Please check on the first print** (estimates, adjust in `case_minimal.py`): Heltec PCB
+thickness `HT` (1.2 mm assumed), switch height `BTN_H` (2.5 mm) and positions in `BUTTONS`,
+OLED `WINDOW`, `USB_OPEN` (13.5 × 9 mm — enough for typical USB-C overmoulds, not for very
+bulky ones), and the BME280 size `BME_W` × `BME_L` (10.5 × 13 mm, header on the 10.5 mm
+edge — **measure your module**, sizes vary between 10.5 × 13 and 11.5 × 15 mm). Heltec outline
+50.2 × 25.5 mm (Heltec spec) and header layout (pitch, 22.86 mm row spacing, pin 1 2.7 mm
+from the USB end) match the Heltec sockets in `pcb/v2.0`; button, USB and OLED positions are
+read from the Heltec V3 pin map and the v2.0 case — not measured on a real board.
+
+**Regenerate:** `.venv-cad/bin/python 3dprint/case_minimal.py` (same venv as below). The
+script checks single valid solids, watertight STL, part/part collisions, collisions with the
+Heltec/USB plug/SMA/BME280/Dupont envelopes, a free cable conduit, the wire bend room and
+the chamber separation, then writes `minimal/` and `pictures/case-minimal.png`.
+
+## v2.0 enclosure (indoor)
 
 Designed for the current **100 × 100 × 1.6 mm** PCB, with four M3 mounts on a
 **92 × 92 mm** pattern. It follows the Rev 1.3 concept (body, lid, captive button,
@@ -88,7 +185,7 @@ All STLs are already in print orientation at Z=0:
 **Mandatory first-print fit check:** PCB outline, mounting pattern and connector
 XY are read from the actual KiCad board. Connector/module heights and the
 display/button/USB dimensions are estimates carried over from the earlier case
-and Heltec pin layout, not measured on an assembled v2.0 prototype.
+and Heltec pin layout, not measured on an assembled v2.0 board.
 
 The estimated button is **14 mm** tall. It should have a small rest clearance,
 not hold PRG down at boot. If it does, shorten it; if travel is insufficient,
