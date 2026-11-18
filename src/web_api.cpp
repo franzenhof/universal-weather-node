@@ -566,6 +566,7 @@ void handleStatusPage()
             if (r.hasUv)       v += " &middot; UV " + String(r.uvIndex, 1) + stale("uv");
             if (r.hasLight)    v += " &middot; " + String((long)lroundf(r.lightLux)) + " lx" + stale("light");
             if (r.hasMoisture) v += " &middot; soil moisture " + String(r.moisturePct) + " %";
+            if (r.hasSupercap) v += " &middot; supercap " + String(r.supercapV, 1) + " V";
             if (r.hasLightning) v += " &middot; lightning count " + String(r.lightningCount) +
                                      (r.lightningKm ? " &middot; storm " + String(r.lightningKm) + " km" : String());
             String kind = r.proto == RF_PROTO_BRESSER ? "type " + String(r.type) : String(rfProtoName(r.proto));

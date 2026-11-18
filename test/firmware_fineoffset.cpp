@@ -150,6 +150,7 @@ int main()
     assert(foDecode(ws90, sizeof(ws90), f));
     assert(f.id == 0x00342b && near(f.lightLux, 1190.0f) && f.batteryMv == 3280 && near(f.tempC, 21.0f));
     assert(f.humidity == 57 && f.windDirDeg == 62 && f.windAvgMs == 0.0f && f.hasRain && f.rainMm == 0.0f);
+    assert(f.hasSupercap && near(f.supercapV, 3.8f));   // b[21] = 0x26
     assert(rfFineOffsetValues(f).ok == (RF_VAL_TEMP | RF_VAL_HUM | RF_VAL_WIND | RF_VAL_RAIN | RF_VAL_UV | RF_VAL_LIGHT));
     assert(!foDecode(ws90, 31, f));                     // truncated
     uint8_t ws90r[32];
@@ -167,6 +168,7 @@ int main()
     assert(foFrameLength(0x85) == sizeof(ws85));
     assert(foDecode(ws85, rx(buf, ws85, sizeof(ws85)), f));
     assert(f.id == 0x0028eb && f.batteryMv == 2700 && f.batteryOk && f.windDirDeg == 131 && f.hasRain && !f.hasTemp);
+    assert(f.hasSupercap && near(f.supercapV, 1.1f));   // b[17] = 0x0B
 
     // ---- WS68 ----
     const uint8_t ws68[] = {0x68, 0x00, 0x00, 0xc5, 0x01, 0x07, 0x4b, 0x0f, 0xff, 0xff, 0x00, 0x2e, 0x00, 0x02, 0xa6, 0x63};

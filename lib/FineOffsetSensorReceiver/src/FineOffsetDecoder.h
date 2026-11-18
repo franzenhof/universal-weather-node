@@ -49,6 +49,7 @@ struct FoFrame {
     bool  hasLight = false;    float lightLux = 0.0f;
     bool  hasPressure = false; float pressureHpa = 0.0f; // WS69 with pressure module
     bool  hasMoisture = false; uint8_t moisture = 0;     // WH51, %
+    bool  hasSupercap = false; float supercapV = 0.0f;  // WS85 / WS90: solar-charged super capacitor
     bool  hasLightning = false;                          // WH57
     uint8_t lightningState = 0;      // 0 start-up, 1 interference, 4 noise, 8 strike
     uint8_t lightningCount = 0;      // strikes counted by the sensor (8 bit, wraps)

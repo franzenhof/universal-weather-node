@@ -72,6 +72,7 @@ int main()
     assert(doc["rfSensors"].size()==2 && doc["rfSensors"][1]["windSpeed"].isNull());
     // Fine Offset extras: model, WH31 channel, soil moisture, lightning
     assert(doc["rfSensors"][0]["model"].isNull() && doc["rfSensors"][0]["channel"].isNull());
+    assert(doc["rfSensors"][0]["supercapV"].isNull() && doc["rfSensors"][1]["supercapV"].isNull());   // only WS85/WS90
     gRfSensors[1].proto=RF_PROTO_FINEOFFSET;gRfSensors[1].model="WH31";gRfSensors[1].channel=3;
     gRfSensors[1].hasMoisture=true;gRfSensors[1].moisturePct=36;
     gRfSensors[1].hasLightning=true;gRfSensors[1].lightningCount=7;gRfSensors[1].lightningKm=0;
@@ -80,6 +81,10 @@ int main()
         JsonObject fo=doc["rfSensors"][1];
         assert(fo["protocol"].as<std::string>()=="Fine Offset" && fo["model"].as<std::string>()=="WH31" && fo["channel"].as<int>()==3);
         assert(fo["soilMoisturePct"].as<int>()==36 && fo["lightningCount"].as<int>()==7 && fo["lightningDistKm"].isNull());
+        assert(fo["supercapV"].isNull());
+        gRfSensors[1].hasSupercap=true;gRfSensors[1].supercapV=3.84f;buildJsonPayload(doc);
+        assert(fabs(doc["rfSensors"][1]["supercapV"].as<float>()-3.8f)<0.01f);
+        gRfSensors[1].hasSupercap=false;
         gRfSensors[1].lightningKm=12;buildJsonPayload(doc);
         assert(doc["rfSensors"][1]["lightningDistKm"].as<int>()==12);
     }

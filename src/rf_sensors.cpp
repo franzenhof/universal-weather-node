@@ -153,6 +153,7 @@ void storeFineOffset(const FoFrame& f, float rssi)
     r.rssi      = rssi;
     r.batteryOk = f.batteryOk;
     if (f.hasMoisture)  { r.hasMoisture = true;  r.moisturePct = f.moisture; }
+    if (f.hasSupercap)  { r.hasSupercap = true;  r.supercapV = f.supercapV; }
     if (f.hasLightning) {
         r.hasLightning   = true;
         r.lightningCount = f.lightningCount;

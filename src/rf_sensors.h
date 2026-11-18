@@ -71,6 +71,8 @@ struct RfSensorReading {
     uint8_t channel = 0;             // WH31: 1-8; 0 = none
     bool    hasMoisture = false;     // WH51 soil moisture
     uint8_t moisturePct = 0;
+    bool    hasSupercap = false;     // WS85 / WS90 super capacitor (solar-charged)
+    float   supercapV = 0.0f;
     bool    hasLightning = false;    // WH57
     uint8_t lightningCount = 0;      // strikes counted by the sensor (8 bit, wraps)
     uint8_t lightningKm = 0;         // distance to the storm front; 0 = none detected

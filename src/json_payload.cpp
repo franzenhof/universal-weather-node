@@ -244,6 +244,7 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
             if (r.hasUv)    o["uvIndex"]   = r.uvIndex;
             if (r.hasLight) o["lightLux"]  = (long)lroundf(r.lightLux);
             if (r.hasMoisture) o["soilMoisturePct"] = r.moisturePct;
+            if (r.hasSupercap) o["supercapV"] = roundf(r.supercapV * 10.0f) / 10.0f;   // only stations with one (WS85/WS90)
             if (r.hasLightning) {
                 o["lightningCount"] = r.lightningCount;   // the sensor's 8-bit counter (wraps)
                 if (r.lightningKm) o["lightningDistKm"] = r.lightningKm;

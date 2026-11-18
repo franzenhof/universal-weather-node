@@ -122,6 +122,15 @@ void decodeWh65(const uint8_t* b, size_t len, FoFrame& o, bool wh24Units)
     }
 }
 
+// WS85 / WS90: voltage of the solar-charged super capacitor, 0.1 V in the
+// lower 6 bits; 0xFF = not reported (rtl_433 fineoffset_ws85.c / _ws90.c).
+void setSupercap(FoFrame& o, uint8_t raw)
+{
+    if (raw == 0xFF) return;
+    o.hasSupercap = true;
+    o.supercapV   = (raw & 0x3F) * 0.1f;
+}
+
 void decodeWs80(const uint8_t* b, FoFrame& o)   // WS80 and WS90 (same first 14 bytes)
 {
     o.id = be24(b + 1);
@@ -220,6 +229,7 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             decodeWs80(b, o);
             o.hasRain = true;
             o.rainMm  = be16(b + 19) * 0.1f;
+            setSupercap(o, b[21]);
             break;
         case FO_FAMILY_WS85:
             o.id        = be24(b + 1);
@@ -228,6 +238,7 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             setWind9(o, b[5], b[7], b[8], b[9]);
             o.hasRain = true;
             o.rainMm  = be16(b + 15) * 0.1f;
+            setSupercap(o, b[17]);
             break;
         default:
             return false;
