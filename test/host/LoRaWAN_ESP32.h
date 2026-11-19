@@ -9,6 +9,9 @@ struct SX1262 {
     void sleep() { ++hostSleeps; }
 };
 extern SX1262 radio;
+// radio_board.h: the firmware's BoardSX1262 is this fake on the host
+#define HOST_FAKE_RADIO
+using BoardSX1262 = SX1262;
 struct LoRaWANNode {
     bool active;
     LoRaWANNode():active(hostJoinOk) { ++hostNodes; }

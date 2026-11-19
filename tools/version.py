@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -61,36 +62,24 @@ if decoder_src.exists():
     )
 
 
-# Embed README.md into a PROGMEM string so it can be served as a rendered
-# help page from the WiFi config portal and the persistent web server
-# (/help route). Single source of truth: the repo's README.md is the only
-# copy to maintain. Blocks between "<!-- help:skip -->" and
-# "<!-- /help:skip -->" (picture galleries, badges — raw HTML and images the
-# offline renderer in include/help_page.h can't show, and whose files
-# aren't embedded) are left out.
-readme_src = Path(env.get("PROJECT_DIR")) / "README.md"
-readme_hdr = Path(env.get("PROJECT_DIR")) / "include" / "readme_md.h"
-if readme_src.exists():
-    lines = readme_src.read_text(encoding="utf-8").splitlines()
-    out_lines = []
-    skipping = False
-    for line in lines:
-        marker = line.strip()
-        if marker == "<!-- help:skip -->":
-            skipping = True
-            continue
-        if marker == "<!-- /help:skip -->":
-            skipping = False
-            continue
-        if not skipping:
-            out_lines.append(line)
-    if skipping:
-        raise RuntimeError("README.md: unterminated <!-- help:skip --> block")
-    md = "\n".join(out_lines)
+# Embed the documentation (README.md + docs/*.md + CHANGELOG.md, combined
+# into one page by tools/help_md.py) into a PROGMEM string so it can be
+# served as a rendered help page from the WiFi config portal and the
+# persistent web server (/help route). Single source of truth: the repo's
+# Markdown files are the only copy to maintain. help_md.py drops the
+# "<!-- help:skip -->" blocks (pictures, badges) and rewrites the links for
+# a single offline page.
+sys.path.insert(0, str(Path(env.get("PROJECT_DIR")) / "tools"))
+sys.dont_write_bytecode = True  # no tools/__pycache__ in the repo
+import help_md  # noqa: E402
 
+readme_hdr = Path(env.get("PROJECT_DIR")) / "include" / "readme_md.h"
+md = help_md.build(env.get("PROJECT_DIR"))
+if md is not None:
+    md = md.rstrip("\n")
     delim = "READMEMD"
     if f"){delim}\"" in md:
-        raise RuntimeError("README.md contains the raw-string delimiter )" + delim)
+        raise RuntimeError("Documentation contains the raw-string delimiter )" + delim)
     write_if_changed(
         readme_hdr,
         "#pragma once\n"

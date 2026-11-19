@@ -13,8 +13,8 @@
 #include <vector>
 #include <algorithm>
 
-// The Heltec's transceiver (defined by heltec_unofficial.h in main.cpp; on HSPI).
-extern SX1262 radio;
+// The Heltec's transceiver (heltec_board.cpp; Heltec V4 front end handled there).
+#include "radio_board.h"
 
 namespace {
 WeatherSensor ws;

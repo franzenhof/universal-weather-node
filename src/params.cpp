@@ -5,6 +5,7 @@
 #include "globals.h"
 #include "sensors.h"
 #include "board_io.h"
+#include "heltec_board.h"
 #include "serial_log.h"
 #include <Arduino.h>
 #include <Preferences.h>
@@ -23,6 +24,8 @@ bool applyParam(uint8_t paramId, int16_t value)
         if (!switchesOff) return false;
     }
     if (paramId == PARAM_UV_EN && value != 0 && !ioV2()) return false;
+    // Heltec V4: the PCB's wind/rain inputs collide with the RF front end (GPIO2/GPIO7)
+    if ((paramId == PARAM_WIND_EN || paramId == PARAM_RAIN_EN) && value != 0 && !boardPcbAllowed()) return false;
 
     switch (paramId) {
         case PARAM_UPLINK_INTERVAL_SEC: // uplinkIntervalSec

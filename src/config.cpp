@@ -106,6 +106,7 @@ void sanitizeConfig(Config& c)
     std::unique_ptr<const Config> defaults(new Config());
     const Config& d = *defaults;
     choice(c.pcbVersion, d.pcbVersion, PCB_REV_1_2, PCB_REV_1_3, PCB_REV_2_0);
+    choice(c.boardSel, d.boardSel, 0, 3, 4);   // BOARD_SEL_AUTO, BOARD_V3, BOARD_V4
     range (c.uplinkIntervalSec, 5, 3600);
     if (c.mqttIntervalSec != 0) range(c.mqttIntervalSec, 2, 3600);
     choice(c.loraWindAgg, d.loraWindAgg, 0, 1);
@@ -199,6 +200,7 @@ Config loadConfig()
     }
     c.provisioned      = prefs.getInt    ("provisioned", c.provisioned);
     c.pcbVersion       = prefs.getInt    ("pcbver",   c.pcbVersion);
+    c.boardSel         = prefs.getInt    ("board",    c.boardSel);
     c.altitudeM        = prefs.getInt    ("altitude", c.altitudeM);
     c.uplinkIntervalSec = prefs.getInt   ("uplinksec", prefs.getInt("delay", c.uplinkIntervalSec));
     c.sampleSec        = windSampleSecNormalized(prefs.getInt("samplesec", c.sampleSec));
@@ -329,6 +331,7 @@ void saveConfig(const Config& c)
     bool ok = true;
     ok &= checkWrite   ("provisioned", prefs.putInt    ("provisioned", c.provisioned), 4);
     ok &= checkWrite   ("pcbver",      prefs.putInt    ("pcbver",   c.pcbVersion), 4);
+    ok &= checkWrite   ("board",       prefs.putInt    ("board",    c.boardSel), 4);
     ok &= checkWrite   ("altitude",    prefs.putInt    ("altitude", c.altitudeM), 4);
     ok &= checkWrite   ("uplinksec",   prefs.putInt    ("uplinksec", c.uplinkIntervalSec), 4);
     ok &= checkWrite   ("samplesec",   prefs.putInt    ("samplesec", c.sampleSec), 4);

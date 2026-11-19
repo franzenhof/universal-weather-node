@@ -55,7 +55,8 @@ struct Config {
     uint64_t devEui            = 0;
     uint8_t  appKey[16]        = {};
     char     region[8]         = "EU868"; // LoRaWAN region (default)
-    int      pcbVersion        = PCB_REV_1_3;
+    int      pcbVersion        = PCB_REV_1_3;   // ignored on a Heltec V4 (no PCB support there)
+    int      boardSel          = 0;   // Heltec board: 0 = auto (by flash size), 3 = V3, 4 = V4 (heltec_board.h)
     int      altitudeM         = 560; // default altitude above sea level (m)
     // volatile: written by applyParam() (params.cpp), which now runs
     // from either the main loop task (LoRaWAN downlink, MQTT command) or the

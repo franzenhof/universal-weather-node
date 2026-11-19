@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <DallasTemperature.h>
 #include "board_io.h"
+#include "heltec_board.h"
 #include "sources.h"
 #include "rf_sensors.h"
 #include "derived_now.h"
@@ -204,7 +205,9 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
     status["bme280Present"] = bme280Present;
     status["bus1Present"]   = bus1Count > 0;
     status["sendFailCount"] = sendFailCount;
-    status["pcbRev"]        = gCfg.pcbVersion;
+    status["pcbRev"]        = boardPcbAllowed() ? gCfg.pcbVersion : 0;   // 0 = no PCB (Heltec V4)
+    status["board"]         = boardIsR8() ? "V4-R8" : boardName(gBoard.kind);
+    if (gBoard.fem != FEM_NONE) status["boardFem"] = femName(gBoard.fem);
     status["uvEnabled"]     = ioV2() && ioUvActive();
     status["uvIndexCalibrated"] = ioV2() && ioUvActive() && gIo.uvIndexCalibrated;
     if (gIo.battLockout) status["batteryLowLockout"] = true;

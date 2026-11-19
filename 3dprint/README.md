@@ -9,7 +9,7 @@
 
 ## Minimal wireless build enclosure (bare Heltec V3 + BME280, no PCB)
 
-For the [Minimal Wireless Build](../README.md#minimal-wireless-build-no-custom-pcb): a bare
+For the [Minimal Wireless Build](../docs/minimal-build.md): a bare
 **Heltec WiFi LoRa 32 V3** (pin headers soldered, pins pointing down) and a 4-pin
 **GY-BME280** module on four female–female jumper wires (J3 pins 1 GND, 2 3V3, 7 GPIO42,
 8 GPIO41). Wall-mounted, **for a sheltered place** (under a roof or eave) — the louvres

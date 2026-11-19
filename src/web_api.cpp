@@ -3,6 +3,7 @@
 #include "globals.h"
 #include "params.h"
 #include "board_io.h"
+#include "heltec_board.h"
 #include "sources.h"
 #include "lora_payload.h"
 #include "json_payload.h"
@@ -580,6 +581,9 @@ void handleStatusPage()
             bool euLike = strncmp(gCfg.region, "US", 2) != 0 && strncmp(gCfg.region, "AU", 2) != 0;
             if (euLike && ld.dataRate <= 5) dr += " (SF" + String(12 - ld.dataRate) + ")";
             dr += " &middot; " + String(ld.freqMHz, 1) + " MHz &middot; " + String(ld.txPowerDbm) + " dBm";
+            if (gBoard.fem != FEM_NONE)
+                dr += " <span class='dim'>(SX1262 " + String(femChipPowerDbm(ld.txPowerDbm, gBoard.fem)) + " dBm + " +
+                      femName(gBoard.fem) + " PA)</span>";
             addRow(html, "Last uplink", dr);
             unsigned long cfgMs = (unsigned long)gCfg.uplinkIntervalSec * 1000UL;
             if (ld.intervalMs > cfgMs)
@@ -660,8 +664,22 @@ void handleStatusPage()
     html += "<section><h4>Device</h4><table>";
     if (gCfg.debugMode) addRow(html, "Measurement cycle", String(doc["cycle"].as<int>()));
     addRow(html, "Next measurement in", String(doc["nextCycleInSec"].as<uint32_t>()) + " s");
-    addRow(html, "PCB revision",       gCfg.pcbVersion == PCB_REV_2_0 ? (gIo.hwIdDetected ? "v2.0 (detected)" : "v2.0 (set manually)")
+    {
+        String b = String("Heltec WiFi LoRa 32 ") + boardName(gBoard.kind);
+        if (boardIsV4()) b += gBoard.fem == FEM_KCT8103L ? ".3 (KCT8103L front end)" : ".2 (GC1109 front end)";
+        b += gBoard.autoSel ? " <span class='dim'>(detected, " : " <span class='dim'>(set manually, detected ";
+        if (!gBoard.autoSel) b += String(boardName(gBoard.detected)) + ", ";
+        b += String(gBoard.flashBytes >> 20) + " MB flash)</span>";
+        if (boardIsR8()) b += " <b>&ndash; V4-R8 (ESP32-S3R8) is not supported</b>";
+        addRow(html, "Board", b);
+    }
+    if (boardPcbAllowed())
+        addRow(html, "PCB revision",   gCfg.pcbVersion == PCB_REV_2_0 ? (gIo.hwIdDetected ? "v2.0 (detected)" : "v2.0 (set manually)")
                                        : (gCfg.pcbVersion == PCB_REV_1_2 ? "Rev 1.2" : "Rev 1.3"));
+    else
+        addRow(html, "PCB",            "<b>Heltec V4: wireless build only &ndash; PCB inputs disabled</b> "
+                                       "<span class='dim'>(wind/rain/vane, 1-Wire and the v2.0 I/O block use GPIO2/5/7, "
+                                       "taken by the V4's RF front end)</span>");
     addRow(html, "BME280 sensor",      bme280Present ? "present" : "not detected");
     addRow(html, "DS18B20 sensors",    String(bus1Count));
     addRow(html, "CPU temperature",    String(doc["cpuTemp"].as<float>(), 1) + "&deg;" + doc["cpuTempUnit"].as<const char*>() +
@@ -911,6 +929,8 @@ void renderSettings(const String& message, bool isError, int httpCode)
     static const Option payFmts[]    = { { 1, "Compact binary (FPort 3, recommended)" }, { 0, "CayenneLPP (FPort 1, about twice the size)" } };
     static const Option tlsModes[]   = { { MQTT_TLS_NONE, "Plain (no TLS)" }, { MQTT_TLS_INSECURE, "TLS, trust any certificate" },
                                          { MQTT_TLS_VERIFY, "TLS, verify against CA below" } };
+    static const Option boards[]     = { { BOARD_SEL_AUTO, "Auto (by flash size: 8 MB = V3, 16 MB = V4)" },
+                                         { BOARD_V3, "Heltec WiFi LoRa 32 V3" }, { BOARD_V4, "Heltec WiFi LoRa 32 V4 (wireless build only)" } };
     static const Option pcbRevs[]    = { { PCB_REV_1_2, "Rev 1.2" }, { PCB_REV_1_3, "Rev 1.3" }, { PCB_REV_2_0, "v2.0" } };
     static const Option heatModes[]  = { { 0, "Off" }, { 1, "On" }, { 2, "Auto (below the threshold)" } };
     static const Option fanModes[]   = { { 0, "Off" }, { 1, "On" }, { 2, "Auto (above the threshold)" } };
@@ -1030,8 +1050,13 @@ void renderSettings(const String& message, bool isError, int httpCode)
                 "10 minutes &mdash; do not average those again downstream");
     fieldText  (html, "mqttsec",   "MQTT interval (s)", String(gCfg.mqttIntervalSec), 5, "0 = like the LoRaWAN interval, else 2&ndash;3600", "number");
     fieldSelect(html, "mqttwagg",  "MQTT wind values", gCfg.mqttWindAgg, OPTS(windAggs));
-    fieldCheck (html, "winden",    "Wind sensor (board)", gCfg.windEn, "Davis anemometer/vane on the PCB; off without a PCB (floating inputs)");
-    fieldCheck (html, "rainen",    "Rain sensor (board)", gCfg.rainEn, "Davis rain gauge on the PCB");
+    if (boardPcbAllowed()) {
+        fieldCheck (html, "winden",    "Wind sensor (board)", gCfg.windEn, "Davis anemometer/vane on the PCB; off without a PCB (floating inputs)");
+        fieldCheck (html, "rainen",    "Rain sensor (board)", gCfg.rainEn, "Davis rain gauge on the PCB");
+    } else {
+        fieldReadonly(html, "Wind / rain sensor (board)", "not available on Heltec V4",
+                      "wireless build only &ndash; PCB inputs disabled (GPIO2/GPIO7 belong to the V4's RF front end)");
+    }
     fieldCheck (html, "rainpersist", "Keep rain statistics over a power cut", gCfg.rainPersist,
                 "saves rain/sunshine today and yesterday, last rain and rain week/month/year to flash at most "
                 "once per hour, at midnight and before every restart/update, so they survive a power cut; "
@@ -1214,7 +1239,17 @@ void renderSettings(const String& message, bool isError, int httpCode)
     html += "</section>";
 
     sectionStart(html, "Hardware", true);
-    fieldSelect(html, "pcbver", "PCB revision", gCfg.pcbVersion, OPTS(pcbRevs));
+    {
+        static char boardHint[120];
+        snprintf(boardHint, sizeof(boardHint), "detected: %s (%lu MB flash)%s; V4: wireless build only, no PCB",
+                 boardName(gBoard.detected), (unsigned long)(gBoard.flashBytes >> 20),
+                 boardIsR8() ? " &ndash; V4-R8 not supported" : "");
+        fieldSelect(html, "board", "Heltec board", gCfg.boardSel, OPTS(boards), boardHint);
+    }
+    if (boardPcbAllowed())
+        fieldSelect(html, "pcbver", "PCB revision", gCfg.pcbVersion, OPTS(pcbRevs));
+    else
+        fieldReadonly(html, "PCB revision", "ignored on Heltec V4", "wireless build only &ndash; PCB inputs disabled");
     html += "</section>";
     #undef OPTS
 
@@ -1540,6 +1575,9 @@ void handleSettingsPost()
     storeInt   (next.mqttTlsMode, "mqtttls", MQTT_TLS_NONE, MQTT_TLS_VERIFY, "MQTT security", rejected, restart);
     if (server.arg("mqttcacert").length() >= sizeof(next.mqttCaCert)) addRejected(rejected, "CA certificate (too long)");
     else storeText(next.mqttCaCert, "mqttcacert", restart);
+    int board = present("board") ? formArg("board").toInt() : next.boardSel;
+    if (!boardSelValid(board)) addRejected(rejected, "Heltec board");
+    else if (next.boardSel != board) { next.boardSel = board; restart = true; }
     int pcb = present("pcbver") ? formArg("pcbver").toInt() : next.pcbVersion;
     if (gIo.hwIdDetected && pcb != PCB_REV_2_0) addRejected(rejected, "PCB revision (the board identifies itself as v2.0)");
     else if (pcb == PCB_REV_1_2 || pcb == PCB_REV_1_3 || pcb == PCB_REV_2_0) { if (next.pcbVersion != pcb) { next.pcbVersion = pcb; restart = true; } }

@@ -39,6 +39,7 @@ int main()
     assert(!deserializeJson(parsed,buf.data(),n));
     assert(parsed["victron"]["batteryV"].as<float>()==gIo.ve.battV);
     assert(parsed["status"]["pcbRev"].as<int>()==20);
+    assert(std::string(parsed["status"]["board"].as<const char*>())=="V3" && parsed["status"]["boardFem"].isNull());
     assert(parsed["uvIndex"].as<float>()==gIo.uvIndex);
     assert(parsed["cpuTemp"].as<float>()==42.3f && parsed["resetReason"].as<std::string>()=="unknown");
     gCfg.debugMode=0;buildJsonPayload(doc);   // CPU temperature and restart cause also without debug mode

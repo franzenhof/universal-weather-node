@@ -1,4 +1,5 @@
 #include "sensors.h"
+#include "heltec_board.h"
 #include "globals.h"
 #include "serial_log.h"
 #include "sources.h"
@@ -224,9 +225,12 @@ void sensorsEarlyInit()
     restoreRainAccumulator();
     pinMode(PIN_ADC_BATCTRL,       OUTPUT);
     pinMode(PIN_ADC_VOLTBATTERY,   INPUT);
-    pinMode(PIN_ADC_WINDDIRECTION, INPUT);
     adcAttachPin(PIN_ADC_VOLTBATTERY);
-    adcAttachPin(PIN_ADC_WINDDIRECTION);
+    // GPIO2 is the RF front end's chip enable on a Heltec V4 (heltec_board.h)
+    if (boardPcbAllowed()) {
+        pinMode(PIN_ADC_WINDDIRECTION, INPUT);
+        adcAttachPin(PIN_ADC_WINDDIRECTION);
+    }
     analogReadResolution(12);
 }
 
@@ -255,7 +259,7 @@ void sensorsInit(const PinSet& pins)
         bus1Temps[i] = DEVICE_DISCONNECTED_C;
 
     // High-side switch for VCC_1WIRE (Rev 1.3+ only)
-    if (gCfg.pcbVersion >= PCB_REV_1_3) {
+    if (boardPcbAllowed() && gCfg.pcbVersion >= PCB_REV_1_3) {
         pinMode(PIN_1WIRE_HSS, OUTPUT);
         digitalWrite(PIN_1WIRE_HSS, LOW);   // sensors off at startup
         dbgSerial.println("1-Wire HSS (GPIO47) initialized – sensors off.");
@@ -270,8 +274,11 @@ void sensorsInit(const PinSet& pins)
 
     // 1-Wire (pin configured at runtime). The bus is searched in
     // startOneWireConversion(), once it is powered.
-    oneWireBus1 = new OneWire(pins.oneWire);
-    sensorsBus1 = new DallasTemperature(oneWireBus1);
+    // Not on a Heltec V4: GPIO5 is the KCT8103L's CTX line (V4.3).
+    if (boardPcbAllowed()) {
+        oneWireBus1 = new OneWire(pins.oneWire);
+        sensorsBus1 = new DallasTemperature(oneWireBus1);
+    }
 
     // PCNT counters are configured once and can be toggled later via downlink.
     if (gCfg.windEn) configureWindPcnt();
@@ -311,6 +318,7 @@ float readBatteryVoltage()
 
 uint16_t readWindDirection()
 {
+    if (!boardPcbAllowed()) return 0;   // Heltec V4: GPIO2 = FEM enable, never an ADC
     int raw = adcAverage(PIN_ADC_WINDDIRECTION);
     int rawDeg;
 
@@ -445,6 +453,7 @@ void startOneWireConversion()
 {
     // Rev 1.3+: power up VCC_1WIRE now; switched back off once the
     // conversion completes, in pollOneWireConversion().
+    if (!sensorsBus1) { bus1Count = 0; return; }   // Heltec V4: no 1-Wire bus
     oneWireHssPowered = (gCfg.pcbVersion >= PCB_REV_1_3);
     if (oneWireHssPowered) {
         digitalWrite(PIN_1WIRE_HSS, HIGH);

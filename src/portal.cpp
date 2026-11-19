@@ -9,6 +9,7 @@
 #include "readme_md.h"
 #include "help_page.h"
 #include "calibrate_page.h"
+#include "heltec_board.h"
 #include "serial_log.h"
 #include "loxone.h"
 
@@ -227,7 +228,12 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_key    ("key",      "AppKey (32 hex chars; leave empty to keep the stored key)", "", 33,
                                    "placeholder='(unchanged)' autocomplete='off'");
     WiFiManagerParameter p_region ("region",   "LoRaWAN region (EU868, US915, AU915, AS923, IN865, KR920, CN470, RU864)", b_region, 8);
-    WiFiManagerParameter p_pcb    ("pcbver",   "PCB revision (12=Rev1.2, 13=Rev1.3, 20=v2.0; v2.0 is detected automatically)", b_pcb, 3);
+    WiFiManagerParameter p_pcb    ("pcbver",   "PCB revision (12=Rev1.2, 13=Rev1.3, 20=v2.0; v2.0 is detected automatically; ignored on a Heltec V4: wireless build only)", b_pcb, 3);
+    char b_board[2], l_board[160];
+    itoa(cur.boardSel, b_board, 10);
+    snprintf(l_board, sizeof(l_board), "Heltec board (0=Auto by flash size, 3=V3, 4=V4; detected: %s, running as %s%s)",
+             boardName(gBoard.detected), boardName(gBoard.kind), boardIsR8() ? ", V4-R8 NOT supported" : "");
+    WiFiManagerParameter p_board  ("board",    l_board, b_board, 2);
     WiFiManagerParameter p_alt    ("altitude", "Altitude above sea level in m (0-4000)",       b_alt,     6);
     WiFiManagerParameter p_uplink ("uplinksec","LoRaWAN / measurement interval in s (5-3600)",  b_uplink, 7);
     WiFiManagerParameter p_sample ("samplesec","Wind sample interval in s: 1 or 3",            b_sample, 4);
@@ -459,7 +465,8 @@ Config runConfigPortal(const Config& cur)
             wm.server->send_P(200, "text/html; charset=utf-8", CALIBRATE_PAGE_HTML);
         });
         wm.server->on("/calibrate/sample", HTTP_GET, [&wm]() {
-            int adc = adcAverage(PIN_ADC_WINDDIRECTION);
+            // Heltec V4: GPIO2 is the RF front end's enable - never read it as the vane
+            int adc = boardPcbAllowed() ? adcAverage(PIN_ADC_WINDDIRECTION) : 0;
             char buf[32];
             snprintf(buf, sizeof(buf), "{\"adc\":%d}", adc);
             wm.server->send(200, "application/json", buf);
@@ -518,6 +525,8 @@ Config runConfigPortal(const Config& cur)
         int pcb = atoi(p_pcb.getValue());
         c.pcbVersion       = (pcb == PCB_REV_1_2 || pcb == PCB_REV_2_0) ? pcb : PCB_REV_1_3;
         if (gIo.hwIdDetected) c.pcbVersion = PCB_REV_2_0;   // the ID divider wins
+        int board = atoi(p_board.getValue());
+        if (boardSelValid(board)) c.boardSel = board;
 
         // PCB v2.0 I/O block - out-of-range input keeps the previous value.
         auto intIn = [](WiFiManagerParameter& p, int lo, int hi, int keep) {
@@ -742,7 +751,7 @@ Config runConfigPortal(const Config& cur)
     wm.addParameter(&p_board_section);
     wm.addParameter(&p_winden);   wm.addParameter(&p_rainen);  wm.addParameter(&p_rainpersist);
     wm.addParameter(&p_srcs);
-    wm.addParameter(&p_pcb);      wm.addParameter(&p_uplink);
+    wm.addParameter(&p_pcb);      wm.addParameter(&p_board);      wm.addParameter(&p_uplink);
     wm.addParameter(&p_sample);   wm.addParameter(&p_lipo);    wm.addParameter(&p_debug); wm.addParameter(&p_cpu);
 
     wm.addParameter(&p_cal_section);

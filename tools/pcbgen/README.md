@@ -50,7 +50,7 @@ removed. JP8 is a two-pin buck disconnect: fit for VIN operation, **remove
 before USB** and disconnect VIN. There is no automatic source isolation.
 USB powers logic and sensors; a 5 V fan shares the Heltec/USB current budget.
 Heater and VIN-mode fan loads require VIN.
-The [USB-C/VIN function matrix](../../README.md#functions-by-power-source-v20)
+The [USB-C/VIN function matrix](../../docs/pcb.md#functions-by-power-source-v20)
 lists supported interfaces, jumper settings, firmware-update modes and shared
 current limits. The [bring-up checklist](../../pcb/v2.0/CHECKLIST.md#b-bring-up-of-the-first-boards)
 includes the corresponding prototype checks for both power modes.

@@ -2,6 +2,8 @@
 #include "globals.h"
 #include "serial_log.h"
 #include "LoRaWAN_ESP32.h"
+#include "heltec_board.h"
+BoardInfo gBoard;   // V3 unless a test sets it
 
 unsigned long hostNow=100;
 int hostPins[64]={},hostModes[64]={},hostAdc[64]={},hostPwm[8]={},hostAttached[64]={};

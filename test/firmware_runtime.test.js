@@ -24,6 +24,7 @@ try {
     ['telemetry', [...common, 'src/json_payload.cpp', 'src/units.cpp', 'src/loxone_lines.cpp']],
     ['rf', common],
     ['history', [...common.filter((f) => f !== 'test/host/runtime.cpp'), 'src/units.cpp']],   // includes runtime.cpp + history.cpp
+    ['board', [...common, 'src/params.cpp']],
     ['payload', [...common, 'src/lora_payload.cpp', 'src/payload_binary.cpp', 'src/units.cpp',
       '.pio/libdeps/heltec_wifi_lora_32_V3/CayenneLPP/src/CayenneLPP.cpp',
       '.pio/libdeps/heltec_wifi_lora_32_V3/CayenneLPP/src/CayenneLPPPolyline.cpp']],

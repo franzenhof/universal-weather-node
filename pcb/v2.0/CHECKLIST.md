@@ -1,6 +1,6 @@
 # PCB v2.0 – Assembly and Bring-up Checklist
 
-Step-by-step ordering (board settings, assembly options, THT parts): [README – Ordering the PCB (JLCPCB)](../../README.md#ordering-the-pcb-jlcpcb).
+Step-by-step ordering (board settings, assembly options, THT parts): [Ordering the PCB (JLCPCB)](../../docs/pcb.md#ordering-the-pcb-jlcpcb).
 
 Use this list for the JLCPCB order and for bringing up the first boards (tip: order
 5, test, then more). Current layout:
@@ -208,7 +208,7 @@ comparison with the EVERCOM 5301-6P6C.
 
 ### USB-C versus VIN: expected operation
 
-See the [complete power-source function matrix](../../README.md#functions-by-power-source-v20)
+See the [complete power-source function matrix](../../docs/pcb.md#functions-by-power-source-v20)
 for operating limits. Check the following expectations on your first board.
 
 | Check | USB-C 5 V only | VIN 6–29.2 V only |

@@ -3,8 +3,8 @@
 #include "serial_log.h"
 #include <atomic>
 
-// Defined by heltec_unofficial.h in main.cpp (that header owns definitions).
-extern SX1262 radio;
+// The Heltec's transceiver (heltec_board.cpp; Heltec V4 front end handled there).
+#include "radio_board.h"
 LoRaWANNode* loRaNode = nullptr;
 void (*gLoraRadioTakenHook)() = nullptr;
 

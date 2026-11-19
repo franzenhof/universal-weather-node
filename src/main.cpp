@@ -50,8 +50,15 @@
 // ============================================================================
 // INCLUDES
 // ============================================================================
+// The SX1262 instance lives in heltec_board.cpp (BoardSX1262: Heltec V4 RF
+// front end, radio_board.h); heltec_setup() still begins the HSPI bus.
+#include <SPI.h>
+extern SPIClass* hspi;
+#define HELTEC_NO_RADIO_INSTANCE
 #include <heltec_unofficial.h>
 #include <LoRaWAN_ESP32.h>
+#include "heltec_board.h"
+#include "radio_board.h"
 #include <pins_arduino.h>
 #include <esp_task_wdt.h>
 #include <esp_netif.h>
@@ -700,6 +707,8 @@ static const char* resetReasonText(esp_reset_reason_t r)
 void setup()
 {
     gResetReason = resetReasonText(esp_reset_reason());
+    // Heltec V3 / V4 by flash size (heltec_board.h); applied after loadConfig()
+    boardDetectHardware();
     // Watchdog: 120 s timeout – catches hanging joins and blocked sends
     esp_task_wdt_init(120, true);
 
@@ -745,10 +754,18 @@ void setup()
     gCfg = loadConfig();
     setCpuFrequencyMhz(gCfg.cpuFreqMhz);
 
+    // Board in effect (setting or detection) and, on a V4, its RF front end -
+    // before anything uses the radio. A V4 runs without the custom PCB: its
+    // wind/rain inputs collide with the FEM pins (GPIO2/GPIO7), they stay off
+    // in RAM (the stored settings are not changed here).
+    boardApply(gCfg.boardSel);
+    femInit();
+    if (!boardPcbAllowed()) { gCfg.windEn = 0; gCfg.rainEn = 0; }
+
     // PCB v2.0 revision ID on GPIO20 (ADC2: before WiFi/the portal). A v2.0
     // board always runs as v2.0; without an ID the stored revision applies
     // (2.0 can also be set manually there).
-    if (detectPcbV2()) gCfg.pcbVersion = PCB_REV_2_0;
+    if (boardPcbAllowed() && detectPcbV2()) gCfg.pcbVersion = PCB_REV_2_0;
     else if (gCfg.pcbVersion == PCB_REV_2_0)
         dbgSerial.println("PCB v2.0 set manually (no revision ID read).");
     // v2.0: R38 holds the vane supply off until the firmware switches it on -
@@ -785,8 +802,11 @@ void setup()
 
     // Revision-dependent pins
     PinSet pins = getPins(gCfg.pcbVersion);
-    dbgSerial.printf("PCB rev %d: Wind=GPIO%d, Rain=GPIO%d, 1-Wire=GPIO%d\n",
-                  gCfg.pcbVersion, pins.windSpeed, pins.rain, pins.oneWire);
+    if (boardPcbAllowed())
+        dbgSerial.printf("PCB rev %d: Wind=GPIO%d, Rain=GPIO%d, 1-Wire=GPIO%d\n",
+                      gCfg.pcbVersion, pins.windSpeed, pins.rain, pins.oneWire);
+    else
+        dbgSerial.println("Heltec V4: wireless build only - PCB inputs (wind, rain, 1-Wire, I/O block) disabled.");
 
     // BME280, 1-Wire, PCNT counters, bus1Temps[] init
     sensorsInit(pins);

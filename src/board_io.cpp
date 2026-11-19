@@ -1,4 +1,5 @@
 #include "board_io.h"
+#include "heltec_board.h"
 #include "globals.h"
 #include "serial_log.h"
 #include "sensors.h"
@@ -277,7 +278,8 @@ bool ioWind2DirActive() { return gCfg.wind2Mode == 2; }
 
 bool ioV2()
 {
-    return gCfg.pcbVersion >= PCB_REV_2_0;
+    // Heltec V4: no PCB support (the I/O block's GPIO38-40 go to the GNSS connector there)
+    return boardPcbAllowed() && gCfg.pcbVersion >= PCB_REV_2_0;
 }
 
 static constexpr int PIN_WDIR_EN = 19;  // PCB v2.0 Q6 gate, LOW = vane supply on
