@@ -13,6 +13,14 @@ float dewPointC(float tempC, float humidityPct)
     return b * g / (a - g);
 }
 
+float vpdKpa(float tempC, float humidityPct)
+{
+    float rh = humidityPct < 0.0f ? 0.0f : (humidityPct > 100.0f ? 100.0f : humidityPct);
+    const float a = 17.62f, b = 243.12f;
+    float es = 0.6112f * expf(a * tempC / (b + tempC));
+    return es * (1.0f - rh / 100.0f);
+}
+
 bool windChillApplies(float tempC, float windMs)
 {
     return tempC <= 10.0f && windMs * 3.6f > 4.8f;

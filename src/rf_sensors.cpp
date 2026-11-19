@@ -35,13 +35,12 @@ constexpr unsigned long NEW_BATTERY_TAKEOVER_MS = 60000;   // IT+ new-battery fr
 // continuously.
 int           phase        = RF_PROTO_BRESSER;
 unsigned long phaseStartMs = 0;
-int           protoSet     = 0;      // gCfg.rfProto applied (RF_PROTO_*)
-constexpr unsigned long DWELL_BRESSER_MS = 17000;   // > Bresser send interval (12-16 s)
-constexpr unsigned long DWELL_ITPLUS_MS  = 5000;    // > IT+ send interval (about 4 s)
-// 17.241 kbit/s phase with Fine Offset: > WH65 / WS68 send interval (16 s;
-// WS80 4.75 s, WS90 8.8 s). WH31 / WH40 / WH51 / WH57 send every 49-79 s and
-// are then heard only every few transmissions - alternating is not recommended.
-constexpr unsigned long DWELL_FINEOFFSET_MS = 17000;
+int           protoSet     = 0;      // protocol set applied (RF_PROTO_*, rfProtoSetFor(gCfg.rfProto))
+int           appliedCfg   = 0;      // gCfg.rfProto it was derived from (RF_PROTO_AUTO: searching)
+int           detectedProto = 0;     // auto search: type stored since the start (0 = none)
+// Dwell times: rfPhaseDwellMs() (rf_sensors_data.cpp). WH31 / WH40 / WH51 /
+// WH57 send every 49-79 s and are then heard only every few transmissions
+// while alternating - alternating is not recommended for them.
 
 // IT+ and Fine Offset in one phase: IT+ sensors were measured at 868.22-868.30
 // MHz (often 50-75 kHz low, hence 868.26 MHz for IT+ alone); Fine Offset EU
@@ -58,13 +57,19 @@ void onLoraRadioTaken() { receiving = false; }
 
 bool fineOffsetPhase() { return phase == RF_PROTO_ITPLUS17 && (protoSet & RF_PROTO_FINEOFFSET); }
 
-int nextPhase(int set, int cur)
+// Auto search: the first valid packet (CRC-checked by the decoders, from a
+// listed ID - the callers check the ID list first) fixes the sensor type.
+// Stored at once (only the "rfproto" key: one NVS write); rfSensorsLoop()
+// then switches from the search rotation to that type's phase.
+void autoLock(int receivedProto)
 {
-    for (int i = 0; i < 3; i++) {
-        cur = cur == RF_PROTO_ITPLUS9 ? RF_PROTO_BRESSER : cur << 1;
-        if (set & cur) return cur;
-    }
-    return RF_PROTO_BRESSER;
+    if (!rfAutoShouldLock(gCfg.rfProto, true)) return;
+    int type = rfAutoDetectedProto(receivedProto);
+    if (!type) return;
+    gCfg.rfProto  = type;
+    detectedProto = type;
+    saveRfProto(type);
+    dbgSerial.printf("RF sensors: auto search found %s - sensor type %d saved.\n", rfProtoName(receivedProto), type);
 }
 
 int16_t startPhase()
@@ -118,6 +123,7 @@ void storeItPlus(const ItPlusFrame& f, float rssi)
     dbgSerial.printf("RF sensor 0x%08lX (IT+): %.1f C%s, RSSI %.0f dBm%s%s\n", (unsigned long)id, f.tempC,
                      f.hasHumidity ? (String(", ") + f.humidity + " %").c_str() : "", rssi,
                      f.weakBattery ? ", battery low" : "", f.newBattery ? ", new battery" : "");
+    autoLock(r.proto);
 }
 
 // Bresser sensor type numbers (r.type) for the Fine Offset families
@@ -167,6 +173,7 @@ void storeFineOffset(const FoFrame& f, float rssi)
     srcRfPacket(idx, v.ok & RF_VAL_WIND, rainDelta, v.ok & RF_VAL_LIGHT, rainGapMs);
     dbgSerial.printf("RF sensor 0x%08lX (Fine Offset %s): RSSI %.0f dBm%s\n", (unsigned long)id, f.model, rssi,
                      f.batteryOk ? "" : ", battery low");
+    autoLock(RF_PROTO_FINEOFFSET);
 }
 
 // The 17.241 / 9.579 kbit/s phases
@@ -229,6 +236,10 @@ void copySlot(int slot)
     r.staleMask &= (uint8_t)~RF_VAL_ANY;
     r.packets++;
     packetsTotal++;
+
+    // Any decoded Bresser packet (digest-checked; the library applies the ID
+    // list) ends an auto search - also non-weather types (lightning, ...).
+    autoLock(RF_PROTO_BRESSER);
 
     bool weather = s.s_type == SENSOR_TYPE_WEATHER0 || s.s_type == SENSOR_TYPE_WEATHER1 ||
                    s.s_type == SENSOR_TYPE_WEATHER3 || s.s_type == SENSOR_TYPE_WEATHER8 ||
@@ -298,19 +309,24 @@ void rfSensorsLoop()
         ws.clearSlots();
         dbgSerial.printf("RF sensors: accepting %s\n", appliedIds[0] ? appliedIds : "any sensor ID");
     }
-    // Protocol set changed (settings) or time to switch to the next phase.
-    int protos = gCfg.rfProto & RF_PROTO_ALL;
-    if (!protos) protos = RF_PROTO_BRESSER;
+    // Protocol set changed (settings, auto search locked) or time to switch
+    // to the next phase. Auto (search) = all families in rotation.
+    const int cfg = gCfg.rfProto;
+    int protos = rfProtoSetFor(cfg);
     int set = rfPhaseSet(protos);
+    if (cfg == RF_PROTO_AUTO && appliedCfg != RF_PROTO_AUTO) {
+        detectedProto = 0;
+        dbgSerial.println("RF sensors: auto search - Bresser, IT+ 17.241 kbit/s + Fine Offset and IT+ 9.579 kbit/s in turn");
+    }
+    appliedCfg = cfg;
     if (protos != protoSet) {
         protoSet = protos;
-        phase = nextPhase(set, RF_PROTO_ITPLUS9);    // first enabled, starting with Bresser
+        phase = rfNextPhase(set, RF_PROTO_ITPLUS9);    // first enabled, starting with Bresser
         phaseStartMs = millis();
         receiving = false;
     } else if ((set & (set - 1)) &&                 // more than one phase
-               millis() - phaseStartMs >= (phase == RF_PROTO_BRESSER ? DWELL_BRESSER_MS :
-                                           fineOffsetPhase()          ? DWELL_FINEOFFSET_MS : DWELL_ITPLUS_MS)) {
-        phase = nextPhase(set, phase);
+               millis() - phaseStartMs >= rfPhaseDwellMs(phase, fineOffsetPhase())) {
+        phase = rfNextPhase(set, phase);
         phaseStartMs = millis();
         receiving = false;
     }
@@ -332,6 +348,8 @@ void rfSensorsLoop()
     if (ws.getMessage() == DECODE_OK && ws.lastSlot >= 0)
         copySlot(ws.lastSlot);
 }
+
+int rfSensorsDetectedProto() { return detectedProto && gCfg.rfProto == detectedProto ? detectedProto : 0; }
 
 const char* rfSensorsListening()
 {

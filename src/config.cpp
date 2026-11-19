@@ -1,4 +1,5 @@
 #include "config.h"
+#include "loxone.h"
 #include "wind_window.h"
 #include "serial_log.h"
 #include <Preferences.h>
@@ -110,11 +111,12 @@ void sanitizeConfig(Config& c)
     choice(c.loraWindAgg, d.loraWindAgg, 0, 1);
     choice(c.mqttWindAgg, d.mqttWindAgg, 0, 1);
     choice(c.rfEn, d.rfEn, RF_RADIO_OFF, RF_RADIO_SX1262);
-    if (c.rfProto < 1 || c.rfProto > RF_PROTO_ALL) c.rfProto = d.rfProto;   // bit mask RF_PROTO_*
+    if (!rfProtoValid(c.rfProto)) c.rfProto = d.rfProto;   // bit mask RF_PROTO_* or RF_PROTO_AUTO
     range (c.windDirOffsetDeg, -180, 180);
     choice(c.windUnitMs, d.windUnitMs, 0, 1);
     choice(c.windEn, d.windEn, 0, 1);
     choice(c.rainEn, d.rainEn, 0, 1);
+    choice(c.rainPersist, d.rainPersist, 0, 1);
     choice(c.lipoEn, d.lipoEn, 0, 1);
     choice(c.debugMode, d.debugMode, 0, 1);
     choice(c.cpuFreqMhz, d.cpuFreqMhz, 80, 240);
@@ -134,6 +136,10 @@ void sanitizeConfig(Config& c)
     choice(c.staticIpEn, d.staticIpEn, 0, 1);
     if (c.mqttPort < 1 || c.mqttPort > 65535) c.mqttPort = d.mqttPort;
     choice(c.mqttTlsMode, d.mqttTlsMode, MQTT_TLS_NONE, MQTT_TLS_INSECURE, MQTT_TLS_VERIFY);
+    choice(c.loxEn, d.loxEn, 0, 1);
+    if (!loxPortValid(c.loxPort)) c.loxPort = d.loxPort;
+    if (!loxIntervalValid(c.loxSec)) c.loxSec = d.loxSec;
+    loxSanitizePrefix(c.loxPrefix);
 
     choice(c.auxAinEn, d.auxAinEn, 0, 1);
     rangeF(c.auxAinScale, d.auxAinScale, 0.001f, 20.0f);
@@ -181,6 +187,16 @@ Config loadConfig()
     if (!prefs.begin("config", true, "cfgdata")) {
         return c;
     }
+    // A config stored by any earlier firmware always has "deveui" (saveConfig()
+    // writes every key; a factory reset clears them all). For such a node, a
+    // key added later falls back to the pre-2.0.0-rc.2 default, not to the
+    // new-node default (ConfigLegacyDefaults, config.h).
+    if (prefs.isKey("deveui")) {
+        const ConfigLegacyDefaults l;
+        c.loraEn = l.loraEn;  c.wifiEn = l.wifiEn;  c.webApiEn = l.webApiEn;
+        c.rfEn = l.rfEn;      c.rfProto = l.rfProto;
+        c.windEn = l.windEn;  c.rainEn = l.rainEn;
+    }
     c.provisioned      = prefs.getInt    ("provisioned", c.provisioned);
     c.pcbVersion       = prefs.getInt    ("pcbver",   c.pcbVersion);
     c.altitudeM        = prefs.getInt    ("altitude", c.altitudeM);
@@ -191,7 +207,6 @@ Config loadConfig()
     c.mqttWindAgg      = prefs.getInt    ("mqttwagg",  c.mqttWindAgg);
     c.rfEn             = prefs.getInt    ("rfen",      c.rfEn);
     c.rfProto          = prefs.getInt    ("rfproto",   c.rfProto);
-    if (c.rfProto < 1 || c.rfProto > RF_PROTO_ALL) c.rfProto = RF_PROTO_BRESSER;
     prefs.getString("rfids", c.rfIds, sizeof(c.rfIds));
     for (int i = 0; i < 5; i++) {
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
@@ -202,6 +217,7 @@ Config loadConfig()
     c.windUnitMs       = prefs.getInt    ("windunit", c.windUnitMs);
     c.windEn           = prefs.getInt    ("winden",   c.windEn);
     c.rainEn           = prefs.getInt    ("rainen",   c.rainEn);
+    c.rainPersist      = prefs.getInt    ("rainpersist", c.rainPersist);
     c.lipoEn           = prefs.getInt    ("lipoen",   c.lipoEn);
     c.debugMode        = prefs.getInt    ("debugmode", c.debugMode);
     c.cpuFreqMhz       = prefs.getInt    ("cpufreq",  c.cpuFreqMhz);
@@ -239,6 +255,11 @@ Config loadConfig()
     prefs.getString("mqtttopic",  c.mqttTopic,    sizeof(c.mqttTopic));
     c.mqttTlsMode      = prefs.getInt    ("mqtttls",  c.mqttTlsMode);
     prefs.getString("mqttcacert", c.mqttCaCert,   sizeof(c.mqttCaCert));
+    c.loxEn            = prefs.getInt    ("loxen",    c.loxEn);
+    prefs.getString("loxhost",    c.loxHost,      sizeof(c.loxHost));
+    c.loxPort          = prefs.getInt    ("loxport",  c.loxPort);
+    prefs.getString("loxprefix",  c.loxPrefix,    sizeof(c.loxPrefix));
+    c.loxSec           = prefs.getInt    ("loxsec",   c.loxSec);
     prefs.getString("webadminpw", c.webAdminPass, sizeof(c.webAdminPass));
 
     prefs.getString("tz",         c.timeZone,     sizeof(c.timeZone));
@@ -325,6 +346,7 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("windunit",    prefs.putInt    ("windunit", c.windUnitMs), 4);
     ok &= checkWrite   ("winden",      prefs.putInt    ("winden",   c.windEn), 4);
     ok &= checkWrite   ("rainen",      prefs.putInt    ("rainen",   c.rainEn), 4);
+    ok &= checkWrite   ("rainpersist", prefs.putInt    ("rainpersist", c.rainPersist), 4);
     ok &= checkWrite   ("lipoen",      prefs.putInt    ("lipoen",   c.lipoEn), 4);
     ok &= checkWrite   ("debugmode",   prefs.putInt    ("debugmode", c.debugMode), 4);
     ok &= checkWrite   ("cpufreq",     prefs.putInt    ("cpufreq",  c.cpuFreqMhz), 4);
@@ -361,6 +383,11 @@ void saveConfig(const Config& c)
     ok &= checkWriteStr("mqtttopic",   prefs.putString ("mqtttopic",  c.mqttTopic), c.mqttTopic);
     ok &= checkWrite   ("mqtttls",     prefs.putInt    ("mqtttls",  c.mqttTlsMode), 4);
     ok &= checkWriteStr("mqttcacert",  prefs.putString ("mqttcacert", c.mqttCaCert), c.mqttCaCert);
+    ok &= checkWrite   ("loxen",       prefs.putInt    ("loxen",    c.loxEn), 4);
+    ok &= checkWriteStr("loxhost",     prefs.putString ("loxhost",  c.loxHost), c.loxHost);
+    ok &= checkWrite   ("loxport",     prefs.putInt    ("loxport",  c.loxPort), 4);
+    ok &= checkWriteStr("loxprefix",   prefs.putString ("loxprefix", c.loxPrefix), c.loxPrefix);
+    ok &= checkWrite   ("loxsec",      prefs.putInt    ("loxsec",   c.loxSec), 4);
     ok &= checkWriteStr("webadminpw",  prefs.putString ("webadminpw", c.webAdminPass), c.webAdminPass);
 
     ok &= checkWriteStr("tz",          prefs.putString ("tz",         c.timeZone), c.timeZone);
@@ -421,4 +448,15 @@ void saveConfig(const Config& c)
                       ok ? "" : " (WITH ERRORS, see above)",
                       c.loraEn, c.region, c.wifiEn, c.mqttEn, c.webApiEn,
                       c.staticIpEn, c.uplinkIntervalSec, c.sampleSec);
+}
+
+void saveRfProto(int proto)
+{
+    Preferences prefs;
+    if (!prefs.begin("config", false, "cfgdata")) {
+        dbgSerial.println("Config save: FAILED to open NVS namespace 'config' - wireless sensor type not saved.");
+        return;
+    }
+    checkWrite("rfproto", prefs.putInt("rfproto", proto), 4);
+    prefs.end();
 }

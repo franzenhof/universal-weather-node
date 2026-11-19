@@ -56,6 +56,7 @@
 #include <esp_task_wdt.h>
 #include <esp_netif.h>
 #include <esp_event.h>
+#include <WiFi.h>
 #include "config.h"
 #include "globals.h"
 #include "params.h"
@@ -70,12 +71,14 @@
 #include "partition_check.h"
 #include "time_sync.h"
 #include "wx_upload.h"
+#include "system_restart.h"
 #include "board_io.h"
 #include "low_power.h"
 #include "lora_transport.h"
 #include "wind_window.h"
 #include "rf_sensors.h"
 #include "sources.h"
+#include "loxone.h"
 
 // ============================================================================
 // DISPLAY MANAGEMENT
@@ -201,7 +204,7 @@ static void openPortalSaveAndRestart(bool showStartScreen = true)
     display.drawString(0, 16, "Restarting...");
     display.display();
     delay(2000);
-    ESP.restart();
+    systemRestart("config portal closed");
 }
 
 static void handleButton()
@@ -278,12 +281,14 @@ static uint8_t  noDownlinkShift = 0;
 // and each path that is due sends its own window's values:
 //   - LoRaWAN / MQTT: "interval" (since this path's last send) or "10 min"
 //     (WMO values from the ring), see loraWindAgg / mqttWindAgg;
+//   - Loxone UDP: "interval" (since its last send; loxSec 0 = every base cycle);
 //   - weather networks: always the WMO 10-min wind (wx_upload.cpp).
 // Rain: one running total (rainWindowTotalMm(), unaffected by a reset of
 // rainMMSinceStart); every path reports the difference since its own last
 // send (RainWindow).
 // ============================================================================
-enum PathIdx { PATH_BASE = 0, PATH_LORA = 1, PATH_MQTT = 2, PATH_COUNT = 3 };
+enum PathIdx { PATH_BASE = 0, PATH_LORA = 1, PATH_MQTT = 2, PATH_LOX = 3, PATH_COUNT = 4 };
+static_assert(PATH_COUNT == SRC_PATHS, "wireless wind keeps one window per path (sources.h)");
 static WindRing      windRing;
 static WindAcc       windAcc[PATH_COUNT];
 static RainWindow    rainWin[PATH_COUNT];
@@ -637,6 +642,22 @@ static void drawDisplay()
         snprintf(buf, sizeof(buf), "Batt: %.3fV%s%s", batteryVolt, gIo.heaterOn ? " H" : "", gIo.fanOn ? " F" : "");
     }
     display.drawString(0, 33, buf);
+
+    // Without LoRaWAN the two bottom lines (uplink result) are free: show
+    // where to reach the node and what the wireless receiver does.
+    if (!gCfg.loraEn) {
+        if (!gCfg.wifiEn)               snprintf(buf, sizeof(buf), "WiFi off");
+        else if (wifiIsConnected())     snprintf(buf, sizeof(buf), "http://%s", WiFi.localIP().toString().c_str());
+        else                            snprintf(buf, sizeof(buf), "WiFi: connecting...");
+        display.drawString(0, 44, buf);
+        if (gCfg.rfEn) {
+            int n = 0;
+            for (int i = 0; i < RF_MAX_SENSORS; i++) n += gRfSensors[i].used;
+            if (gCfg.rfProto == RF_PROTO_AUTO) snprintf(buf, sizeof(buf), "RF: searching sensor...");
+            else                               snprintf(buf, sizeof(buf), "RF: %d sensor(s)", n);
+            display.drawString(0, 55, buf);
+        }
+    }
 }
 
 // ============================================================================
@@ -780,6 +801,7 @@ void setup()
     // Parallel WiFi + MQTT transport (fully optional, see wifiMqttPoll() in
     // loop() for the non-blocking connect state machine).
     wifiMqttSetup();
+    loxoneSetup();   // before the web task: it takes the Loxone lock
     webApiSetup();
     wxUploadSetup();
 
@@ -805,6 +827,7 @@ void loop()
     wifiMqttPoll();   // non-blocking; no-op unless wifiEn is set
     ioPoll();         // PCB v2.0: VE.Direct, pulse counters, outputs
     timeSyncPoll();   // starts SNTP once WiFi is first up
+    loxonePoll();     // Loxone host name: asynchronous DNS, no waiting
     // Web server (handleClient()) now runs on its own FreeRTOS task on core
     // 0 (spawned by webApiSetup() in setup()) instead of being polled here —
     // see web_api.cpp's webApiTask for why (mainly: so an HTTP request isn't
@@ -819,7 +842,11 @@ void loop()
     const bool          mqttOn       = gCfg.wifiEn && gCfg.mqttEn;
     unsigned long       mqttMs       = gCfg.mqttIntervalSec > 0 ? (unsigned long)gCfg.mqttIntervalSec * 1000UL : loraMs;
     mqttMs = max(mqttMs, windSampleMs);
+    // Loxone UDP: 0 = every base cycle (does not shorten it), else its own interval
+    const bool          loxOn        = gCfg.wifiEn && gCfg.loxEn;
+    const unsigned long loxMs        = gCfg.loxSec > 0 ? max((unsigned long)gCfg.loxSec * 1000UL, windSampleMs) : 0;
     unsigned long baseMs = mqttOn ? min(loraMs, mqttMs) : loraMs;
+    if (loxOn && loxMs) baseMs = min(baseMs, loxMs);
     baseMs = max(baseMs, windSampleMs);
     const unsigned long slowMs = min(SLOW_SAMPLE_MS, baseMs);
     gBaseCycleMs = baseMs;
@@ -891,9 +918,17 @@ void loop()
             resetPath(PATH_MQTT, cycleEnd);
         }
 
+        // Loxone UDP: its own window (wind "interval", rain since its last send)
+        if (loxOn && (loxMs == 0 || pathDue(PATH_LOX, cycleEnd, loxMs, baseMs))) {
+            PathValues xv = pathValues(PATH_LOX, WIND_AGG_INTERVAL, cycleEnd);
+            loxoneSendTelemetry(&xv);   // skipped (status page) while WiFi is down
+            resetPath(PATH_LOX, cycleEnd);
+        }
+
         // A disabled path keeps no window (it would only grow until re-enabled).
         if (!gCfg.loraEn) resetPath(PATH_LORA, cycleEnd);
         if (!mqttOn)      resetPath(PATH_MQTT, cycleEnd);
+        if (!loxOn)       resetPath(PATH_LOX, cycleEnd);
 
         pushHistorySample();   // base cycle values for the dashboard history
         wxUploadPushCycle(srcIsRadio(SG_WIND) ? srcRfWind(PATH_BASE, true)

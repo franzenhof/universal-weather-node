@@ -7,6 +7,11 @@
 // Dew point (Magnus formula, a = 17.62, b = 243.12 °C; WMO, valid -45..60 °C).
 float dewPointC(float tempC, float humidityPct);
 
+// Vapour pressure deficit (kPa): saturation vapour pressure (Magnus, the
+// same a/b as dewPointC, es = 0.6112 kPa * exp(a*T / (b+T))) times
+// (1 - RH/100). Humidity is clamped to 0..100 %: 100 % -> 0, 0 % -> es.
+float vpdKpa(float tempC, float humidityPct);
+
 // Wind chill (JAG/TI, used by DWD, MeteoSwiss, NWS): only defined for
 // tempC <= 10 °C and wind > 4.8 km/h - otherwise returns tempC.
 bool  windChillApplies(float tempC, float windMs);

@@ -120,3 +120,41 @@ int rfPhaseSet(int protoSet)
     if (protoSet & RF_PROTO_FINEOFFSET) p |= RF_PROTO_ITPLUS17;   // same receive phase
     return p ? p : RF_PROTO_BRESSER;
 }
+
+int rfProtoSetFor(int cfgProto)
+{
+    if (cfgProto == RF_PROTO_AUTO) return RF_PROTO_ALL;
+    int p = cfgProto & RF_PROTO_ALL;
+    return p ? p : RF_PROTO_BRESSER;
+}
+
+int rfNextPhase(int phaseSet, int cur)
+{
+    for (int i = 0; i < 3; i++) {
+        cur = cur == RF_PROTO_ITPLUS9 ? RF_PROTO_BRESSER : cur << 1;
+        if (phaseSet & cur) return cur;
+    }
+    return RF_PROTO_BRESSER;
+}
+
+unsigned long rfPhaseDwellMs(int phase, bool fineOffsetPhase)
+{
+    if (phase == RF_PROTO_BRESSER) return RF_DWELL_BRESSER_MS;
+    return fineOffsetPhase ? RF_DWELL_FINEOFFSET_MS : RF_DWELL_ITPLUS_MS;
+}
+
+int rfAutoDetectedProto(int receivedProto)
+{
+    switch (receivedProto) {
+        case RF_PROTO_BRESSER:    return RF_PROTO_BRESSER;
+        case RF_PROTO_ITPLUS17:
+        case RF_PROTO_FINEOFFSET: return RF_PROTO_ITPLUS17 | RF_PROTO_FINEOFFSET;
+        case RF_PROTO_ITPLUS9:    return RF_PROTO_ITPLUS9;
+        default:                  return 0;
+    }
+}
+
+bool rfAutoShouldLock(int cfgProto, bool idAccepted)
+{
+    return cfgProto == RF_PROTO_AUTO && idAccepted;
+}

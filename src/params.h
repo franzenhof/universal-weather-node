@@ -57,7 +57,11 @@ enum ParamId : uint8_t {
     PARAM_SRC_RAIN              = 47,
     PARAM_SRC_UV                = 48,
     PARAM_SRC_LIGHT             = 49,
-    PARAM_RF_PROTO              = 50,   // wireless protocols, bit mask 1..15: 1 Bresser, 2 IT+ 17.241k, 4 IT+ 9.579k, 8 Fine Offset
+    PARAM_RF_PROTO              = 50,   // wireless protocols, bit mask 1..15: 1 Bresser, 2 IT+ 17.241k, 4 IT+ 9.579k, 8 Fine Offset;
+                                        // 16 = Auto (search, stores the detected type 1 / 10 / 4)
+    PARAM_RAIN_PERSIST          = 51,   // 1 = save rain statistics (daily + week/month/year) to flash (hourly + before restarts), 0 = RTC RAM only
+    PARAM_LOX_EN                = 52,   // 1 = Loxone UDP output on (host/port/prefix: web settings / portal)
+    PARAM_LOX_INTERVAL_SEC      = 53,   // Loxone interval: 0 = every base cycle, else 2..3600 s
 };
 
 // Applies a single (paramId, value) pair to the live Config + hardware

@@ -26,6 +26,10 @@ static void addDerivedJson(JsonDocument& doc, float windMs, int dirDeg)
     derivedNow(d, windMs, dirDeg);
     bool imperial = gCfg.unitSystem == 1;
     if (d.dewValid)   doc["dewPoint"]  = roundf(temperatureForOutput(d.dewPointC, gCfg) * 10.0f) / 10.0f;
+    if (d.vpdValid) {
+        doc["vpd"]     = roundf(d.vpdKpa * 100.0f) / 100.0f;
+        doc["vpdUnit"] = "kPa";
+    }
     if (d.feelsValid) doc["feelsLike"] = roundf(temperatureForOutput(d.feelsLikeC, gCfg) * 10.0f) / 10.0f;
     if (d.cloudValid) {
         doc["cloudBase"]     = (long)lroundf(imperial ? d.cloudBaseM * 3.28084f : d.cloudBaseM);
@@ -41,7 +45,12 @@ static void addDerivedJson(JsonDocument& doc, float windMs, int dirDeg)
     if (d.rainValid) {
         doc["rain1h"]  = rainForOutput(d.rain1hMm, gCfg);
         doc["rain24h"] = rainForOutput(d.rain24hMm, gCfg);
-        if (d.daily.valid) doc["rainToday"] = rainForOutput(d.daily.rainTodayMm, gCfg);
+        if (d.daily.valid) {
+            doc["rainToday"] = rainForOutput(d.daily.rainTodayMm, gCfg);
+            doc["rainWeek"]  = rainForOutput(d.daily.rainWeekMm, gCfg);    // ISO week, Monday start
+            doc["rainMonth"] = rainForOutput(d.daily.rainMonthMm, gCfg);
+            doc["rainYear"]  = rainForOutput(d.daily.rainYearMm, gCfg);
+        }
         if (d.daily.yesterdayValid) doc["rainYesterday"] = rainForOutput(d.daily.rainYesterdayMm, gCfg);
         if (d.daily.lastRainEpoch > 0) {
             time_t t = (time_t)d.daily.lastRainEpoch;
@@ -186,7 +195,7 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
         JsonObject src = doc["sources"].to<JsonObject>();
         char d[24];
         for (int g = 0; g < SG_COUNT; g++) { srcDescribe((SrcGroup)g, d, sizeof(d)); src[srcGroupKey((SrcGroup)g)] = d; }
-        if (gSrc.rfBatteryLow) doc["radioBatteryLow"] = true;
+        doc["radioBatteryLow"] = gSrc.rfBatteryLow;   // always (also false): a consumer that keeps the last value (Loxone) must see it clear
     }
 
     addDerivedJson(doc, pv->windSpeedMs, pv->windDirDeg);
@@ -223,6 +232,9 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
             char id[11];
             snprintf(id, sizeof(id), "%08lX", (unsigned long)r.id);
             o["id"]        = id;
+            // wireless sensor 1-4 of the value sources (ID list order, else reception order); missing = none
+            for (int k = 0; k < RF_MAX_SENSORS; k++)
+                if (rfSensorIndexForSlot(k) == i) { o["slot"] = k + 1; break; }
             o["type"]      = r.type;
             o["protocol"]  = rfProtoName(r.proto);
             if (r.model)   o["model"]   = r.model;      // Fine Offset: "WS90", "WH31", ...

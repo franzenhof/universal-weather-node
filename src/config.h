@@ -37,6 +37,13 @@ constexpr int RF_RADIO_OFF = 0, RF_RADIO_SX1262 = 1;
 // data rates = the receiver alternates.
 constexpr int RF_PROTO_BRESSER = 1, RF_PROTO_ITPLUS17 = 2, RF_PROTO_ITPLUS9 = 4, RF_PROTO_FINEOFFSET = 8,
               RF_PROTO_ALL = 15;
+// "Auto (search)": not a bit mask - the receiver cycles through all receive
+// phases (Bresser, 17.241 kbit/s = IT+ 17 + Fine Offset, IT+ 9.579 kbit/s)
+// until the first valid packet (from a listed ID, if an ID list is set),
+// then stores the matching type (1, 10 or 4) in place of this value.
+constexpr int RF_PROTO_AUTO = 16;
+// Valid stored / parameter-50 values: a bit mask 1..15 or RF_PROTO_AUTO.
+inline bool rfProtoValid(int v) { return (v >= 1 && v <= RF_PROTO_ALL) || v == RF_PROTO_AUTO; }
 
 struct Config {
     // Set once the config portal has been completed the first time. Used
@@ -65,12 +72,16 @@ struct Config {
     volatile int mqttIntervalSec   = 0;    // MQTT publish interval (s); 0 = same as uplinkIntervalSec
     volatile int loraWindAgg       = 0;    // LoRaWAN wind values: 0 = interval since last uplink, 1 = 10-min (WMO)
     volatile int mqttWindAgg       = 0;    // MQTT wind values: 0 = interval since last publish, 1 = 10-min (WMO)
-    volatile int rfProto           = 1;    // wireless protocols, bit mask RF_PROTO_* (rf_sensors.cpp); several = time-shared
-    volatile int rfEn              = 0;    // 868 MHz wireless sensors (rf_sensors.cpp): 0 = off, RF_RADIO_SX1262 = shared LoRa chip
+    // Defaults for a new (unconfigured) node: a plain Heltec with a wireless
+    // outdoor sensor and Wi-Fi - see ConfigLegacyDefaults below for nodes
+    // configured by an older firmware.
+    volatile int rfProto           = RF_PROTO_AUTO;  // wireless protocols, bit mask RF_PROTO_* or RF_PROTO_AUTO (rf_sensors.cpp); several = time-shared
+    volatile int rfEn              = RF_RADIO_SX1262; // 868 MHz wireless sensors (rf_sensors.cpp): 0 = off, RF_RADIO_SX1262 = shared LoRa chip
     volatile int windDirOffsetDeg  = 0;   // north offset (added to raw value, mod 360)
     volatile int windUnitMs        = 1;   // 1 = transmit wind in m/s, 0 = transmit in km/h
-    volatile int windEn            = 1;   // 1 = Davis wind sensor enabled (direction + speed)
-    volatile int rainEn            = 1;   // 1 = Davis rain sensor enabled
+    volatile int windEn            = 0;   // 1 = Davis wind sensor on the PCB enabled (direction + speed); off: no PCB = floating inputs
+    volatile int rainEn            = 0;   // 1 = Davis rain sensor on the PCB enabled
+    volatile int rainPersist       = 1;   // 1 = rain statistics (daily + week/month/year) saved to flash (cfgdata, "rainstat") at most hourly + before restarts
     volatile int lipoEn            = 0;   // 1 = LiPo measurement enabled (saves 4 LPP bytes when 0)
     volatile int debugMode         = 0;   // 1 = include debug telemetry in payload
     volatile int cpuFreqMhz        = 80;  // 80 or 240 MHz; below 80 not allowed (PCNT-APB)
@@ -95,12 +106,12 @@ struct Config {
     // ------------------------------------------------------------------
     // Parallel WiFi + MQTT transport (all independent, default disabled)
     // ------------------------------------------------------------------
-    int      loraEn            = 1;   // 1 = LoRaWAN transport enabled
+    int      loraEn            = 0;   // 1 = LoRaWAN transport enabled (optional; needs keys)
     volatile int lowPowerEn    = 0;   // 1 = light sleep between sub-samples (LoRa-only operation, see low_power.cpp)
     volatile int vanePowerSave = 1;   // 1 = low-power mode also switches the wind-vane supply off between readings (PCB v2.0)
-    int      wifiEn            = 0;   // 1 = WiFi STA enabled (master switch for mqttEn/webApiEn)
-    int      mqttEn            = 0;   // 1 = MQTT publish/control enabled (requires wifiEn)
-    int      webApiEn          = 0;   // 1 = REST API + settings page enabled (requires wifiEn)
+    int      wifiEn            = 1;   // 1 = WiFi STA enabled (master switch for mqttEn/webApiEn)
+    int      mqttEn            = 0;   // 1 = MQTT publish/control enabled (requires wifiEn; needs a broker)
+    int      webApiEn          = 1;   // 1 = REST API + settings page enabled (requires wifiEn)
     int      mqttCtrlEn        = 0;   // 1 = MQTT command topic enabled (requires mqttEn)
     char     deviceName[33]    = "";  // freely chosen; WiFi hostname, MQTT client id, default topic prefix
     int      staticIpEn        = 0;   // 0 = DHCP (default), 1 = static IP below
@@ -118,6 +129,14 @@ struct Config {
     uint8_t  srcSel[5]         = { 0, 0, 0, 0, 0 };   // value sources (sources.h): air, wind, rain, UV, light; 0 = auto
     char     rfIds[48]         = "";  // wireless sensor IDs to accept (hex, comma-separated, max 4); empty = any
     char     webAdminPass[33]  = "";  // gates write access to the web settings page
+
+    // Loxone UDP output (loxone.h): one datagram "name=value" per value.
+    // Live (no restart); loxHost/loxPrefix are written under loxoneLock().
+    volatile int loxEn         = 0;      // 1 = send to a Loxone Miniserver (requires wifiEn)
+    char     loxHost[65]       = "";     // Miniserver IP address or host name
+    volatile int loxPort       = 7000;   // UDP port of the Virtual UDP Input (1..65535)
+    char     loxPrefix[17]     = "";     // optional name prefix, [A-Za-z0-9_.-], max 16 (e.g. "g75_")
+    volatile int loxSec        = 0;      // Loxone interval (s): 0 = every base cycle, else 2..3600
 
     // ------------------------------------------------------------------
     // Wall clock (NTP) + direct weather-network uploads (all need wifiEn)
@@ -186,8 +205,19 @@ struct Config {
     volatile float uvIndexOffset = 0.0f;  // UV index offset
 };
 
+// Defaults before 2.0.0-rc.2 of the fields whose default changed. loadConfig()
+// uses these for a key missing from a config stored by an older firmware, so
+// an existing node never switches e.g. LoRaWAN off or its Davis sensors off
+// just because the new default differs. A new node (or one after a factory
+// reset: no stored config) gets the Config defaults above.
+struct ConfigLegacyDefaults {
+    int loraEn = 1, wifiEn = 0, webApiEn = 0, rfEn = RF_RADIO_OFF, rfProto = RF_PROTO_BRESSER, windEn = 1, rainEn = 1;
+};
+
 Config loadConfig();
 void   saveConfig(const Config& c);
+// Writes only the "rfproto" key (wireless auto search locked: one NVS write).
+void   saveRfProto(int proto);
 
 // ============================================================================
 // NVS UTILITY FUNCTIONS (shared with the Wi-Fi config portal)

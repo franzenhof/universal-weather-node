@@ -134,4 +134,36 @@ const char* rfProtoName(int proto);    // "Bresser", "IT+ 17.241 kbit/s", "IT+ 9
 // received in the IT+ 17.241 kbit/s phase, so its bit maps to RF_PROTO_ITPLUS17.
 int rfPhaseSet(int protoSet);
 
+// ---- Receive scheduling and the "Auto (search)" type (host-tested) ----
+
+// Protocol set (RF_PROTO_* bit mask) received for a gCfg.rfProto value:
+// RF_PROTO_AUTO searches all families (RF_PROTO_ALL), an invalid value = Bresser.
+int rfProtoSetFor(int cfgProto);
+
+// The phase after `cur` within a phase set (rfPhaseSet()), in the order
+// Bresser -> 17.241 kbit/s (IT+ 17 + Fine Offset) -> IT+ 9.579 kbit/s.
+int rfNextPhase(int phaseSet, int cur);
+
+// How long a phase is listened to before switching (only with more than one
+// phase): longer than the send interval of the sensors received in it -
+// Bresser 17 s (sends every 12-16 s), 17.241 kbit/s with Fine Offset 17 s
+// (WH65 16 s, WS90 8.8 s, WS80 4.75 s), IT+ alone 5 s (about every 4 s).
+constexpr unsigned long RF_DWELL_BRESSER_MS = 17000, RF_DWELL_ITPLUS_MS = 5000, RF_DWELL_FINEOFFSET_MS = 17000;
+unsigned long rfPhaseDwellMs(int phase, bool fineOffsetPhase);
+
+// Auto search: the sensor type stored once the first valid packet arrived,
+// by the protocol it was decoded as (RfSensorReading::proto): Bresser -> 1,
+// IT+ 17.241 kbit/s or Fine Offset -> 10 (they share the 17.241 kbit/s
+// phase), IT+ 9.579 kbit/s -> 4; 0 = unknown.
+int rfAutoDetectedProto(int receivedProto);
+
+// Locks the auto search on a packet? Only while searching (cfgProto ==
+// RF_PROTO_AUTO), for a CRC-checked packet whose ID is accepted by the
+// sensor ID list (empty list = any ID).
+bool rfAutoShouldLock(int cfgProto, bool idAccepted);
+
+// Auto search: the type it stored since the start while that is still the
+// configured type (status page "detected: ..."), else 0.
+int rfSensorsDetectedProto();
+
 constexpr uint32_t RF_ID_ITPLUS17 = 0x17000000UL, RF_ID_ITPLUS9 = 0x09000000UL;

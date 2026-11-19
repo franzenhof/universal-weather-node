@@ -8,6 +8,7 @@
 
 struct DerivedNow {
     bool  dewValid = false;       float dewPointC = 0;
+    bool  vpdValid = false;       float vpdKpa = 0;      // vapour pressure deficit (temperature + humidity)
     bool  feelsValid = false;     float feelsLikeC = 0;
     bool  windChill = false;      // feelsLike is the wind chill
     bool  heatIndex = false;      // feelsLike is the heat index

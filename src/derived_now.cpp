@@ -12,6 +12,8 @@ void derivedNow(DerivedNow& d, float windMs, int dirDeg)
         if (gSrc.humValid) {
             d.dewValid   = true;
             d.dewPointC  = dewPointC(t, gSrc.humidity);
+            d.vpdValid   = true;
+            d.vpdKpa     = vpdKpa(t, gSrc.humidity);
             d.cloudValid = true;
             d.cloudBaseM = cloudBaseM(t, d.dewPointC);
         }

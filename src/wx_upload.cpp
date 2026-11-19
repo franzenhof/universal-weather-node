@@ -8,7 +8,11 @@
 #include "derived.h"
 #include "history.h"
 #include "board_io.h"
+#include "rain_stats.h"
+#include "system_restart.h"
 #include <ArduinoJson.h>
+#include <Preferences.h>
+#include <esp_timer.h>
 
 #include <Arduino.h>
 #include <HTTPClient.h>
@@ -92,33 +96,48 @@ Target targets[WX_TARGET_COUNT] = {
 // web server task.
 SemaphoreHandle_t wxMutex = xSemaphoreCreateMutex();
 
-// Rain since local midnight. RTC_NOINIT_ATTR: lives in RTC RAM, which
-// survives a software restart/watchdog reset/OTA (unlike normal RAM), but
-// not a power cycle — so a reboot mid-day doesn't drop the daily total
-// back to 0 for the rest of the day, without writing anything to flash.
-// The bridge solves the same problem by re-reading its database on start.
-// Also yesterday's totals, the time of the last rain and the sunshine
-// duration (wireless light sensor) - the same daily bookkeeping.
+// Rain/sunshine bookkeeping (rain_stats.h): today and yesterday in local
+// days, the last rain, rain this week/month/year and what was collected
+// while the clock was unknown. RTC_NOINIT_ATTR: lives in RTC RAM, which
+// survives a software restart/watchdog reset (unlike normal RAM), but not a
+// power cycle - so a reboot mid-day doesn't drop the totals, without writing
+// anything to flash. The bridge solves the same problem by re-reading its
+// database on start.
+//
+// RTC_NOINIT variables have no fixed address: the linker places .rtc_noinit
+// right after .rtc.data (LoRaWAN session etc.) in link order, so a firmware
+// that adds/changes an RTC variable placed before these (or within this
+// file) moves them - after such an OTA update the magic/check no longer
+// matches and the RTC copy is dropped (seen on the update to 2.0.0-rc.2,
+// whose new week/month/year part moved the daily part by 32 bytes: "rain
+// since start" in sensors.cpp kept its address and survived, yesterday/last
+// rain were lost). Hence (a) all of it in ONE RTC_NOINIT object, so adding
+// variables in this file can't reorder its parts - in the same order and
+// layout as the separate variables of 2.0.0-rc.2 (periods, pending, daily at
+// +0/+32/+48), so the update from rc.2 keeps them - and (b) with
+// gCfg.rainPersist a flash copy (cfgdata NVS, namespace "rainstat",
+// RAIN_BLOB_* in rain_stats.h) written at most hourly when changed, at the
+// day roll-over / a new period and right before every planned restart
+// (systemRestart() -> rainStatsFlush()); used at boot when the RTC copy is
+// not valid (power loss, moved layout). Each part keeps its magic and check.
 struct DailyRain {
     uint32_t magic;
-    int32_t  ymd;          // local date (yyyymmdd) the totals belong to; 0 = not known yet
-    float    mm;           // rain today
-    int32_t  prevYmd;      // date of the "yesterday" values (only shown if it really was yesterday)
-    float    prevMm;       // rain yesterday
-    float    sunSec;       // sunshine today, s
-    float    prevSunSec;   // sunshine yesterday, s
-    int64_t  lastRainEpoch;   // UTC time of the last rain increment, 0 = unknown
+    int32_t  ymd;          // RainDaily (rain_stats.h), flat: layout of 2.0.0-rc.2
+    float    mm;
+    int32_t  prevYmd;
+    float    prevMm;
+    float    sunSec;
+    float    prevSunSec;
+    int64_t  lastRainEpoch;
     uint32_t check;
 };
 constexpr uint32_t DAILY_RAIN_MAGIC = 0x52414E32;  // "RAN2"
-RTC_NOINIT_ATTR DailyRain rtcRain;
 
 // Rain/sunshine collected while the clock is unknown (after a restart,
-// before the first NTP sync): the date in rtcRain is the one from before
-// the restart, so these can't be added to it yet - rollDailyRain() adds
-// them to "today" once the date is known. Without this, a sync on a new day
-// moved everything since the restart into "yesterday". Separate RTC struct
-// (own magic), so DailyRain's layout - and existing totals - stay valid.
+// before the first NTP sync): the date in DailyRain is the one from before
+// the restart, so these can't be added to it yet - the roll-over adds them
+// to "today" once the date is known. Without this, a sync on a new day moved
+// everything since the restart into "yesterday".
 struct PendingRain {
     uint32_t magic;
     float    mm;
@@ -126,7 +145,39 @@ struct PendingRain {
     uint32_t check;
 };
 constexpr uint32_t PENDING_RAIN_MAGIC = 0x524E5031;  // "RNP1"
-RTC_NOINIT_ATTR PendingRain rtcPending;
+
+// Rain this week / month / year.
+struct PeriodRain {
+    uint32_t    magic;
+    RainPeriods p;
+    uint32_t    check;
+};
+constexpr uint32_t PERIOD_RAIN_MAGIC = 0x52505731;  // "RPW1"
+
+struct RainRtc {
+    PeriodRain  periods;   // +0
+    PendingRain pending;   // +32
+    DailyRain   daily;     // +48 (8-aligned)
+};
+static_assert(offsetof(RainRtc, pending) == 32 && offsetof(RainRtc, daily) == 48 && sizeof(RainRtc) == 96,
+              "RTC layout of 2.0.0-rc.2 (keeps the totals over the update from it)");
+RTC_NOINIT_ATTR RainRtc rtcRainState;
+DailyRain&   rtcRain    = rtcRainState.daily;
+PendingRain& rtcPending = rtcRainState.pending;
+PeriodRain&  rtcPeriods = rtcRainState.periods;
+
+// NVS copy: one blob (rain_stats.h, version 2: daily + periods + pending).
+// Same key as the version 1 blob (periods only) of older firmware: that one
+// is read and migrated, and overwritten in place by the next write.
+constexpr const char* RAIN_NVS_NAMESPACE = "rainstat";
+constexpr const char* RAIN_NVS_KEY       = "periods";
+
+// Guards rainSave and the NVS writes of the rain record (main loop task's
+// pushCycle and rainStatsFlush() from any task). Lock order: rainNvsMutex,
+// then wxMutex.
+SemaphoreHandle_t rainNvsMutex = xSemaphoreCreateMutex();
+RainSaveState rainSave;
+bool          rainReady = false;   // wxUploadSetup() has validated/restored the record
 
 // FNV-1a over everything but the trailing check word.
 uint32_t fnv1a(const void* data, size_t len)
@@ -139,41 +190,84 @@ uint32_t fnv1a(const void* data, size_t len)
 
 uint32_t dailyRainCheck(const DailyRain& r)     { return fnv1a(&r, offsetof(DailyRain, check)); }
 uint32_t pendingRainCheck(const PendingRain& r) { return fnv1a(&r, offsetof(PendingRain, check)); }
+uint32_t periodRainCheck(const PeriodRain& r)   { return fnv1a(&r, offsetof(PeriodRain, check)); }
 
 void sealDailyRain()   { rtcRain.check = dailyRainCheck(rtcRain); }
 void sealPendingRain() { rtcPending.check = pendingRainCheck(rtcPending); }
+void sealPeriodRain()  { rtcPeriods.check = periodRainCheck(rtcPeriods); }
 
-int32_t ymdOf(const struct tm& t) { return (t.tm_year + 1900) * 10000 + (t.tm_mon + 1) * 100 + t.tm_mday; }
+bool dailyRainOk()   { return rtcRain.magic == DAILY_RAIN_MAGIC && rtcRain.check == dailyRainCheck(rtcRain); }
+bool pendingRainOk() { return rtcPending.magic == PENDING_RAIN_MAGIC && rtcPending.check == pendingRainCheck(rtcPending); }
+bool periodRainOk()  { return rtcPeriods.magic == PERIOD_RAIN_MAGIC && rtcPeriods.check == periodRainCheck(rtcPeriods); }
 
-// Caller holds wxMutex. Moves today's totals to "yesterday" once the local
-// date has moved on from the one they were collected on, then adds what was
-// collected while the clock was unknown (rtcPending) to today — at worst
-// off by whatever fell between midnight and the first sync after a reboot.
+// Caller holds wxMutex.
+RainRecord rainRecordNow()
+{
+    RainRecord r;
+    r.d.ymd = rtcRain.ymd;           r.d.mm = rtcRain.mm;
+    r.d.prevYmd = rtcRain.prevYmd;   r.d.prevMm = rtcRain.prevMm;
+    r.d.sunSec = rtcRain.sunSec;     r.d.prevSunSec = rtcRain.prevSunSec;
+    r.d.lastRainEpoch = rtcRain.lastRainEpoch;
+    r.p = rtcPeriods.p;
+    r.pendingMm = rtcPending.mm;
+    r.pendingSunSec = rtcPending.sunSec;
+    return r;
+}
+
+// Caller holds wxMutex: stores r into RTC RAM (all parts, valid and sealed).
+void rainRecordStore(const RainRecord& r)
+{
+    rtcRain.magic = DAILY_RAIN_MAGIC;
+    rtcRain.ymd = r.d.ymd;           rtcRain.mm = r.d.mm;
+    rtcRain.prevYmd = r.d.prevYmd;   rtcRain.prevMm = r.d.prevMm;
+    rtcRain.sunSec = r.d.sunSec;     rtcRain.prevSunSec = r.d.prevSunSec;
+    rtcRain.lastRainEpoch = r.d.lastRainEpoch;
+    sealDailyRain();
+    rtcPeriods.magic = PERIOD_RAIN_MAGIC;
+    rtcPeriods.p = r.p;
+    sealPeriodRain();
+    rtcPending.magic = PENDING_RAIN_MAGIC;
+    rtcPending.mm = r.pendingMm;
+    rtcPending.sunSec = r.pendingSunSec;
+    sealPendingRain();
+}
+
+int64_t uptimeSec() { return esp_timer_get_time() / 1000000LL; }
+
+bool loadRainNvs(RainRecord& out, int& version)
+{
+    Preferences prefs;
+    if (!prefs.begin(RAIN_NVS_NAMESPACE, true, "cfgdata")) return false;   // never written
+    uint8_t buf[RAIN_BLOB_SIZE];
+    const size_t len = prefs.getBytesLength(RAIN_NVS_KEY);
+    version = len > 0 && len <= sizeof(buf) && prefs.getBytes(RAIN_NVS_KEY, buf, len) == len
+            ? rainBlobDecode(buf, len, out) : 0;
+    prefs.end();
+    return version != 0;
+}
+
+bool writeRainNvs(const RainRecord& r)
+{
+    Preferences prefs;
+    if (!prefs.begin(RAIN_NVS_NAMESPACE, false, "cfgdata")) return false;
+    uint8_t buf[RAIN_BLOB_SIZE];
+    rainBlobEncode(r, buf);
+    bool ok = prefs.putBytes(RAIN_NVS_KEY, buf, sizeof(buf)) == sizeof(buf);
+    prefs.end();
+    return ok;
+}
+
+// Caller holds wxMutex. Rolls the record over onto the current local date
+// (rain_stats.h: today -> yesterday, new week/month/year, the rain collected
+// while the clock was unknown into today) - at worst off by whatever fell
+// between midnight and the first sync after a reboot.
 // Returns false (nothing changed) while the clock is unknown.
 bool rollDailyRain()
 {
     struct tm lt;
     if (!localTimeNow(lt)) return false;
-    int32_t ymd = ymdOf(lt);
-    bool pending = rtcPending.mm != 0.0f || rtcPending.sunSec != 0.0f;
-    if (rtcRain.ymd == ymd && !pending) return true;
-    if (rtcRain.ymd != ymd) {
-        if (rtcRain.ymd != 0) {
-            rtcRain.prevYmd    = rtcRain.ymd;
-            rtcRain.prevMm     = rtcRain.mm;
-            rtcRain.prevSunSec = rtcRain.sunSec;
-            rtcRain.mm     = 0.0f;
-            rtcRain.sunSec = 0.0f;
-        }
-        rtcRain.ymd = ymd;
-    }
-    if (pending) {
-        rtcRain.mm     += rtcPending.mm;
-        rtcRain.sunSec += rtcPending.sunSec;
-        rtcPending.mm = rtcPending.sunSec = 0.0f;
-        sealPendingRain();
-    }
-    sealDailyRain();
+    RainRecord r = rainRecordNow();
+    if (rainRecordRoll(r, lt)) rainRecordStore(r);
     return true;
 }
 
@@ -182,10 +276,7 @@ bool prevIsYesterday()
 {
     struct tm lt;
     if (!localTimeNow(lt) || rtcRain.prevYmd == 0) return false;
-    lt.tm_mday -= 1;
-    lt.tm_hour = 12;   // away from DST edges
-    mktime(&lt);
-    return ymdOf(lt) == rtcRain.prevYmd;
+    return rainYmdDayNumber(rainYmd(lt)) - rainYmdDayNumber(rtcRain.prevYmd) == 1;
 }
 
 // Caller holds wxMutex.
@@ -694,19 +785,42 @@ void wxUploadTask(void*)
 
 void wxUploadSetup()
 {
-    if (rtcPending.magic != PENDING_RAIN_MAGIC || rtcPending.check != pendingRainCheck(rtcPending)) {
-        rtcPending = PendingRain{};
-        rtcPending.magic = PENDING_RAIN_MAGIC;
-        sealPendingRain();
-    }
-    if (rtcRain.magic != DAILY_RAIN_MAGIC || rtcRain.check != dailyRainCheck(rtcRain)) {
-        rtcRain = DailyRain{};
-        rtcRain.magic = DAILY_RAIN_MAGIC;
-        sealDailyRain();
-    } else {
+    // RTC RAM if valid (restart, watchdog, OTA keeping the layout), else -
+    // after a power loss or a moved RTC layout - the NVS copy (only with
+    // rainPersist on; off = start at 0, the copy is not read). Daily values,
+    // pending rain and week/month/year are taken together from one source,
+    // so nothing is counted twice. The roll-over to the current date happens
+    // once the clock is known (rollDailyRain()).
+    RainRecord nvs = {};
+    int nvsVersion = 0;
+    const bool nvsOk = gCfg.rainPersist && loadRainNvs(nvs, nvsVersion);
+    const bool dailyOk = dailyRainOk(), pendingOk = pendingRainOk(), periodsOk = periodRainOk();
+    xSemaphoreTake(wxMutex, portMAX_DELAY);
+    if (dailyOk && pendingOk && periodsOk) {
         dbgSerial.printf("WX: daily rain total restored from RTC RAM: %.2f mm (date %ld)\n",
                          rtcRain.mm, (long)rtcRain.ymd);
+    } else if (nvsOk) {
+        rainRecordStore(nvs);
+        dbgSerial.printf("WX: rain restored from flash%s: today %.2f mm (date %ld), yesterday %.2f mm, "
+                         "week/month/year %.1f / %.1f / %.1f mm\n",
+                         nvsVersion == 1 ? " (old format: week/month/year only)" : "",
+                         nvs.d.mm, (long)nvs.d.ymd, nvs.d.prevMm, nvs.p.weekMm, nvs.p.monthMm, nvs.p.yearMm);
+    } else {
+        // reset only the invalid parts
+        RainRecord r = rainRecordNow();
+        if (!dailyOk)   r.d = RainDaily{};
+        if (!periodsOk) r.p = RainPeriods{};
+        if (!pendingOk) r.pendingMm = r.pendingSunSec = 0.0f;
+        rainRecordStore(r);
     }
+    xSemaphoreGive(wxMutex);
+    xSemaphoreTake(rainNvsMutex, portMAX_DELAY);
+    rainSave = RainSaveState{};
+    rainSave.saved = nvsOk;         // no copy yet: the first change is written right away
+    if (nvsOk) rainSave.last = nvs;
+    rainSave.lastSaveSec = uptimeSec();
+    rainReady = true;
+    xSemaphoreGive(rainNvsMutex);
 
     // 12 KB: mbedTLS's handshake (Weather Underground is HTTPS-only) needs
     // noticeably more stack than plain HTTP. Core 0, same as the web server
@@ -747,18 +861,56 @@ void wxUploadPushCycle(const WindStats& w10)
         if (bme280Present) { a.pressSum += bme280PressSea; a.pressCount++; }
     }
 
-    if (srcActive(SG_RAIN)) {
-        if (rollDailyRain()) {
-            rtcRain.mm += rainMM;
-            if (rainMM > 0.0f) rtcRain.lastRainEpoch = (int64_t)time(nullptr);
-            sealDailyRain();
-        } else if (rainMM > 0.0f) {   // clock unknown: today's date isn't known yet
-            rtcPending.mm += rainMM;
-            sealPendingRain();
+    const bool clock = rollDailyRain();
+    if (srcActive(SG_RAIN) && rainMM > 0.0f) {
+        RainRecord r = rainRecordNow();
+        rainRecordAddRain(r, rainMM, clock, (int64_t)time(nullptr));   // clock unknown: pending
+        rainRecordStore(r);
+    }
+    xSemaphoreGive(wxMutex);
+
+    // Flash copy: at most hourly and only when changed, plus at the day
+    // roll-over (rain_stats.h). Written outside wxMutex.
+    if (!clock) return;
+    xSemaphoreTake(rainNvsMutex, portMAX_DELAY);
+    if (!rainReady) { xSemaphoreGive(rainNvsMutex); return; }
+    xSemaphoreTake(wxMutex, portMAX_DELAY);
+    const RainRecord toSave = rainRecordNow();
+    const int32_t ymd = rtcRain.ymd;
+    xSemaphoreGive(wxMutex);
+    if (rainSaveDue(rainSave, toSave, uptimeSec(), ymd, gCfg.rainPersist) && !writeRainNvs(toSave)) {
+        rainSaveFailed(rainSave);
+        dbgSerial.println("WX: FAILED to save rain statistics to flash (NVS full?), retry in 1 h.");
+    }
+    xSemaphoreGive(rainNvsMutex);
+}
+
+void rainStatsFlush()
+{
+    xSemaphoreTake(rainNvsMutex, portMAX_DELAY);
+    if (rainReady) {
+        xSemaphoreTake(wxMutex, portMAX_DELAY);
+        rollDailyRain();   // clock known: pending rain into today first
+        const RainRecord cur = rainRecordNow();
+        xSemaphoreGive(wxMutex);
+        if (rainFlushDue(rainSave, cur, uptimeSec(), gCfg.rainPersist)) {
+            if (writeRainNvs(cur)) {
+                dbgSerial.printf("WX: rain statistics saved to flash before restart (today %.2f mm).\n", cur.d.mm);
+            } else {
+                rainSaveFailed(rainSave);
+                dbgSerial.println("WX: FAILED to save rain statistics to flash before restart.");
+            }
         }
     }
+    xSemaphoreGive(rainNvsMutex);
+}
 
-    xSemaphoreGive(wxMutex);
+void systemRestart(const char* reason)
+{
+    dbgSerial.printf("Restart: %s\n", reason ? reason : "");
+    rainStatsFlush();
+    delay(100);   // let the log line out
+    ESP.restart();
 }
 
 void wxUploadLock()   { xSemaphoreTake(wxMutex, portMAX_DELAY); }
@@ -794,6 +946,9 @@ void wxDailyStats(WxDailyStats& out)
     out.rainYesterdayMm  = rtcRain.prevMm;
     out.sunYesterdaySec  = rtcRain.prevSunSec;
     out.lastRainEpoch    = rtcRain.lastRainEpoch;
+    out.rainWeekMm       = rtcPeriods.p.weekMm;
+    out.rainMonthMm      = rtcPeriods.p.monthMm;
+    out.rainYearMm       = rtcPeriods.p.yearMm;
     xSemaphoreGive(wxMutex);
 }
 
@@ -801,13 +956,10 @@ void wxAddSunshine(float sec)
 {
     if (sec <= 0.0f) return;
     xSemaphoreTake(wxMutex, portMAX_DELAY);
-    if (rollDailyRain()) {
-        rtcRain.sunSec += sec;
-        sealDailyRain();
-    } else {
-        rtcPending.sunSec += sec;
-        sealPendingRain();
-    }
+    const bool clock = rollDailyRain();
+    RainRecord r = rainRecordNow();
+    rainRecordAddSun(r, sec, clock);
+    rainRecordStore(r);
     xSemaphoreGive(wxMutex);
 }
 

@@ -52,13 +52,19 @@ void wxUploadStatus(WxTargetStatus out[WX_TARGET_COUNT]);
 // least once — before that, the "day" the total belongs to is unknown.
 float wxDailyRainMm(bool& valid);
 
-// Daily bookkeeping (local days, RTC RAM: survives restarts, not power loss).
+// Daily bookkeeping (local days) plus rain this week (ISO, Monday start) /
+// month / year: RTC RAM (survives restarts) and, with gCfg.rainPersist, a
+// flash copy at most hourly, at the day roll-over and before every planned
+// restart (systemRestart(), system_restart.h): also survives OTA updates
+// that move the RTC layout and power loss (losing at most the last hour).
+// All totals belong to the periods of the current local date when valid.
 struct WxDailyStats {
     bool    valid = false;            // NTP synced at least once (the day is known)
     float   rainTodayMm = 0, sunTodaySec = 0;
     bool    yesterdayValid = false;   // the "yesterday" values really belong to yesterday
     float   rainYesterdayMm = 0, sunYesterdaySec = 0;
     int64_t lastRainEpoch = 0;        // UTC seconds of the last rain, 0 = unknown
+    float   rainWeekMm = 0, rainMonthMm = 0, rainYearMm = 0;   // only meaningful while valid
 };
 void wxDailyStats(WxDailyStats& out);
 

@@ -74,6 +74,6 @@ void srcUpdateCycle();
 void srcBoardRain(float mm);
 
 // Wireless wind per send path (PATH_* in main.cpp, 0..SRC_PATHS-1).
-constexpr int SRC_PATHS = 3;
+constexpr int SRC_PATHS = 4;   // base, LoRaWAN, MQTT, Loxone
 WindStats srcRfWind(int path, bool tenMin);
 void      srcRfWindReset(int path);

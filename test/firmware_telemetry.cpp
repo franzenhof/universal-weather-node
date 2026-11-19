@@ -3,9 +3,15 @@
 #include "board_io.h"
 #include "rf_sensors.h"
 #include "sources.h"
+#include "derived.h"
+#include "wx_upload.h"
+#include "loxone.h"
 #include <cassert>
+#include <cmath>
 #include <string>
 #include <vector>
+
+extern WxDailyStats hostDailyStats;   // test/host/runtime.cpp
 
 int main()
 {
@@ -55,6 +61,17 @@ int main()
     srcUpdateCycle();buildJsonPayload(doc);
     assert(doc["sources"]["tempHum"].as<std::string>()=="board" && doc["sources"]["light"].as<std::string>()=="radio:00002A5B");
     assert(doc["lightLux"].as<float>()==5321.6f && doc["radioBatteryLow"].as<bool>());
+    {   // Loxone UDP lines from the real payload: names match the JSON keys
+        std::vector<std::string> lx;
+        int n=loxoneLines(doc,"",[](const char* l,size_t,void* c){static_cast<std::vector<std::string>*>(c)->push_back(l);},&lx);
+        auto has=[&](const char* line){for(auto& l:lx) if(l==line) return true; return false;};
+        auto hasName=[&](const std::string& nm){for(auto& l:lx) if(l.compare(0,nm.size()+1,nm+"=")==0) return true; return false;};
+        assert(n==(int)lx.size() && n>40);
+        assert(has("rf1_temp=4.5") && has("rf1_humidity=88") && has("rf1_battery=0") && has("rf1_rssi=-71") && hasName("rf1_age"));
+        assert(has("radioBatteryLow=1") && has("rf1_windDirDeg=247") && has("warnFrost=0") && has("ds18b20_1=10.5") && has("ds18b20_3=14.5"));
+        assert(hasName("temp") && hasName("pressureQnh") && hasName("cpuTemp") && hasName("victronBatteryV") && hasName("fanRpm") &&
+               hasName("heaterOn") && hasName("auxPulsesTotal") && !hasName("resetReason") && !hasName("windUnit"));
+    }
     gCfg.srcSel[SG_AIR]=SRC_RF1;srcUpdateCycle();buildJsonPayload(doc);
     assert(doc["temp"].as<float>()==4.5f && doc["humidityPct"].as<float>()==88 && !doc["pressureQnh"].isNull());
     gCfg.srcSel[SG_AIR]=SRC_OFF;srcUpdateCycle();buildJsonPayload(doc);
@@ -106,4 +123,25 @@ int main()
     gCfg.uvEn=gCfg.auxAinEn=gCfg.auxPulseEn=0;gCfg.wind2Mode=2;
     srcUpdateCycle();buildJsonPayload(doc);
     assert(!doc["wind2"].isNull() && doc["uvIndex"].isNull());
+
+    // VPD from the selected temperature/humidity (BME280: 23.46 C / 49.6 %)
+    assert(gSrc.tempValid && gSrc.humValid);
+    assert(doc["vpdUnit"].as<std::string>()=="kPa");
+    assert(fabs(doc["vpd"].as<float>()-vpdKpa(gSrc.tempC,gSrc.humidity))<0.006f && doc["vpd"].as<float>()>1.4f);
+    bme280Present=false;srcUpdateCycle();buildJsonPayload(doc);   // no temperature/humidity: no VPD
+    assert(doc["vpd"].isNull() && doc["vpdUnit"].isNull());
+    bme280Present=true;srcUpdateCycle();
+
+    // rain today / week / month / year: only once the clock is known, same unit as rainToday
+    gCfg.rainEn=1;srcUpdateCycle();buildJsonPayload(doc);
+    assert(doc["rainToday"].isNull() && doc["rainWeek"].isNull() && doc["rainMonth"].isNull() && doc["rainYear"].isNull());
+    hostDailyStats.valid=true;hostDailyStats.rainTodayMm=1.2f;
+    hostDailyStats.rainWeekMm=5.4f;hostDailyStats.rainMonthMm=25.4f;hostDailyStats.rainYearMm=508.0f;
+    buildJsonPayload(doc);
+    assert(doc["rainToday"].as<float>()==1.2f && doc["rainWeek"].as<float>()==5.4f);
+    assert(doc["rainMonth"].as<float>()==25.4f && doc["rainYear"].as<float>()==508.0f);
+    gCfg.unitSystem=1;buildJsonPayload(doc);
+    assert(fabs(doc["rainMonth"].as<float>()-1.0f)<1e-5f && fabs(doc["rainYear"].as<float>()-20.0f)<1e-4f);
+    assert(doc["rainUnit"].as<std::string>()=="in");
+    gCfg.unitSystem=0;hostDailyStats=WxDailyStats{};
 }

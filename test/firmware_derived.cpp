@@ -1,4 +1,4 @@
-// Derived weather values (src/derived.cpp): dew point, wind chill, heat
+// Derived weather values (src/derived.cpp): dew point, VPD, wind chill, heat
 // index, cloud base, compass text, pressure tendency, warnings, versions.
 #include "derived.h"
 #include <cassert>
@@ -13,6 +13,15 @@ int main()
     assert(near(dewPointC(20.0f, 50.0f), 9.3f, 0.1f));
     assert(near(dewPointC(5.0f, 100.0f), 5.0f, 0.01f));
     assert(near(dewPointC(-10.0f, 80.0f), -12.9f, 0.2f));
+
+    // vapour pressure deficit (Magnus, same constants): 25 °C / 50 % -> 1.58 kPa,
+    // 100 % -> 0, 0 % -> the full saturation pressure (3.17 kPa at 25 °C)
+    assert(near(vpdKpa(25.0f, 50.0f), 1.58f, 0.01f));
+    assert(vpdKpa(25.0f, 100.0f) == 0.0f && vpdKpa(25.0f, 120.0f) == 0.0f);
+    assert(near(vpdKpa(25.0f, 0.0f), 3.16f, 0.02f) && vpdKpa(25.0f, -5.0f) == vpdKpa(25.0f, 0.0f));
+    assert(near(vpdKpa(20.0f, 60.0f), 0.935f, 0.01f) && near(vpdKpa(0.0f, 80.0f), 0.122f, 0.005f));
+    // consistent with the dew point: e(Td) = e_s(T) * RH
+    assert(near(vpdKpa(20.0f, 50.0f), vpdKpa(20.0f, 0.0f) - vpdKpa(dewPointC(20.0f, 50.0f), 0.0f), 0.01f));
 
     // wind chill: -10 °C at 30 km/h -> -19.5 °C; not above 10 °C or below 4.8 km/h
     assert(near(windChillC(-10.0f, 30.0f / 3.6f), -19.5f, 0.2f));

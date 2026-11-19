@@ -136,7 +136,8 @@ const char* mqttClientId()
 // entity that reads `valueTemplate` out of the shared telemetry JSON on
 // topicData. All entities share one HA "device" so they group together.
 void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
-                             const char* deviceClass, const char* valueTemplate, bool binary = false)
+                             const char* deviceClass, const char* valueTemplate, bool binary = false,
+                             const char* stateClass = nullptr)
 {
     char configTopic[160];
     snprintf(configTopic, sizeof(configTopic), "%s/%s/%s/%s/config",
@@ -156,6 +157,7 @@ void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
     if (unit && unit[0])        doc["unit_of_measurement"] = unit;
     if (binary) { doc["payload_on"] = "ON"; doc["payload_off"] = "OFF"; }
     if (deviceClass && deviceClass[0]) doc["device_class"] = deviceClass;
+    if (stateClass && stateClass[0])   doc["state_class"]  = stateClass;
 
     JsonObject device = doc["device"].to<JsonObject>();
     JsonArray  ids     = device["identifiers"].to<JsonArray>();
@@ -241,6 +243,8 @@ void publishHomeAssistantDiscovery()
     if (bme280Present || rf) {
         publishDiscoveryEntity("dew_point", "Dew Point", tempUnit, "temperature",
                                 "{{ value_json.dewPoint | default(None) }}");
+        publishDiscoveryEntity("vpd", "Vapour Pressure Deficit", "kPa", "pressure",
+                                "{{ value_json.vpd | default(None) }}");
         publishDiscoveryEntity("feels_like", "Feels Like", tempUnit, "temperature",
                                 "{{ value_json.feelsLike | default(None) }}");
         publishDiscoveryEntity("temp_trend", "Temperature Change (1 h)", gCfg.unitSystem == 1 ? "\xC2\xB0" "F" : "K", nullptr,
@@ -266,6 +270,15 @@ void publishHomeAssistantDiscovery()
                                 "{{ value_json.rainToday | default(None) }}");
         publishDiscoveryEntity("rain_yesterday", "Rain Yesterday", rainUnit, "precipitation",
                                 "{{ value_json.rainYesterday | default(None) }}");
+        // Sums that restart at 0 each week / month / year: exactly HA's
+        // "total_increasing" (a decrease = new meter cycle), which also gives
+        // them long-term statistics. ("total" would need last_reset.)
+        publishDiscoveryEntity("rain_week", "Rain This Week", rainUnit, "precipitation",
+                                "{{ value_json.rainWeek | default(None) }}", false, "total_increasing");
+        publishDiscoveryEntity("rain_month", "Rain This Month", rainUnit, "precipitation",
+                                "{{ value_json.rainMonth | default(None) }}", false, "total_increasing");
+        publishDiscoveryEntity("rain_year", "Rain This Year", rainUnit, "precipitation",
+                                "{{ value_json.rainYear | default(None) }}", false, "total_increasing");
         publishDiscoveryEntity("last_rain", "Last Rain", nullptr, "timestamp",
                                 "{{ value_json.lastRain | default(None) }}");
     }

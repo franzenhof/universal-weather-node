@@ -26,7 +26,15 @@ Host-side project tests (no hardware required, run from the project root):
     1-Wire conversions, output/PWM shutdown, battery hysteresis and missing
     VE.Direct/PV data, standalone wind 2, energy-setting save/read-back,
     bounded radio/join retries, node cleanup, timer rollover and JSON >1024
-    bytes. Requires a C++11 compiler and the ArduinoJson dependency restored
+    bytes, rain statistics bookkeeping (ISO weeks, period roll-over,
+    today/yesterday/last rain, NVS blob v2 round trip and migration of the
+    old 28-byte blob, power loss and planned-restart flush with the NVS
+    copy, rain before the clock sync, at most 25 flash writes per day incl.
+    restarts, none with the setting off), VPD, the new-node
+    defaults, the wireless "Auto (search)" rotation/lock decision and the
+    Loxone UDP lines (names, 0/1 booleans, flattened nested values, prefix,
+    invalid/stale values left out, decimals, settings sanitizing).
+    Requires a C++11 compiler and the ArduinoJson dependency restored
     by the normal PlatformIO build. Does not flash or simulate physical timing.
 
 - node test/pcb_protection.test.js

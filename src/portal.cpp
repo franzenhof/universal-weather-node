@@ -1,4 +1,5 @@
 #include "portal.h"
+#include "system_restart.h"
 #include "wind_window.h"
 #include "globals.h"
 #include "sensors.h"
@@ -9,6 +10,7 @@
 #include "help_page.h"
 #include "calibrate_page.h"
 #include "serial_log.h"
+#include "loxone.h"
 
 #include <WiFiManager.h>
 #include <ArduinoOTA.h>
@@ -214,7 +216,7 @@ Config runConfigPortal(const Config& cur)
     static char capturedStaticDns[16];
     bool capturedStaticIpSet = false;
 
-    WiFiManagerParameter p_lora_section("<div style='margin:0.5rem 0 0.5rem 0;'><strong>LoRaWAN</strong></div>");
+    WiFiManagerParameter p_lora_section("<div style='margin:1rem 0 0.5rem 0;'><h3>LoRaWAN (optional)</h3><p style='margin:0;'>Only for sending over a LoRaWAN network (TTN, ChirpStack, ...): switch it on and enter the keys. Not needed for a Wi-Fi station.</p></div>");
     WiFiManagerParameter p_loraen("loraen", "LoRaWAN transport enabled (0=No, 1=Yes)", b_loraen, 2);
     WiFiManagerParameter p_lowpower("lowpower", "Low-power mode: light sleep between samples (LoRa only, WiFi off; 0=No, 1=Yes)", b_lowpower, 2);
     WiFiManagerParameter p_vanesave("vanesave", "Low-power mode: switch the wind-vane supply off between readings (PCB v2.0; 0=No, 1=Yes)", b_vanesave, 2);
@@ -232,8 +234,8 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_lorawagg("lorawagg","LoRaWAN wind values: 0 = interval since the last uplink, 1 = 10-min (WMO)", b_lorawagg, 2);
     WiFiManagerParameter p_mqttsec ("mqttsec", "MQTT interval in s: 0 = like the LoRaWAN interval, else 2-3600", b_mqttsec, 7);
     WiFiManagerParameter p_mqttwagg("mqttwagg","MQTT wind values: 0 = interval since the last publish, 1 = 10-min (WMO)", b_mqttwagg, 2);
-    WiFiManagerParameter p_rfen    ("rfen",    "Wireless sensors (868 MHz): 1 = receive with the LoRa chip between uplinks", b_rfen, 2);
-    WiFiManagerParameter p_rfproto ("rfproto", "Wireless sensor type (bit mask): 1 = Bresser, 6 = TFA/LaCrosse IT+ (both rates), 2 = IT+ 17.241 kbit/s only, 4 = IT+ 9.579 kbit/s only, 8 = Fine Offset / Ecowitt / Froggit, 10 = IT+ 17.241 kbit/s + Fine Offset (same data rate), 14 = IT+ both rates + Fine Offset, 7 = Bresser + IT+ / 9 = Bresser + Fine Offset alternating (misses packets, not recommended)", b_rfproto, 2);
+    WiFiManagerParameter p_rfen    ("rfen",    "Wireless sensors (868 MHz): 1 = receive with the LoRa chip (between uplinks), 0 = off", b_rfen, 2);
+    WiFiManagerParameter p_rfproto ("rfproto", "Wireless sensor type: 16 = Auto (search: stores the type of the first sensor received), 1 = Bresser, 6 = TFA/LaCrosse IT+ (both rates), 2 = IT+ 17.241 kbit/s only, 4 = IT+ 9.579 kbit/s only, 8 = Fine Offset / Ecowitt / Froggit, 10 = IT+ 17.241 kbit/s + Fine Offset (same data rate), 14 = IT+ both rates + Fine Offset, 7 = Bresser + IT+ / 9 = Bresser + Fine Offset alternating (misses packets, not recommended)", b_rfproto, 2);
     // Free-text fields: shown HTML-escaped (htmlAttr), so the field length is
     // at least the escaped length; Config's own buffer limits the saved text.
     auto shownLen = [](int maxLen, const String& shown) { return max(maxLen, (int)shown.length()); };
@@ -242,10 +244,8 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_srcs    ("srcs",    "Value sources temp/hum, wind, rain, UV, light (0 auto, 1 board, 2-5 wireless 1-4, 6 off)", b_srcs, 15);
     WiFiManagerParameter p_windoff("windoff",  "Wind direction offset in degrees (-180 to +180)", b_windoff, 5);
 
-    // Grouped so the unit-related fields aren't scattered across the page:
-    // one master switch (Metric/Imperial) plus the existing km/h-vs-m/s
-    // refinement, which only applies when Units = Metric.
-    WiFiManagerParameter p_units_section("<div style='margin:0.5rem 0 0.5rem 0;'><strong>Units</strong></div>");
+    // Units (in "Basic setup"): one master switch (Metric/Imperial) plus the
+    // km/h-vs-m/s refinement, which only applies when Units = Metric.
     WiFiManagerParameter p_unitsys ("unitsys",  "Units (0=Metric: °C/mm/hPa, 1=Imperial: °F/in/inHg/mph)", b_unitsys, 2);
     WiFiManagerParameter p_windunit("windunit", "Wind speed unit if Metric (0=km/h, 1=m/s; ignored if Imperial)", b_windunit, 2);
 
@@ -259,9 +259,9 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_windmspp ("windmspp",  "Wind speed: m/s per pulse-per-second",       b_windmspp,  11);
     WiFiManagerParameter p_winddirtyp("winddirtyp", "Wind direction sensor (0=potentiometer, 1=calibrated table — see 'Calibrate Wind Direction' button)", b_winddirtyp, 2);
 
-    WiFiManagerParameter p_general_section("<div style='margin:0.5rem 0 0.5rem 0;'><strong>General Parameters</strong></div>");
-    WiFiManagerParameter p_winden ("winden",   "Wind sensor enabled (0=No, 1=Yes)",            cur.windEn ? "1" : "0", 2);
-    WiFiManagerParameter p_rainen ("rainen",   "Rain sensor enabled (0=No, 1=Yes)",            cur.rainEn ? "1" : "0", 2);
+    WiFiManagerParameter p_winden ("winden",   "Wind sensor on the PCB enabled (0=No, 1=Yes; 0 without a PCB)", cur.windEn ? "1" : "0", 2);
+    WiFiManagerParameter p_rainen ("rainen",   "Rain sensor on the PCB enabled (0=No, 1=Yes; 0 without a PCB)", cur.rainEn ? "1" : "0", 2);
+    WiFiManagerParameter p_rainpersist("rainpersist", "Rain statistics (today/yesterday, last rain, week/month/year): save to flash at most hourly and before restarts so they survive a power cut (1=Yes, 0=RTC RAM only)", cur.rainPersist ? "1" : "0", 2);
     WiFiManagerParameter p_lipo   ("lipoen",   "LiPo measurement enabled (0=No, 1=Yes)",       cur.lipoEn ? "1" : "0", 2);
     WiFiManagerParameter p_debug  ("debugmode","Debug mode (0=No, 1=Yes, sends extra telemetry)", b_debug, 2);
     WiFiManagerParameter p_cpu    ("cpufreq",  "CPU frequency in MHz (80 or 240)",             b_cpu,     4);
@@ -299,7 +299,9 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_uvslope("uvslope", "UV index calibration slope (index per volt, 0.001-30)", b_uvslope, 11);
     WiFiManagerParameter p_uvoffset("uvoffset", "UV index calibration offset (-10 to +10)", b_uvoffset, 11);
 
-    WiFiManagerParameter p_section("<div style='margin:0.5rem 0 0.75rem 0;'><h3>Universal-Weather-Node Parameter</h3><p style='margin:0 0 0.35rem 0;'>Firmware version: " FIRMWARE_VERSION "</p><p style='margin:0;'>Device settings are shown here on a separate page.</p></div>");
+    WiFiManagerParameter p_section("<div style='margin:0.5rem 0 0.75rem 0;'><h3>Universal-Weather-Node Parameter</h3><p style='margin:0 0 0.35rem 0;'>Firmware version: " FIRMWARE_VERSION "</p><p style='margin:0;'>A Wi-Fi station with a wireless outdoor sensor only needs the Wi-Fi network (\"Configure WiFi\"); the fields under <b>Basic setup</b> are optional. Everything else can also be changed later on the node's web settings page.</p></div>");
+    WiFiManagerParameter p_basic_section("<div style='margin:0.5rem 0 0.5rem 0;'><strong>Basic setup</strong></div>");
+    WiFiManagerParameter p_board_section("<div style='margin:1rem 0 0.5rem 0;'><strong>Board sensors and measurement</strong> (PCB: Davis wind/rain, BME280 is detected automatically)</div>");
 
     // Parallel WiFi + MQTT transport, fully optional alongside LoRaWAN. WiFi
     // STA credentials/static-IP are configured via WiFiManager's own "wifi"
@@ -327,6 +329,17 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_mqtttopic ("mqtttopic",  "MQTT topic prefix (optional, default = device name)", e_mqtttopic.c_str(), shownLen(65, e_mqtttopic));
     WiFiManagerParameter p_mqtttls   ("mqtttls",    "MQTT security (0=plain/no TLS, 1=TLS/trust any cert, 2=TLS/verify cert below)", b_mqtttls, 2);
     WiFiManagerParameter p_cacert_html(b_cacert_html);
+    // Loxone UDP output (loxone.h)
+    char b_loxen[2], b_loxport[8], b_loxsec[8];
+    itoa(cur.loxEn,   b_loxen,   10);
+    itoa(cur.loxPort, b_loxport, 10);
+    itoa(cur.loxSec,  b_loxsec,  10);
+    const String e_loxhost = htmlAttr(cur.loxHost), e_loxprefix = htmlAttr(cur.loxPrefix);
+    WiFiManagerParameter p_loxen    ("loxen",     "Loxone UDP output (0=No, 1=Yes): one datagram name=value per value", b_loxen, 2);
+    WiFiManagerParameter p_loxhost  ("loxhost",   "Loxone Miniserver IP or host name", e_loxhost.c_str(), shownLen(65, e_loxhost));
+    WiFiManagerParameter p_loxport  ("loxport",   "Loxone UDP port (1-65535, default 7000)", b_loxport, 7);
+    WiFiManagerParameter p_loxprefix("loxprefix", "Loxone name prefix (optional, max 16 of A-Z a-z 0-9 _ . -)", e_loxprefix.c_str(), shownLen(17, e_loxprefix));
+    WiFiManagerParameter p_loxsec   ("loxsec",    "Loxone interval in s: 0 = every measurement cycle, else 2-3600", b_loxsec, 7);
 
     WiFiManager wm;
     const char* menu[] = { "wifi", "info", "custom", "sep", "exit" };
@@ -386,7 +399,7 @@ Config runConfigPortal(const Config& cur)
                            : uploadError ? String("Update refused: ") + uploadError
                                          : String("Update failed: ") + Update.errorString();
                 wm.server->send(uploadOk ? 200 : 400, "text/plain; charset=utf-8", msg);
-                if (uploadOk) { delay(1000); ESP.restart(); }
+                if (uploadOk) { delay(1000); systemRestart("firmware update (browser)"); }
             }, [&wm]() {
                 HTTPUpload& up = wm.server->upload();
                 auto refuse = [](const char* why) {
@@ -423,6 +436,14 @@ Config runConfigPortal(const Config& cur)
                 }
             });
         }
+        // WiFiManager's own /restart (not in the menu, reachable by URL)
+        // would call ESP.restart() directly: same purpose, but through
+        // systemRestart() so the rain statistics are saved first.
+        wm.server->on("/restart", [&wm]() {
+            wm.server->send(200, "text/plain; charset=utf-8", "Restarting...");
+            delay(1000);
+            systemRestart("portal /restart");
+        });
         wm.server->on("/decoder", [&wm]() {
             wm.server->sendHeader("Content-Disposition",
                                   "attachment; filename=\"weather-node-decoder.js\"");
@@ -569,7 +590,7 @@ Config runConfigPortal(const Config& cur)
         int ms = atoi(p_mqttsec.getValue());
         c.mqttIntervalSec  = (ms == 0 || (ms >= 2 && ms <= 3600)) ? ms : c.mqttIntervalSec;
         { int v = atoi(p_rfen.getValue()); c.rfEn = v == RF_RADIO_SX1262 ? RF_RADIO_SX1262 : RF_RADIO_OFF; }
-        { int v = atoi(p_rfproto.getValue()); if (v >= 1 && v <= RF_PROTO_ALL) c.rfProto = v; }
+        { int v = atoi(p_rfproto.getValue()); if (rfProtoValid(v)) c.rfProto = v; }
         if (paramsSubmitted) strlcpy(c.rfIds, p_rfids.getValue(), sizeof(c.rfIds));
         {
             const char* p = p_srcs.getValue();
@@ -599,6 +620,7 @@ Config runConfigPortal(const Config& cur)
                               ? 1 : formDirType;
         c.windEn           = atoi(p_winden.getValue());
         c.rainEn           = atoi(p_rainen.getValue());
+        c.rainPersist      = atoi(p_rainpersist.getValue()) == 0 ? 0 : 1;
         c.lipoEn           = atoi(p_lipo.getValue());
         c.debugMode        = (atoi(p_debug.getValue()) == 1) ? 1 : 0;
         c.cpuFreqMhz       = (atoi(p_cpu.getValue()) == 240) ? 240 : 80;
@@ -653,6 +675,14 @@ Config runConfigPortal(const Config& cur)
         // reconfiguration) would silently wipe a previously stored certificate.
         if (capturedCaCertSet) strlcpy(c.mqttCaCert, capturedCaCert, sizeof(c.mqttCaCert));
 
+        c.loxEn = atoi(p_loxen.getValue()) ? 1 : 0;
+        { int v = atoi(p_loxport.getValue()); if (loxPortValid(v)) c.loxPort = v; }
+        { int v = atoi(p_loxsec.getValue());  if (loxIntervalValid(v)) c.loxSec = v; }
+        if (paramsSubmitted) {
+            strlcpy(c.loxHost, p_loxhost.getValue(), sizeof(c.loxHost));
+            if (loxPrefixValid(p_loxprefix.getValue())) strlcpy(c.loxPrefix, p_loxprefix.getValue(), sizeof(c.loxPrefix));
+        }
+
         return c;
     };
 
@@ -701,24 +731,23 @@ Config runConfigPortal(const Config& cur)
         capturedStaticIpSet = true;
     });
 
+    // First-boot friendly order: the few fields a plain Wi-Fi station with a
+    // wireless sensor may want first, LoRaWAN (optional) at the end.
     wm.addParameter(&p_section);
-    wm.addParameter(&p_lora_section);
-    wm.addParameter(&p_loraen);
-    wm.addParameter(&p_lowpower);
-    wm.addParameter(&p_vanesave);
-    wm.addParameter(&p_dev);    wm.addParameter(&p_join);   wm.addParameter(&p_key); wm.addParameter(&p_region);
-    wm.addParameter(&p_payfmt);
-    wm.addParameter(&p_units_section);
-    wm.addParameter(&p_unitsys); wm.addParameter(&p_windunit);
+    wm.addParameter(&p_basic_section);
+    wm.addParameter(&p_devname);  wm.addParameter(&p_alt);
+    wm.addParameter(&p_rfen);     wm.addParameter(&p_rfproto); wm.addParameter(&p_rfids);
+    wm.addParameter(&p_unitsys);  wm.addParameter(&p_windunit);
+
+    wm.addParameter(&p_board_section);
+    wm.addParameter(&p_winden);   wm.addParameter(&p_rainen);  wm.addParameter(&p_rainpersist);
+    wm.addParameter(&p_srcs);
+    wm.addParameter(&p_pcb);      wm.addParameter(&p_uplink);
+    wm.addParameter(&p_sample);   wm.addParameter(&p_lipo);    wm.addParameter(&p_debug); wm.addParameter(&p_cpu);
+
     wm.addParameter(&p_cal_section);
     wm.addParameter(&p_rainmmtip); wm.addParameter(&p_windmspp); wm.addParameter(&p_winddirtyp);
     wm.addParameter(&p_windoff);
-    wm.addParameter(&p_general_section);
-    wm.addParameter(&p_pcb);    wm.addParameter(&p_alt);    wm.addParameter(&p_uplink);
-    wm.addParameter(&p_sample); wm.addParameter(&p_lorawagg);
-    wm.addParameter(&p_rfen);   wm.addParameter(&p_rfproto); wm.addParameter(&p_rfids);   wm.addParameter(&p_srcs);
-    wm.addParameter(&p_winden);
-    wm.addParameter(&p_rainen); wm.addParameter(&p_lipo);   wm.addParameter(&p_debug); wm.addParameter(&p_cpu);
 
     wm.addParameter(&p_io_section);
     wm.addParameter(&p_auxainen);  wm.addParameter(&p_auxainscale); wm.addParameter(&p_auxpulseen);
@@ -733,7 +762,7 @@ Config runConfigPortal(const Config& cur)
     wm.addParameter(&p_uvslope); wm.addParameter(&p_uvoffset);
 
     wm.addParameter(&p_net_section);
-    wm.addParameter(&p_wifien);   wm.addParameter(&p_devname);
+    wm.addParameter(&p_wifien);
     wm.addParameter(&p_webapien); wm.addParameter(&p_webadminpw); wm.addParameter(&p_webadminpwclr);
     wm.addParameter(&p_mqtten);   wm.addParameter(&p_mqttctrlen);
     wm.addParameter(&p_mqtthost); wm.addParameter(&p_mqttport); wm.addParameter(&p_mqttuser);
@@ -741,6 +770,15 @@ Config runConfigPortal(const Config& cur)
     wm.addParameter(&p_mqttpass); wm.addParameter(&p_mqttpassclr);
     wm.addParameter(&p_mqtttopic);wm.addParameter(&p_mqtttls);
     wm.addParameter(&p_cacert_html);
+    wm.addParameter(&p_loxen);    wm.addParameter(&p_loxhost); wm.addParameter(&p_loxport);
+    wm.addParameter(&p_loxprefix); wm.addParameter(&p_loxsec);
+
+    wm.addParameter(&p_lora_section);
+    wm.addParameter(&p_loraen);
+    wm.addParameter(&p_dev);    wm.addParameter(&p_join);   wm.addParameter(&p_key); wm.addParameter(&p_region);
+    wm.addParameter(&p_payfmt); wm.addParameter(&p_lorawagg);
+    wm.addParameter(&p_lowpower);
+    wm.addParameter(&p_vanesave);
 
     // Safety net for an abandoned portal session: WiFiManager's default
     // _webClientCheck=true means this counts down from the *last* HTTP
@@ -773,13 +811,15 @@ Config runConfigPortal(const Config& cur)
     ArduinoOTA.setHostname("weather-node");
     if (otaPass[0]) ArduinoOTA.setPassword(otaPass);
     ArduinoOTA.onStart([]()  { dbgSerial.println("OTA: Start"); });
-    ArduinoOTA.onEnd([]()    { dbgSerial.println("OTA: Done"); });
+    // No reboot inside ArduinoOTA: systemRestart() saves the rain statistics first.
+    ArduinoOTA.setRebootOnSuccess(false);
+    ArduinoOTA.onEnd([]()    { dbgSerial.println("OTA: Done"); systemRestart("firmware update (ArduinoOTA)"); });
     ArduinoOTA.onError([](ota_error_t e) { dbgSerial.printf("OTA Error %u\n", e); });
     ArduinoOTA.begin();
     TaskHandle_t otaHandle = nullptr;
     xTaskCreate([](void*) {
         for (;;) { ArduinoOTA.handle(); vTaskDelay(10 / portTICK_PERIOD_MS); }
-    }, "OTA", 4096, nullptr, 1, &otaHandle);
+    }, "OTA", 6144, nullptr, 1, &otaHandle);   // + NVS write of rainStatsFlush()
 
     wm.startConfigPortal("WeatherNode");
 

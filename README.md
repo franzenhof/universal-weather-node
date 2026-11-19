@@ -1,19 +1,35 @@
-# Universal Weather Node — LoRaWAN + Wi-Fi Weather Station
+# Universal Weather Node — Wi-Fi Weather Station for Bresser, Ecowitt / Froggit and TFA Sensors
 
-A DIY weather station around the **Heltec WiFi LoRa 32 V3** (ESP32-S3). It measures **wind speed, wind direction, rain, temperature, humidity and air pressure** and sends the data wherever you need it — over Wi-Fi (MQTT, Home Assistant, web dashboard, weather networks), over LoRaWAN, or both at once.
+**Turn a €20 ESP32 board into the hub of your weather station.** A **Heltec WiFi LoRa 32 V3** receives your wireless outdoor station **directly on 868 MHz** — no console, no gateway, no Raspberry Pi, no cloud — computes dew point, trends and rain totals, and sends everything to **Home Assistant (MQTT)**, its own **web dashboard**, **weather networks** and, optionally, **LoRaWAN**.
 
-> **The simplest station is just two things:** a **Heltec WiFi LoRa 32 V3** and a **wireless outdoor station** (e.g. Bresser 7-in-1 or Ecowitt / Froggit WS69) — the Heltec receives it directly on 868 MHz. A **BME280** module on four wires is **recommended** for the air pressure. **No custom PCB and no LoRaWAN needed:** the [PCB](#hardware) is only for wired sensors (Davis, reed switches, DS18B20, outputs …), and **LoRaWAN is optional** — Wi-Fi alone is enough. See [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb).
+<!-- help:skip -->
+<p align="center">
+  <img src="pictures/minimal-wireless-build.png" alt="Minimal wireless build: Heltec V3 powered over USB-C, optional BME280 on four jumper wires, Bresser, TFA IT+ or Ecowitt / Froggit sensors over 868 MHz" width="100%">
+</p>
+<!-- /help:skip -->
 
-The sensors are your choice: a **Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor station** , **TFA Dostmann / LaCrosse IT+ thermo-hygro sensors** or **Ecowitt / Froggit (Fine Offset) sensors** over 868 MHz (received by the board's LoRa chip — no wiring, no extra hardware), **Davis** wind and rain sensors on their original RJ11 plugs, or **generic wired** reed-switch sensors. A **BME280** adds the air pressure (most wireless stations have no barometer) and is recommended for every setup.
+## Quick Start (wireless station, about 15 minutes)
 
-- 🧩 **Everything runs on the node itself** — the ESP32-S3 of the Heltec V3 receives, measures, computes (dew point, trends, daily totals …) and uploads. No Linux PC, Raspberry Pi, ioBroker script or cloud service in between
-- 📻 **Wireless sensors out of the box** — Bresser stations, TFA / LaCrosse IT+ and Ecowitt / Froggit sensors (IT+ and Ecowitt not yet tested with real sensors) on 868 MHz, received between LoRaWAN uplinks; per value you choose which sensor counts (board, wireless, automatic fallback)
-- 📡 **LoRaWAN (optional)** to ChirpStack or TTN — for sites without Wi-Fi; compact binary format (default) or CayenneLPP, automatically fitted to the data rate
-- 📶 **Wi-Fi + MQTT** (TLS-capable) with **Home Assistant** auto-discovery
-- 🌐 **Built-in web dashboard** with live values, trend charts and hover details — works without internet
-- 🧮 **Computed on the device:** dew point, feels-like temperature, cloud base, 3-h pressure tendency with a weather trend, temperature trend, rain last hour / 24 h / today / yesterday, sunshine duration (Bresser 7-in-1), frost/fog/sultry warnings
+**You need:** a **Heltec WiFi LoRa 32 V3** with its **868 MHz antenna**, a USB-C power supply, and a wireless outdoor station — **Bresser** 5/6/7-in-1, **Ecowitt / Froggit** (WS69, WS80, WS85, WS90, WH31 …) or **TFA / LaCrosse IT+**. Recommended: a **BME280** module for the air pressure (four jumper wires, see [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb)).
+
+1. **Install the firmware in the browser** — Chrome/Edge, [web.esphome.io](https://web.esphome.io), the `-factory.bin` from [`firmware/`](firmware/). Step by step: [Installing the Firmware](#installing-the-firmware-browser-no-software).
+2. **Connect your phone** to the Wi-Fi **`WeatherNode`** and open **http://192.168.4.1** (opens by itself on most phones).
+3. **Choose your Wi-Fi** (*Configure WiFi*), save. The node restarts and joins your network.
+4. **Done.** The node searches for your wireless station by itself (Bresser, Ecowitt / Froggit, TFA) and locks onto the first one it hears. Open the IP address shown on the display: the dashboard shows live values after one measurement cycle.
+5. **Next steps (optional):** set an admin password, then under **Settings** add [MQTT for Home Assistant](#mqtt-and-home-assistant), [weather networks](#weather-networks) (AWEKAS, Weather Underground, Windy …) or your sensor ID if neighbours' stations are in range.
+
+Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](#custom-pcb) — see [Hardware](#hardware). [LoRaWAN](#lorawan) is off by default; switch it on for sites without Wi-Fi.
+
+## Features
+
+- 📻 **Wireless sensors received directly** — Bresser 5/6/7-in-1 and other Bresser sensors, Ecowitt / Froggit (Fine Offset) outdoor arrays and sensors, TFA / LaCrosse IT+; type detected automatically. Per value you choose the source (board or wireless, automatic fallback). *(Ecowitt / Froggit and IT+ not yet tested with real sensors.)*
+- 🌐 **Built-in web dashboard** with live values, warnings, rain totals (hour … year), wind rose and trend charts — works without internet; plus a REST API
+- 🏠 **MQTT + Home Assistant** auto-discovery (TLS-capable) — every value, derived value and warning as an entity; **Loxone** via UDP push or HTTP
 - ☁️ **Direct uploads to weather networks** — AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap
-- 🔧 **Set up from your phone** — config portal on first boot, firmware updates over the air, no rebuild needed
+- 🧮 **Computed on the node:** dew point, feels-like, cloud base, VPD, 3-h pressure tendency with a weather trend, temperature trend, rain last hour / 24 h / today / yesterday / week / month / year, sunshine duration, frost / fog / sultry warnings, WMO wind (3-s gusts, 10-min values)
+- 🧩 **Everything runs on the ESP32** — no PC, Raspberry Pi, script or cloud service; sensors are read directly, Wi-Fi is output only
+- 🔧 **Set up from your phone** — browser installation, config portal, web settings, firmware updates over Wi-Fi
+- 📡 **Optional:** LoRaWAN (ChirpStack / TTN) for sites without Wi-Fi, and a custom PCB for Davis and other wired sensors, heater/fan outputs, UV, Victron VE.Direct
 
 <!-- help:skip -->
 <p>
@@ -24,41 +40,47 @@ The sensors are your choice: a **Bresser 5-in-1 / 6-in-1 / 7-in-1 outdoor statio
 </p>
 <!-- /help:skip -->
 
-The transports can be enabled independently. Web serving and weather-network uploads run in background tasks; sensor sampling and LoRaWAN share the main loop, so a radio exchange briefly pauses sampling.
-
-**Current status:** [2.0.0-rc.1](firmware/universal-weather-node-2.0.0-rc.1.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.1-factory.bin) for the first installation) is the release candidate for 2.0.0. Builds and host tests pass. The photos below show Rev 1.2 hardware; the v2.0 images are renders.
-
-> **PCB v2.0 power safety:** use **one power source at a time**. JP8 is a two-pin manual buck disconnect, not a power mux. Before connecting USB-C, disconnect VIN and remove the JP8 shunt. J3 has VIN and GND only; there is no external 5 V input. Never select PCB revision `20` on a Rev 1.2/1.3 board.
+**Current status:** [2.0.0-rc.2](firmware/universal-weather-node-2.0.0-rc.2.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.2-factory.bin) for the first installation) is the release candidate for 2.0.0.
 
 ## Contents
 
 **Getting started**
-- [The Project in Pictures](#the-project-in-pictures)
-- [How It Fits Together](#how-it-fits-together)
-- [Quick Start](#quick-start) · [Installing the Firmware (browser, no software)](#installing-the-firmware-browser-no-software)
-- [Hardware](#hardware) · [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb) · [Ordering the PCB (JLCPCB)](#ordering-the-pcb-jlcpcb)
+- [Quick Start](#quick-start-wireless-station-about-15-minutes) · [Installing the Firmware](#installing-the-firmware-browser-no-software) · [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb)
+- [How It Fits Together](#how-it-fits-together) · [The Project in Pictures](#the-project-in-pictures)
 
 **Using the node**
-- [Configuration](#configuration)
-- [Web Interface](#web-interface)
-- [Weather Networks](#weather-networks)
-- [MQTT and Home Assistant](#mqtt-and-home-assistant)
-- [LoRaWAN](#lorawan)
-- [Using Other Sensors](#using-other-sensors) · [Wireless Sensors (Bresser, TFA)](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz)
-- [Inputs and Outputs (PCB v2.0)](#inputs-and-outputs-pcb-v20) · [Second Wind Sensor](#second-wind-sensor-pcb-v20)
-- [Derived Values](#derived-values) · [Firmware Update Check](#firmware-update-check)
-- [Units (Metric/Imperial)](#units-metricimperial)
+- [Configuration](#configuration) · [Web Interface](#web-interface)
+- [MQTT and Home Assistant](#mqtt-and-home-assistant) · [Weather Networks](#weather-networks) · [Loxone](#loxone)
+- [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz) · [Value Sources](#value-sources) · [Derived Values](#derived-values)
+- [Units (Metric/Imperial)](#units-metricimperial) · [Firmware Update Check](#firmware-update-check)
+
+**Wired sensors and the PCB**
+- [Hardware](#hardware) · [Custom PCB](#custom-pcb) · [Ordering the PCB (JLCPCB)](#ordering-the-pcb-jlcpcb)
+- [Using Other Sensors](#using-other-sensors) · [Inputs and Outputs (PCB v2.0)](#inputs-and-outputs-pcb-v20) · [Second Wind Sensor](#second-wind-sensor-pcb-v20)
+
+**LoRaWAN (optional)**
+- [LoRaWAN](#lorawan) · [Payload Formats](#payload-formats)
 
 **Reference**
-- [Measurement Principles](#measurement-principles)
-- [Payload Formats](#payload-formats)
-- [Troubleshooting](#troubleshooting)
-- [Build & Flash](#build--flash) · [Tests](#tests)
-- [Developer Notes](#developer-notes)
-- [Changelog](#changelog)
-- [License](#license)
+- [Measurement Principles](#measurement-principles) · [Troubleshooting](#troubleshooting)
+- [Build & Flash](#build--flash) · [Tests](#tests) · [Developer Notes](#developer-notes)
+- [Changelog](#changelog) · [License](#license)
 
 ---
+
+## How It Fits Together
+
+The node reads every sensor **directly** — 868 MHz radio decoded by its own LoRa chip, or wired inputs, I²C / 1-Wire on the PCB — processes the values itself and only **sends** them out. It never fetches or receives sensor data over Wi-Fi.
+
+```
+ Bresser / Ecowitt / TFA ~ 868 MHz ~┐
+ BME280 (I²C, recommended) ─────────┤                      ┌─► Wi-Fi ──► Web dashboard / REST API in your LAN
+ PCB only:                          ├──► Weather Node ─────┼─► Wi-Fi ──► MQTT broker ──► Home Assistant, ...
+   Davis / generic wind + rain ─────┤    (Heltec V3)       ├─► Wi-Fi ──► AWEKAS, Weather Underground, Windy, ...
+   DS18B20, UV, AUX, Victron ───────┘                      └─► LoRaWAN (optional) ──► ChirpStack / TTN ──► Grafana, ...
+```
+
+The node runs continuously (no deep sleep). It samples the sensors every few seconds and combines the samples into one measurement per **cycle** (default 300 s), which it then sends out.
 
 ## The Project in Pictures
 
@@ -78,7 +100,7 @@ The transports can be enabled independently. Web serving and weather-network upl
       <br><strong>Davis rain &amp; wind sensor</strong>
     </td>
     <td align="center" width="50%">
-      <img src="pictures/web-dashboard.png" alt="Built-in web dashboard with live cards, wind rose and trend charts" width="100%">
+      <img src="pictures/dashboard-new-desktop.png" alt="Built-in web dashboard: warnings, live values, rain totals hour to year, derived values, wireless sensors, wind rose and trend charts" width="100%">
       <br><strong>Built-in web dashboard</strong>
     </td>
   </tr>
@@ -92,45 +114,6 @@ The transports can be enabled independently. Web serving and weather-network upl
 <!-- /help:skip -->
 
 *(Pictures are only shown on the project page, not in the device's built-in help.)*
-
----
-
-## How It Fits Together
-
-The node reads every sensor **directly** — wired inputs, I²C / 1-Wire, or 868 MHz radio decoded by its own LoRa chip — processes the values itself and only **sends** them out (LoRaWAN, MQTT, web/REST, weather networks). It never fetches or receives sensor data over Wi-Fi.
-
-```
- Bresser / TFA / Ecowitt ~ 868 MHz ~┐
- Davis / generic wind sensor ───────┤
- Davis / generic rain gauge ────────┤                      ┌─► LoRaWAN ──► ChirpStack / TTN ──► Grafana, ...
- BME280 (I²C) ──────────────────────┼──► Weather Node ─────┤
- DS18B20 × 3 ───────────────────────┤    (Heltec V3)       ├─► Wi-Fi ──► MQTT broker ──► Home Assistant, ...
- UV, AUX, Victron, LiPo (optional) ─┘                      │
-                                                           ├─► Wi-Fi ──► AWEKAS, Weather Underground, ...
-                                                           │
-                                                           └─► Wi-Fi ──► Web dashboard / REST API in your LAN
-```
-
-The node runs continuously (no deep sleep). It samples the sensors every few seconds (default 3 s) and combines the samples into one measurement per **cycle** (default 300 s), which it then sends out. Wi-Fi is off by default — useful for battery installs; on mains power it can run alongside or instead of LoRaWAN.
-
----
-
-## Quick Start
-
-1. **Prepare the hardware** — Heltec board and sensors; the PCB only for wired sensors (see [Hardware](#hardware) or, without PCB, [Minimal Wireless Build](#minimal-wireless-build-no-custom-pcb)). For v2.0, follow the [assembly and first-power checklist](pcb/v2.0/CHECKLIST.md); connect sensor cables with power off.
-2. **Flash once over USB** — easiest [in the browser, no software needed](#installing-the-firmware-browser-no-software); or with PlatformIO `pio run -t upload` (see [Build & Flash](#build--flash)). On v2.0, disconnect external power and remove JP8 first. Later application updates can use OTA.
-3. **Open first-time setup.** While powered by USB, the node opens Wi-Fi **`WeatherNode`**. Connect with your phone and open **http://192.168.4.1**. Do not hold the user button during boot.
-4. **Choose your PCB revision and connections.** Select `12` for Rev 1.2 or `13` for Rev 1.3; v2.0 is detected automatically. Disable absent wind/rain sensors and enter your station altitude. Choose the setup below, then *Save*; the node restarts.
-5. **Check operation.** The first complete measurement arrives after one cycle (default **5 minutes**). With Wi-Fi/web API enabled, open the IP shown on the display; set an admin password in the portal to use Settings or Log. Add weather-network accounts under **Settings**.
-
-| Setup | Enable | Also required |
-|-------|--------|---------------|
-| LoRaWAN only | LoRaWAN | Gateway/network account, matching region, OTAA keys and backend decoder |
-| Wi-Fi dashboard only | Wi-Fi + web API; disable LoRaWAN | Your Wi-Fi credentials |
-| Wi-Fi + Home Assistant | Wi-Fi + MQTT; web API optional | Wi-Fi credentials, MQTT broker and Home Assistant MQTT integration |
-| Both transports | LoRaWAN + the desired Wi-Fi services | Both sets of settings above |
-
-For permanent VIN power on v2.0, disconnect USB first, then fit JP8 as described under [Custom PCB](#custom-pcb).
 
 ---
 
@@ -175,12 +158,11 @@ For a wireless station (Bresser 5/6/7-in-1, TFA / LaCrosse IT+ or Ecowitt / Frog
 | SDA | **41** |
 | SCL | **42** |
 
-**Settings** (portal or web settings, after [flashing](#installing-the-firmware-browser-no-software)):
+**Settings:** nothing to change for this build — the defaults are made for it: board wind and rain sensors **off**, *Wireless sensors* **on** with *Wireless sensor type* **Auto (search)**, LoRaWAN **off**, Wi-Fi and the web dashboard **on**. Enter your Wi-Fi in the portal and the node finds the station by itself. Optional, in the web settings:
 
-1. *Wind sensor* and *Rain sensor* **off** (nothing is connected to the board inputs); *PCB revision* stays at 13.
-2. *Wireless sensors* **on**, *Wireless sensor type* Bresser, TFA / LaCrosse IT+ or Fine Offset / Ecowitt / Froggit; enter the sensor ID shown on the status page under *Wireless sensor IDs*.
-3. *Source: temperature / humidity* = **Wireless 1** — otherwise *Auto* takes the BME280 first, which sits in the case next to the warm module. The BME280 then only provides the air pressure (QNH), which is not affected by its location.
-4. Wi-Fi / MQTT / LoRaWAN / weather networks as needed.
+1. *Wireless sensor IDs*: enter your station's ID (shown on the status page) if neighbours' stations are in range.
+2. *Source: temperature / humidity* = **Wireless 1** if the BME280 sits close to the warm module (not needed with the [enclosure](#minimal-wireless-build-no-custom-pcb) below, whose BME280 chamber is thermally separated). The BME280 always provides the air pressure (QNH), which is not affected by its location.
+3. MQTT / weather networks / LoRaWAN as needed.
 
 Everything else — dashboard, Home Assistant, LoRaWAN, weather networks, derived values — works as on the boards. Not available without the PCB: Davis / wired sensors, DS18B20, UV, AUX, heater/fan, Victron, the wide-range and protected power input.
 
@@ -191,6 +173,23 @@ Everything else — dashboard, Home Assistant, LoRaWAN, weather networks, derive
 <!-- /help:skip -->
 
 ### Custom PCB
+
+> **PCB v2.0 power safety:** use **one power source at a time**. JP8 is a two-pin manual buck disconnect, not a power mux. Before connecting USB-C, disconnect VIN and remove the JP8 shunt. J3 has VIN and GND only; there is no external 5 V input. Never select PCB revision `20` on a Rev 1.2/1.3 board.
+
+**First setup with a PCB:**
+
+1. Assemble the board (v2.0: follow the [assembly and first-power checklist](pcb/v2.0/CHECKLIST.md)); connect sensor cables with power off.
+2. Install the firmware over USB ([in the browser](#installing-the-firmware-browser-no-software) or `pio run -t upload`). On v2.0, disconnect external power and remove JP8 first.
+3. In the portal (Wi-Fi `WeatherNode`, http://192.168.4.1) select the PCB revision — `12` for Rev 1.2, `13` for Rev 1.3; v2.0 is detected automatically — **switch on the wind and rain sensors you connected** (they are off by default for wireless stations), enter the altitude, and choose the outputs:
+
+| Setup | Enable | Also required |
+|-------|--------|---------------|
+| Wi-Fi dashboard | Wi-Fi + web API (default) | Your Wi-Fi credentials |
+| Wi-Fi + Home Assistant | Wi-Fi + MQTT | MQTT broker and Home Assistant MQTT integration |
+| LoRaWAN | LoRaWAN (off by default) | Gateway/network account, matching region, OTAA keys and backend decoder |
+| Both transports | LoRaWAN + the desired Wi-Fi services | Both sets of settings above |
+
+For permanent VIN power on v2.0, disconnect USB first, then fit JP8 as described below.
 
 **Hardware v2.0** is the current design: a KiCad/SMD redesign in [`pcb/v2.0/`](pcb/v2.0/), prepared for JLCPCB SMD assembly. Through-hole connectors/headers, the Heltec module and jumper shunts need separate assembly arrangements. It retains Rev 1.3's main sensor GPIOs and adds its own power supply, screw terminals and AUX/UV inputs. Rev 1.2/1.3's Fritzing design is kept in [`pcb/v1.3/`](pcb/v1.3/).
 
@@ -618,7 +617,7 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | Setting | Description | Default |
 |---------|-------------|---------|
 | **LoRaWAN** | | |
-| LoRaWAN enabled | Turn off for a Wi-Fi-only node | on |
+| LoRaWAN enabled | Switch on for sites without Wi-Fi (needs a gateway / network account) | off |
 | DevEUI / JoinEUI | 16 hex characters each, from ChirpStack/TTN | – |
 | AppKey | 32 hex characters, from ChirpStack/TTN | – |
 | Region | `EU868`, `US915`, `AU915`, `AS923`, `IN865`, `KR920`, `CN470`, `RU864` | EU868 |
@@ -631,11 +630,12 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | LoRaWAN wind values | *Interval* (mean, 3-s gust and direction since the last uplink) or *10 min* (WMO values of the last 10 minutes) | interval |
 | MQTT interval | Seconds between MQTT publishes; `0` = like the LoRaWAN interval, else 2–3600 | 0 |
 | MQTT wind values | *Interval* or *10 min*, as for LoRaWAN | interval |
-| Wireless sensors | Receive 868 MHz sensors with the LoRa chip between uplinks — see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz) | off |
-| Wireless sensor type | *Bresser*, *TFA / LaCrosse IT+* (both data rates, alternating, or 17.241 / 9.579 kbit/s only), *Fine Offset / Ecowitt / Froggit*, *TFA IT+ 17.241 kbit/s + Fine Offset* (same data rate, received together) or *IT+ both rates + Fine Offset*; *Bresser + TFA IT+* or *Bresser + Fine Offset* alternating is possible but **not recommended** (packets of both are missed) | Bresser |
+| Wireless sensors | Receive 868 MHz sensors with the LoRa chip (between LoRaWAN uplinks, if LoRaWAN is on) — see [Wireless Sensors](#wireless-sensors-bresser-tfa-it-ecowitt-868-mhz) | on |
+| Wireless sensor type | **Auto (search)** — cycles through all families and stores the type of the first sensor it hears (Bresser → *Bresser*, Ecowitt / Froggit or IT+ 17.241 → *TFA IT+ 17.241 + Fine Offset*, IT+ 9.579 → *IT+ 9.579*); or fixed: *Bresser*, *TFA / LaCrosse IT+* (both data rates, alternating, or 17.241 / 9.579 kbit/s only), *Fine Offset / Ecowitt / Froggit*, *TFA IT+ 17.241 kbit/s + Fine Offset* (same data rate, received together) or *IT+ both rates + Fine Offset*; *Bresser + TFA IT+* or *Bresser + Fine Offset* alternating is possible but **not recommended** (packets of both are missed) | Auto (search) |
 | Wireless sensor IDs | Hex IDs to accept, comma-separated, max 4; empty = any. The order defines *Wireless 1–4* for the value sources; the hint lists the IDs received so far | – |
 | Source: temperature / humidity, wind, rain, UV, light | Which sensor feeds each value into all outputs: *Auto* (board first, then wireless 1–4), *Board sensor*, *Wireless 1–4*, *Off* — see [Value Sources](#value-sources) | Auto |
-| Wind / rain sensor | Enable or disable the board's anemometer / rain gauge (a wireless sensor can still deliver wind/rain, see value sources) | on |
+| Wind / rain sensor (board) | The PCB's anemometer / rain gauge — switch on when one is connected (a wireless sensor delivers wind/rain independently, see value sources) | off |
+| Keep rain statistics over a power cut | Saves rain today / yesterday / week / month / year, sunshine today / yesterday and the last-rain time (one 68-byte record) to flash at most once per hour when changed, at the day change and before every planned restart or update — so they survive power cuts and firmware updates; off = RTC RAM only (lost on power loss) | on |
 | LiPo measurement | Battery voltage measurement | off |
 | Altitude | Station altitude in m, for sea-level pressure (QNH) | 560 |
 | PCB revision | 12 = Rev 1.2, 13 = Rev 1.3, 20 = v2.0 (v2.0 is detected automatically) | 13 |
@@ -658,8 +658,11 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | Fan tacho, pulses per revolution | GPIO40 | off, 2 |
 | Victron VE.Direct | GPIO33/34 | off |
 | Minimum battery voltage for heater/fan | V (VE.Direct), 0 = no limit | 0 |
+| **Loxone (UDP)** | see [Loxone](#loxone) | |
+| Loxone UDP | on/off, Miniserver IP or host name, UDP port, name prefix (`A–Z a–z 0–9 _ . -`, max 16), interval (`0` = every cycle, else 2–3600 s) | off, –, 7000, –, 0 |
 | **Wi-Fi + MQTT** | | |
-| Wi-Fi / MQTT / web API / MQTT commands | On/off switches — see [MQTT and Home Assistant](#mqtt-and-home-assistant) | off |
+| Wi-Fi / web API | On/off switches | on |
+| MQTT / MQTT commands | On/off switches — see [MQTT and Home Assistant](#mqtt-and-home-assistant) | off |
 | Device name | Wi-Fi hostname, MQTT client ID (characters outside `A–Z a–z 0–9 _ -` become `_`), default topic prefix | – |
 | Wi-Fi network and password | Portal (*Configure WiFi*) or web settings (tested for 60 s with rollback, or *store without test* for pre-provisioning) | – |
 | Static IP, gateway, subnet, DNS | Optional fixed LAN address; leave disabled to use DHCP. Configure in the portal's Wi-Fi form or the web settings page (restart required) | DHCP; subnet 255.255.255.0; DNS defaults to gateway |
@@ -751,7 +754,7 @@ It also shows the latest measurements and the [derived values](#derived-values) 
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="pictures/web-dashboard.png" alt="Web dashboard with live cards and trend charts" width="100%">
+      <img src="pictures/dashboard-new-desktop.png" alt="Web dashboard with live values, rain totals, derived values, wireless sensors and trend charts" width="100%">
       <br><strong>Dashboard (<code>/</code>)</strong>
     </td>
     <td align="center" width="50%">
@@ -822,11 +825,11 @@ Share your data with the big community weather networks — **straight from the 
 
 ## MQTT and Home Assistant
 
-Wi-Fi and MQTT are optional and **off by default**. Five switches in the config portal control them:
+Wi-Fi and the web API are **on by default**, MQTT is off until you enter a broker. Five switches in the config portal and the web settings control them:
 
 | Switch | Meaning |
 |--------|---------|
-| LoRaWAN enabled (`loraEn`) | Turn off for a Wi-Fi-only node — no gateway needed |
+| LoRaWAN enabled (`loraEn`) | Off by default; switch on for sites without Wi-Fi |
 | Wi-Fi enabled (`wifiEn`) | Master switch for everything below |
 | MQTT enabled (`mqttEn`) | Publish measurements to an MQTT broker |
 | Web API enabled (`webApiEn`) | Web interface and REST API |
@@ -917,10 +920,42 @@ With MQTT enabled, the node registers itself in Home Assistant automatically (MQ
 - The 3 DS18B20 entities always exist; a disconnected probe shows as unavailable.
 - PCB v2.0: AUX, UV voltage/calibrated index, wind 2, heater/fan power, fan speed and the Victron values (battery voltage/current, PV power, yield today, state of charge, load current) appear while their functions are enabled.
 - With wireless sensors on, temperature, humidity, wind, rain, *UV Index* and *Illuminance* are always announced (they follow the [value sources](#value-sources) and show as unavailable while no source delivers them).
-- Derived values: *Dew Point*, *Feels Like*, *Cloud Base*, *Temperature Change (1 h)*, *Pressure Change (3 h)*, *Pressure Tendency*, *Weather Trend*, *Wind Direction (compass)*, *Rain Last Hour / Last 24 h / Today / Yesterday*, *Last Rain* (timestamp), with wireless sensors *Sunshine Today / Yesterday*, and the warnings *Frost*, *Fog / Dew* and *Sultry* as binary sensors — ready for automations (e.g. a frost notification). *Firmware Update* with the update check on.
+- Derived values: *Dew Point*, *Feels Like*, *Cloud Base*, *Temperature Change (1 h)*, *Pressure Change (3 h)*, *Pressure Tendency*, *Weather Trend*, *Wind Direction (compass)*, *Rain Last Hour / Last 24 h / Today / Yesterday / This Week / This Month / This Year*, *Vapour Pressure Deficit*, *Last Rain* (timestamp), with wireless sensors *Sunshine Today / Yesterday*, and the warnings *Frost*, *Fog / Dew* and *Sultry* as binary sensors — ready for automations (e.g. a frost notification). *Firmware Update* with the update check on.
 - If you switch a sensor on or off, the entity list updates on the next MQTT reconnect.
 - The device ID (MQTT client ID, discovery `node_id`, `unique_id`) is the *device name* reduced to `A–Z a–z 0–9 _ -` (other characters become `_`); without a name `weathernode-<MAC>` (full 12-digit MAC). Since 2.0.0-beta.2 names with spaces or other characters, and unnamed nodes, get a new ID — Home Assistant then shows a new device; delete the old one.
 - If the broker is unreachable, reconnects back off from 15 s to at most 5 min.
+
+---
+
+## Loxone
+
+The node can feed a **Loxone Miniserver** in two ways — no LoxBerry needed.
+
+### Virtual UDP Input (recommended)
+
+The node pushes every value as its own UDP datagram `name=value` (ASCII, `.` as decimal separator, booleans as `0`/`1`) to the Miniserver after each Loxone interval.
+
+1. **Node** (web settings, section *Loxone (UDP)*): switch on, enter the Miniserver's IP (or host name), the UDP port (default **7000**), optionally a **prefix** (e.g. `g75_`, to tell several nodes apart on one port) and the interval (`0` = every measurement cycle, else 2–3600 s).
+2. **Loxone Config:** add a *Virtual UDP Input* with the same port (sender address = the node's IP), and below it one *Virtual UDP Input Command* per value with the command recognition `temp=\v` — or `g75_temp=\v` with a prefix.
+
+The names are exactly the keys of [`/api/data`](#rest-api-endpoints) (units follow the unit setting):
+
+| Group | Names |
+|-------|-------|
+| Weather | `temp`, `humidityPct`, `pressureAbs`, `pressureQnh`, `windSpeed`, `windGust`, `windDirDeg`, `rainRate`, `rain` (amount since the last Loxone send), `rainSinceStart`, `uvIndex`, `lightLux` |
+| Derived | `dewPoint`, `feelsLike`, `cloudBase`, `vpd`, `pressureTrend3h`, `tempTrend1h`, `rain1h`, `rain24h`, `rainToday`, `rainYesterday`, `rainWeek`, `rainMonth`, `rainYear`, `sunshineTodayMin`, `sunshineYesterdayMin`, `warnFrost`, `warnFog`, `warnSultry` |
+| Wireless sensors (n = 1–4, order of *Wireless sensor IDs* / value sources) | `rfN_temp`, `rfN_humidity`, `rfN_battery` (1 = OK), `rfN_rssi`, `rfN_age`, and as far as the sensor sends them `rfN_windSpeed`, `rfN_windGust`, `rfN_windDirDeg`, `rfN_rainTotal`, `rfN_uvIndex`, `rfN_lightLux`, `rfN_soilMoisturePct`, `rfN_supercapV`, `rfN_lightningCount`, `rfN_lightningDistKm`; `radioBatteryLow` |
+| PCB / device | `ds18b20_1`…, `batteryVolt`, `uvSensorVolts`, `auxAnalogV`, `auxPulses`, `auxPulsesTotal`, `wind2Speed`, `wind2Gust`, `wind2DirDeg`, `heaterOn`, `heaterDutyPct`, `fanOn`, `fanDutyPct`, `fanRpm`, `fanStalled`, `victron…` (BatteryV, BatteryA, PvV, PvW, YieldTodayKWh, SocPct, LoadA, ChargeState, Error, Valid), `cpuTemp`, `nextCycleInSec` |
+
+- A value that is currently not valid (sensor missing, stale wireless value) is **not sent** — Loxone keeps its last value.
+- Wind in the Loxone send is mean and gust since the last Loxone send (own aggregation window, like MQTT).
+- The status page shows *Loxone UDP* under *Connections* (target, last send, values, errors).
+- If a command picks up the wrong value (e.g. `temp=\v` also reacting to `rf1_temp=`), set a prefix — every name then starts with it.
+- *Not yet tested with a real Miniserver.*
+
+### Virtual HTTP Input (works with any version)
+
+Alternatively the Miniserver polls the node: *Virtual HTTP Input* with the URL `http://<node-ip>/api/data` and a polling interval (e.g. 60 s), and one *Virtual HTTP Input Command* per value with the recognition `\i"temp":\i\v`, `\i"windGust":\i\v`, `\i"rainToday":\i\v` … (any key of [`/api/data`](#rest-api-endpoints)). The top-level values come before the wireless-sensor list in the JSON, so `\i"temp":\i\v` always finds the station temperature.
 
 ---
 
@@ -1059,7 +1094,10 @@ Send on **FPort 1**: `0x10`, followed by one or more triplets `[paramId][valueHi
 | 43 | `0x2B` | `mqttWindAgg` | `0` interval, `1` 10 min (WMO) | 1 | `10 2B 00 01` |
 | 44 | `0x2C` | `rfEn` | `0` / `1`, 868 MHz wireless sensors (IDs only via web settings / portal) | 1 | `10 2C 00 01` |
 | 45–49 | `0x2D`–`0x31` | value sources: temperature/humidity, wind, rain, UV, light | `0` auto, `1` board, `2`–`5` wireless 1–4, `6` off — see [Value Sources](#value-sources) | 2 (wind from wireless 1) | `10 2E 00 02` |
-| 50 | `0x32` | `rfProto` | wireless sensor type, bit mask: `1` Bresser, `2` IT+ 17.241 kbit/s, `4` IT+ 9.579 kbit/s, `6` IT+ both, `7` Bresser + IT+, `8` Fine Offset / Ecowitt, `10` IT+ 17.241 + Fine Offset (same data rate, no alternating), `14` IT+ both + Fine Offset, `9` Bresser + Fine Offset; any combination `1..15` (Bresser together with others = the receiver alternates and misses packets, not recommended) | 6 | `10 32 00 06` |
+| 50 | `0x32` | `rfProto` | wireless sensor type: `16` Auto (search, stores `1` / `10` / `4` after the first sensor heard), or a bit mask: `1` Bresser, `2` IT+ 17.241 kbit/s, `4` IT+ 9.579 kbit/s, `6` IT+ both, `7` Bresser + IT+, `8` Fine Offset / Ecowitt, `10` IT+ 17.241 + Fine Offset (same data rate, no alternating), `14` IT+ both + Fine Offset, `9` Bresser + Fine Offset; any combination `1..15` (Bresser together with others = the receiver alternates and misses packets, not recommended) | 6 | `10 32 00 06` |
+| 51 | `0x33` | `rainPersist` | keep rain and sunshine statistics (today, yesterday, week, month, year, last rain) over power cuts and updates (`0` off / `1` on, at most one flash write per hour plus one per planned restart) | 1 | `10 33 00 01` |
+| 52 | `0x34` | `loxEn` | Loxone UDP output `0` off / `1` on | 0 | `10 34 00 01` |
+| 53 | `0x35` | `loxSec` | Loxone interval in s: `0` = every measurement cycle, else 2–3600 | 0 | `10 35 00 3C` |
 
 IDs 15–30 and wind-2 mode (33) belong to the [PCB v2.0 I/O block](#inputs-and-outputs-pcb-v20); on Rev 1.2/1.3 they are rejected except for disabling a function. Enabling UV (35) also requires v2.0. Calibration values can be prepared where accepted, but do not provide the missing hardware.
 
@@ -1209,11 +1247,13 @@ Computed on the node from the measured values — the same numbers in JSON/MQTT,
 | Weather trend | barometer rule of thumb: *storm warning* (falling ≥ 6 hPa / 3 h), *worsening* (≥ 1.6), *improving* (rising ≥ 1.6), else *settled* (QNH ≥ 1020), *unsettled* (< 1000) or *no change* — not a forecast model | as above |
 | Temperature trend (1 h) | now minus 1 h ago | 1 h of history (shown after about 1 h, the pressure tendency after about 3 h) |
 | Rain last hour / 24 h | sum of the 5-min history buckets that lie completely inside the window, plus the current one — never longer than 1 h / 24 h, at most one bucket shorter (since start if shorter) | rain source |
-| Rain today / yesterday, last rain | local days (NTP); kept across restarts in RTC RAM, not across a power cut; rain before the first time sync after a restart counts as today | rain source, time |
+| Rain this week / month / year | ISO week (Monday start), calendar month and year, local time (NTP); kept like the daily values below | rain source, time |
+| Rain today / yesterday, last rain | local days (NTP); kept in RTC RAM and — with *Keep rain statistics over a power cut* (default on) — saved to flash at most once per hour and before every planned restart or update, so updates lose nothing and a power cut at most the last hour (after a cut of two or more days *yesterday* is unknown); rain before the first time sync after a restart counts as today | rain source, time |
 | Sunshine today / yesterday | time with the selected light source ≥ 15 000 lx — an estimate of the WMO 120 W/m² threshold; a lux sensor sees global, not direct radiation | Bresser 7-in-1 (light) |
+| Vapour pressure deficit (VPD) | saturation minus actual vapour pressure (Magnus), kPa — for plants / greenhouses | temperature + humidity |
 | Warnings | *frost* (T ≤ 0 °C), *fog/dew* (spread ≤ 1 K and RH ≥ 95 %), *sultry* (dew point ≥ 16 °C) | temperature (+ humidity) |
 
-Long-term statistics (monthly and yearly values, summer/frost days, records) are a job for your database — e.g. InfluxDB/Grafana or Home Assistant's long-term statistics fed by MQTT; the node keeps only 7 days in RAM.
+Longer statistics (summer/frost days, records, multi-year series) are a job for your database — e.g. InfluxDB/Grafana or Home Assistant's long-term statistics fed by MQTT; the node keeps only 7 days in RAM.
 
 ### Firmware Update Check
 
@@ -1673,6 +1713,27 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 ---
 
 ## Changelog
+
+### 2.0.0-rc.2
+
+Firmware: [`universal-weather-node-2.0.0-rc.2.bin`](firmware/universal-weather-node-2.0.0-rc.2.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.2-factory.bin`](firmware/universal-weather-node-2.0.0-rc.2-factory.bin) (first installation, USB at `0x0`). Payload format unchanged (no decoder update needed); existing nodes keep their settings.
+
+**Easier start for a Wi-Fi station with a wireless sensor**
+* **New defaults for new nodes** (existing nodes keep their settings): Wi-Fi and web dashboard **on**, LoRaWAN **off**, wireless sensors **on**, board wind / rain sensors **off**. Enter the Wi-Fi in the portal — done.
+* **Wireless sensor type *Auto (search)*** (new default, parameter 50 value `16`): cycles through Bresser, 17.241 kbit/s (Ecowitt / Froggit + IT+) and IT+ 9.579 kbit/s and stores the type of the first sensor it hears (respecting the ID list). The display shows the node's URL and the search state when LoRaWAN is off.
+* Portal and web settings start with the basic fields; LoRaWAN moved to the end as *optional*.
+* README restructured: Quick Start for the wireless station first, PCB and LoRaWAN further down.
+
+**New values**
+* **Rain this week / month / year** (`rainWeek`, `rainMonth`, `rainYear`; ISO week, local time) in JSON/MQTT, Home Assistant (`total_increasing`), status page and dashboard.
+* **Rain and sunshine statistics survive power cuts and firmware updates** (setting *Keep rain statistics over a power cut*, parameter 51, default on): today, yesterday, week, month, year, sunshine and last rain are saved to flash in one 68-byte record at most once per hour and before every planned restart (OTA, settings, `0x02`) — a power cut loses at most the last hour. All restarts go through one function that saves first. RTC data in one fixed block, so new firmware builds no longer reset the daily values.
+* **Vapour pressure deficit** `vpd` (kPa).
+
+**Dashboard redesign**
+* Warning badges, a large "now" block (temperature with feels-like, trend, today's min/max; humidity with dew point and VPD; pressure with tendency arrow; wind; rain; UV with WHO colour), rain panel from rate to year, derived values panel, wireless sensor cards (model, ID, signal, age, battery, supercap, stale values, source chips), dew point in the temperature chart, rain bars per hour / day; everything without data is hidden. All languages updated.
+
+**Loxone**
+* **UDP push** to a Loxone Miniserver (one `name=value` datagram per value, optional prefix, own interval; parameters 52/53) and documented **Virtual HTTP Input** recognition for `/api/data`. `rfSensors` entries now carry `slot` (1–4); `radioBatteryLow` is always present while wireless sensors are on.
 
 ### 2.0.0-rc.1
 

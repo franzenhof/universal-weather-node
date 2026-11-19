@@ -1,4 +1,6 @@
 #include "params.h"
+#include "system_restart.h"
+#include "loxone.h"
 #include "wind_window.h"
 #include "globals.h"
 #include "sensors.h"
@@ -49,7 +51,7 @@ bool applyParam(uint8_t paramId, int16_t value)
             gCfg.srcSel[paramId - PARAM_SRC_TEMP_HUM] = (uint8_t)value;
             return true;
         case PARAM_RF_PROTO:
-            if (value < 1 || value > RF_PROTO_ALL) return false;
+            if (!rfProtoValid(value)) return false;
             gCfg.rfProto = value;
             return true;
         case PARAM_RF_EN:
@@ -79,6 +81,18 @@ bool applyParam(uint8_t paramId, int16_t value)
                 rainMM = 0.0f;
                 rainRateMmH = 0.0f;
             }
+            return true;
+        case PARAM_LOX_EN:
+            if (value != 0 && value != 1) return false;
+            gCfg.loxEn = value;
+            return true;
+        case PARAM_LOX_INTERVAL_SEC:
+            if (!loxIntervalValid(value)) return false;
+            gCfg.loxSec = value;
+            return true;
+        case PARAM_RAIN_PERSIST:
+            if (value != 0 && value != 1) return false;
+            gCfg.rainPersist = value;
             return true;
         case PARAM_LIPO_EN: // lipoEn
             if (value != 0 && value != 1) return false;
@@ -253,7 +267,7 @@ void cmdRestart()
 {
     dbgSerial.println("Command: restarting...");
     delay(500);
-    ESP.restart();
+    systemRestart("restart command");
 }
 
 void cmdSetDebugMode(bool enabled)
@@ -272,11 +286,13 @@ void cmdRequestConfigPortal()
 void cmdFactoryReset()
 {
     dbgSerial.println("Command: factory reset — wiping config, restarting...");
+    // Only the settings: the rain statistics ("rainstat") are measurement
+    // data and stay (written once more by systemRestart()).
     Preferences prefs;
     if (prefs.begin("config", false, "cfgdata")) {
         prefs.clear();
         prefs.end();
     }
     delay(500);
-    ESP.restart();
+    systemRestart("factory reset");
 }

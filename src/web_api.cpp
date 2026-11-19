@@ -1,4 +1,5 @@
 #include "web_api.h"
+#include "system_restart.h"
 #include "globals.h"
 #include "params.h"
 #include "board_io.h"
@@ -24,6 +25,7 @@
 #include <Arduino.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
+#include "loxone.h"
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -223,6 +225,29 @@ String agoText(unsigned long atMs)
     return String(s / 3600.0f, 1) + " h ago";
 }
 
+// Wireless sensor types (gCfg.rfProto / parameter 50) for the settings
+// select and the status page.
+struct RfTypeEntry { int value; const char* text; };
+const RfTypeEntry RF_TYPES[] = {
+    { RF_PROTO_AUTO, "Auto (search, stores the first type received)" },
+    { RF_PROTO_BRESSER, "Bresser (5/6/7-in-1 and others)" },
+    { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ (both data rates)" },
+    { RF_PROTO_ITPLUS17, "TFA / LaCrosse IT+ 17.241 kbit/s only" },
+    { RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ 9.579 kbit/s only" },
+    { RF_PROTO_FINEOFFSET, "Fine Offset / Ecowitt / Froggit" },
+    { RF_PROTO_ITPLUS17 | RF_PROTO_FINEOFFSET, "TFA IT+ 17.241 kbit/s + Fine Offset (same data rate, no alternating)" },
+    { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9 | RF_PROTO_FINEOFFSET, "TFA IT+ (both data rates) + Fine Offset" },
+    { RF_PROTO_BRESSER | RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9, "Bresser + TFA IT+ alternating (not recommended)" },
+    { RF_PROTO_BRESSER | RF_PROTO_FINEOFFSET, "Bresser + Fine Offset alternating (not recommended)" },
+};
+constexpr size_t RF_TYPE_COUNT = sizeof(RF_TYPES) / sizeof(RF_TYPES[0]);
+
+String rfSensorTypeText(int v)
+{
+    for (const RfTypeEntry& t : RF_TYPES) if (t.value == v) return t.text;
+    return "bit mask " + String(v);
+}
+
 void addRow(String& html, const String& label, const String& value)
 {
     html += "<tr><td>" + label + "</td><td class='num'>" + value + "</td></tr>";
@@ -233,6 +258,41 @@ void addStateRow(String& html, const char* cls, const char* label, const String&
 {
     html += "<tr><td><span class='dot "; html += cls; html += "'></span>";
     html += label; html += "</td><td>"; html += detail; html += "</td></tr>";
+}
+
+// Status page, Connections: Loxone UDP output.
+void addLoxoneRow(String& html)
+{
+    if (!gCfg.loxEn) { addStateRow(html, "off", "Loxone UDP", "<span class='dim'>disabled</span>"); return; }
+    const LoxoneStatus& ls = loxoneStatus();
+    String d = "to ";
+    loxoneLock();
+    appendEscaped(d, gCfg.loxHost[0] ? gCfg.loxHost : "(no host)");
+    loxoneUnlock();
+    d += ":" + String(gCfg.loxPort);
+    if (ls.ipValid) d += " <span class='dim'>(" + ls.ip.toString() + ")</span>";
+    d += gCfg.loxSec ? " &middot; every " + String(gCfg.loxSec) + " s" : String(" &middot; every cycle");
+    const char* cls = "ok";
+    if (!gCfg.wifiEn)       { cls = "bad"; d += " &middot; needs WiFi"; }
+    if (ls.everSent) {
+        unsigned long ago = (millis() - ls.lastSendMs) / 1000;
+        d += " &middot; last set " + (ago < 120 ? String(ago) + " s" : String(ago / 60) + " min") + " ago, " +
+             String(ls.lastValues) + " values";
+        if (ls.lastFailed) { cls = "warn"; d += ", " + String(ls.lastFailed) + " failed"; }
+    } else {
+        cls = "warn";
+        d += " &middot; nothing sent yet";
+    }
+    if (ls.errors) {
+        d += " &middot; " + String(ls.errors) + " error(s)";
+        if (ls.lastError) {
+            unsigned long ago = (millis() - ls.lastErrorMs) / 1000;
+            d += String(", last: ") + ls.lastError + " (" + (ago < 120 ? String(ago) + " s" : String(ago / 60) + " min") + " ago)";
+        }
+    } else if (ls.lastError) {
+        d += String(" &middot; ") + ls.lastError;   // DNS problem before any set
+    }
+    addStateRow(html, cls, "Loxone UDP", d);
 }
 
 void addWeatherNetworkRows(String& html)
@@ -312,6 +372,12 @@ void handleStatusPage()
                                            " " + doc["rainUnit"].as<const char*>());
         if (doc["rainYesterday"].is<float>())
             addRow(html, "Rain yesterday", String(doc["rainYesterday"].as<float>(), 2) + " " + doc["rainUnit"].as<const char*>());
+        if (doc["rainWeek"].is<float>())
+            addRow(html, "Rain this week / month / year", String(doc["rainWeek"].as<float>(), 2) + " / " +
+                   String(doc["rainMonth"].as<float>(), 2) + " / " + String(doc["rainYear"].as<float>(), 2) + " " +
+                   doc["rainUnit"].as<const char*>() + (gCfg.rainPersist ? "" : " <span class='dim'>(RAM only, lost on power loss)</span>"));
+        else
+            addRow(html, "Rain this week / month / year", "<span class='dim'>after the first clock sync</span>");
         addRow(html, "Rain since start",   String(doc["rainSinceStart"].as<float>(), 2) + " " + doc["rainUnit"].as<const char*>());
         if (doc["lastRain"].is<const char*>()) {
             String lr = doc["lastRain"].as<const char*>();
@@ -345,6 +411,8 @@ void handleStatusPage()
     }
     if (doc["dewPoint"].is<float>())
         addRow(html, "Dew point",          String(doc["dewPoint"].as<float>(), 1) + "&deg;" + doc["tempUnit"].as<const char*>());
+    if (doc["vpd"].is<float>())
+        addRow(html, "Vapour pressure deficit", String(doc["vpd"].as<float>(), 2) + " kPa");
     if (doc["feelsLike"].is<float>()) {
         DerivedNow dn;
         derivedNow(dn, windSpeedMs, windDirection);
@@ -482,6 +550,8 @@ void handleStatusPage()
                     (mqttIsConnected() ? "connected &middot; " : "disconnected &middot; ") + d);
     }
 
+    addLoxoneRow(html);
+
     struct tm lt;
     if (!gCfg.wifiEn) {
         addStateRow(html, "off", "Clock (NTP)", "<span class='dim'>needs WiFi</span>");
@@ -545,6 +615,15 @@ void handleStatusPage()
                         String(rfSensorsPacketsTotal()) + " packets since start");
         else
             addStateRow(html, "bad", "Receiver", "not receiving (radio error " + String(rfSensorsLastError()) + ", retrying)");
+        if (gCfg.rfProto == RF_PROTO_AUTO)
+            addStateRow(html, "warn", "Sensor type", "Auto: searching &mdash; Bresser, IT+ 17.241 kbit/s + Fine Offset and "
+                        "IT+ 9.579 kbit/s in turn until the first valid packet" +
+                        String(gCfg.rfIds[0] ? " from a listed sensor ID" : ""));
+        else if (rfSensorsDetectedProto())
+            addStateRow(html, "ok", "Sensor type", String("detected: ") + rfSensorTypeText(rfSensorsDetectedProto()) +
+                        " <span class='dim'>(auto search, saved)</span>");
+        else
+            addRow(html, "Sensor type", rfSensorTypeText(gCfg.rfProto));
         bool any = false;
         for (int i = 0; i < RF_MAX_SENSORS; i++) {
             const RfSensorReading& r = gRfSensors[i];
@@ -867,46 +946,30 @@ void renderSettings(const String& message, bool isError, int httpCode)
     html += "<form method='POST' action='/api/settings'><input type='hidden' name='form' value='1'>";
 
     sectionStart(html, "Measurement", false);
-    fieldText  (html, "uplinksec", "LoRaWAN / measurement interval (s)", String(gCfg.uplinkIntervalSec), 5,
-                "5&ndash;3600; stretched automatically if the data rate would exceed 1 % airtime", "number");
-    fieldSelect(html, "samplesec", "Wind sample interval", windSampleSecNormalized(gCfg.sampleSec), OPTS(windSamples),
-                "gust = highest 3-s mean; other sensors every 10 s or each send");
-    fieldSelect(html, "lorawagg",  "LoRaWAN wind values", gCfg.loraWindAgg, OPTS(windAggs),
-                "Interval: mean, 3-s gust and direction since the last uplink. 10 min: the WMO values of the last "
-                "10 minutes &mdash; do not average those again downstream");
-    fieldText  (html, "mqttsec",   "MQTT interval (s)", String(gCfg.mqttIntervalSec), 5, "0 = like the LoRaWAN interval, else 2&ndash;3600", "number");
-    fieldSelect(html, "mqttwagg",  "MQTT wind values", gCfg.mqttWindAgg, OPTS(windAggs));
+    fieldCheck (html, "rfen",      "Wireless sensors (868 MHz)", gCfg.rfEn,
+                "Bresser, TFA / LaCrosse IT+ or Fine Offset / Ecowitt / Froggit sensors (see Wireless sensor type), "
+                "received with the LoRa chip between uplinks; disables low-power mode");
     {
         // the last entry shows a bit mask set by downlink / MQTT that has no own
         // entry, so saving the form keeps it
         static char customText[48];
-        static Option rfProtos[] = { { RF_PROTO_BRESSER, "Bresser (5/6/7-in-1 and others)" },
-                                     { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ (both data rates)" },
-                                     { RF_PROTO_ITPLUS17, "TFA / LaCrosse IT+ 17.241 kbit/s only" },
-                                     { RF_PROTO_ITPLUS9, "TFA / LaCrosse IT+ 9.579 kbit/s only" },
-                                     { RF_PROTO_FINEOFFSET, "Fine Offset / Ecowitt / Froggit" },
-                                     { RF_PROTO_ITPLUS17 | RF_PROTO_FINEOFFSET,
-                                       "TFA IT+ 17.241 kbit/s + Fine Offset (same data rate, no alternating)" },
-                                     { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9 | RF_PROTO_FINEOFFSET,
-                                       "TFA IT+ (both data rates) + Fine Offset" },
-                                     { RF_PROTO_BRESSER | RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9,
-                                       "Bresser + TFA IT+ alternating (not recommended)" },
-                                     { RF_PROTO_BRESSER | RF_PROTO_FINEOFFSET,
-                                       "Bresser + Fine Offset alternating (not recommended)" },
-                                     { 0, customText } };
-        constexpr size_t RF_PROTO_FIXED = sizeof(rfProtos) / sizeof(rfProtos[0]) - 1;
+        static Option rfProtos[RF_TYPE_COUNT + 1];
+        for (size_t i = 0; i < RF_TYPE_COUNT; i++) rfProtos[i] = { RF_TYPES[i].value, RF_TYPES[i].text };
         int cur = gCfg.rfProto;
         bool listed = false;
-        for (size_t i = 0; i < RF_PROTO_FIXED; i++) listed |= rfProtos[i].value == cur;
-        size_t count = RF_PROTO_FIXED;
-        if (!listed && cur >= 1 && cur <= RF_PROTO_ALL) {
+        for (size_t i = 0; i < RF_TYPE_COUNT; i++) listed |= rfProtos[i].value == cur;
+        size_t count = RF_TYPE_COUNT;
+        if (!listed && rfProtoValid(cur)) {
             snprintf(customText, sizeof(customText), "Other combination (bit mask %d, set by parameter 50)", cur);
-            rfProtos[RF_PROTO_FIXED].value = cur;
+            rfProtos[RF_TYPE_COUNT] = { cur, customText };
             count++;
         } else if (!listed) {
-            cur = RF_PROTO_BRESSER;
+            cur = RF_PROTO_AUTO;
         }
         fieldSelect(html, "rfproto", "Wireless sensor type", cur, rfProtos, count,
+                    "Auto: listens to Bresser, IT+ 17.241 kbit/s + Fine Offset and IT+ 9.579 kbit/s in turn and stores "
+                    "the type of the first valid packet (from a listed ID, if IDs are set); the status page shows what "
+                    "was found. "
                     "IT+: e.g. TFA 30.3143/3144/3147/3157/3159.IT (17.241 kbit/s), 30.3155/3156.WD (9.579 kbit/s); "
                     "with both rates the receiver alternates every 5 s. Fine Offset: Ecowitt / Froggit / Ambient "
                     "WH65/WS69 7-in-1, WS80, WS85, WS90, WS68, WH31/DP50, WN34, WH40, WN20, WH51, WH57 (868 MHz "
@@ -915,9 +978,6 @@ void renderSettings(const String& message, bool isError, int httpCode)
                     "Bresser, 5 s per IT+ data rate, 17 s Fine Offset) and misses packets of both &mdash; e.g. "
                     "about every second Bresser wind packet; not recommended, choose one data rate where possible");
     }
-    fieldCheck (html, "rfen",      "Wireless sensors (868 MHz)", gCfg.rfEn,
-                "Bresser, TFA / LaCrosse IT+ or Fine Offset / Ecowitt / Froggit sensors (see Wireless sensor type), "
-                "received with the LoRa chip between uplinks; disables low-power mode");
     {
         // received sensors as a copy-and-paste hint ("learning" without extra buttons)
         static char seen[160];
@@ -961,8 +1021,21 @@ void renderSettings(const String& message, bool isError, int httpCode)
                         g == SG_LIGHT ? "only wireless sensors (e.g. Bresser 7-in-1) measure light" :
                         g == SG_RAIN  ? "switching keeps the rain totals continuous (only increases of the selected source count)" : nullptr);
     }
-    fieldCheck (html, "winden",    "Wind sensor", gCfg.windEn);
-    fieldCheck (html, "rainen",    "Rain sensor", gCfg.rainEn);
+    fieldText  (html, "uplinksec", "LoRaWAN / measurement interval (s)", String(gCfg.uplinkIntervalSec), 5,
+                "5&ndash;3600; stretched automatically if the data rate would exceed 1 % airtime", "number");
+    fieldSelect(html, "samplesec", "Wind sample interval", windSampleSecNormalized(gCfg.sampleSec), OPTS(windSamples),
+                "gust = highest 3-s mean; other sensors every 10 s or each send");
+    fieldSelect(html, "lorawagg",  "LoRaWAN wind values", gCfg.loraWindAgg, OPTS(windAggs),
+                "Interval: mean, 3-s gust and direction since the last uplink. 10 min: the WMO values of the last "
+                "10 minutes &mdash; do not average those again downstream");
+    fieldText  (html, "mqttsec",   "MQTT interval (s)", String(gCfg.mqttIntervalSec), 5, "0 = like the LoRaWAN interval, else 2&ndash;3600", "number");
+    fieldSelect(html, "mqttwagg",  "MQTT wind values", gCfg.mqttWindAgg, OPTS(windAggs));
+    fieldCheck (html, "winden",    "Wind sensor (board)", gCfg.windEn, "Davis anemometer/vane on the PCB; off without a PCB (floating inputs)");
+    fieldCheck (html, "rainen",    "Rain sensor (board)", gCfg.rainEn, "Davis rain gauge on the PCB");
+    fieldCheck (html, "rainpersist", "Keep rain statistics over a power cut", gCfg.rainPersist,
+                "saves rain/sunshine today and yesterday, last rain and rain week/month/year to flash at most "
+                "once per hour, at midnight and before every restart/update, so they survive a power cut; "
+                "off = kept in RTC RAM only, lost on power loss (and possibly on a firmware update)");
     fieldCheck (html, "lipoen",    "LiPo battery measurement", gCfg.lipoEn);
     fieldText  (html, "altitude",  "Altitude above sea level (m)", String(gCfg.altitudeM), 5, "0&ndash;4000, for sea-level pressure (QNH)", "number");
     fieldSelect(html, "cpufreq",   "CPU frequency", gCfg.cpuFreqMhz, OPTS(cpuFreqs));
@@ -1123,6 +1196,23 @@ void renderSettings(const String& message, bool isError, int httpCode)
     appendEscaped(html, gCfg.mqttCaCert);
     html += "</textarea></label></section>";
 
+    sectionStart(html, "Loxone (UDP)", false,
+                 "Sends every value as its own UDP datagram <code>name=value</code> (e.g. <code>temp=6.6</code>) to a "
+                 "Loxone Miniserver: create a Virtual UDP Input with this port and one command per value, "
+                 "recognition e.g. <code>temp=\\v</code>. Names = the keys of <code>/api/data</code>. Values that are "
+                 "currently not valid are not sent; Loxone keeps the last one. Needs WiFi.");
+    fieldCheck (html, "loxen",     "Loxone UDP output", gCfg.loxEn);
+    loxoneLock();
+    fieldText  (html, "loxhost",   "Miniserver IP or host name", gCfg.loxHost, sizeof(gCfg.loxHost) - 1,
+                "a host name is resolved without blocking and refreshed every 10 min");
+    fieldText  (html, "loxprefix", "Name prefix", gCfg.loxPrefix, sizeof(gCfg.loxPrefix) - 1,
+                "optional, A&ndash;Z a&ndash;z 0&ndash;9 _ . - (max 16), e.g. <code>g75_</code> to tell several nodes apart on one port");
+    loxoneUnlock();
+    fieldText  (html, "loxport",   "UDP port", String(gCfg.loxPort), 5, "1&ndash;65535, default 7000", "number");
+    fieldText  (html, "loxsec",    "Loxone interval (s)", String(gCfg.loxSec), 5,
+                "0 = every measurement cycle, else 2&ndash;3600; wind mean/gust and rain cover the time since the last send", "number");
+    html += "</section>";
+
     sectionStart(html, "Hardware", true);
     fieldSelect(html, "pcbver", "PCB revision", gCfg.pcbVersion, OPTS(pcbRevs));
     html += "</section>";
@@ -1262,6 +1352,8 @@ void handleSettingsPost()
     applyNum(PARAM_MQTT_INTERVAL_SEC,        "mqttsec",     "MQTT interval (0 or 2-3600 s)");
     applyNum(PARAM_LORA_WIND_AGG,            "lorawagg",    "LoRaWAN wind values");
     applyNum(PARAM_MQTT_WIND_AGG,            "mqttwagg",    "MQTT wind values");
+    applyCheck(PARAM_LOX_EN,                 "loxen",       "Loxone UDP output");
+    applyNum(PARAM_LOX_INTERVAL_SEC,         "loxsec",      "Loxone interval (0 or 2-3600 s)");
     applyCheck(PARAM_RF_EN,                  "rfen",        "wireless sensors");
     applyNum(PARAM_RF_PROTO,                 "rfproto",     "wireless sensor type");
     {
@@ -1272,6 +1364,7 @@ void handleSettingsPost()
     }
     applyCheck(PARAM_WIND_EN,                "winden",      "wind sensor");
     applyCheck(PARAM_RAIN_EN,                "rainen",      "rain sensor");
+    applyCheck(PARAM_RAIN_PERSIST,           "rainpersist", "rain statistics in flash");
     applyCheck(PARAM_LIPO_EN,                "lipoen",      "LiPo measurement");
     applyCheck(PARAM_DEBUG_MODE,             "debugmode",   "debug mode");
     // Only when changed: applyParam() reprograms the CPU clock unconditionally.
@@ -1375,6 +1468,19 @@ void handleSettingsPost()
     // Not clearable: an empty admin password would lock this page out.
     storeSecret(gCfg.webAdminPass, "webadminpw", ignored);
     storeText(gCfg.rfIds, "rfids", ignored);   // rf_sensors.cpp picks up changes on its next loop
+    {   // Loxone: live, read by the main loop under the same lock
+        int loxPort = gCfg.loxPort;
+        storeInt(loxPort, "loxport", 1, 65535, "Loxone UDP port (1-65535)", rejected, ignored);
+        gCfg.loxPort = loxPort;
+        loxoneLock();
+        storeText(gCfg.loxHost, "loxhost", ignored);
+        if (present("loxprefix")) {
+            String pre = formArg("loxprefix");
+            if (loxPrefixValid(pre.c_str())) storeText(gCfg.loxPrefix, "loxprefix", ignored);
+            else addRejected(rejected, "Loxone name prefix (max 16 of A-Z a-z 0-9 _ . -)");
+        }
+        loxoneUnlock();
+    }
 
     // ---- restart: only read at boot. Collected into a copy (static: Config
     // is several KB, too big for this task's stack), so the running
@@ -1543,7 +1649,7 @@ void webApiTask(void*)
         // Deferred restart after a restart-requiring settings save (see
         // handleSettingsPost()) — the response has been sent by now.
         // A WiFi change test runs first (it would be cut short otherwise).
-        if (restartAtMs && (long)(millis() - restartAtMs) >= 0 && !wifiChangeBusy()) ESP.restart();
+        if (restartAtMs && (long)(millis() - restartAtMs) >= 0 && !wifiChangeBusy()) systemRestart("settings saved");
 
         vTaskDelay(5 / portTICK_PERIOD_MS);
     }
