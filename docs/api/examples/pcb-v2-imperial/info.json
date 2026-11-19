@@ -1,0 +1,84 @@
+{
+  "apiVersion": 1,
+  "device": {
+    "name": "",
+    "hostname": "weathernode-123456",
+    "uptimeSec": 108064
+  },
+  "firmware": {
+    "version": "2.0.0",
+    "updateAvailable": "2.0.1"
+  },
+  "hardware": {
+    "board": "V3",
+    "pcbRev": 20
+  },
+  "units": {
+    "system": "imperial",
+    "temp": "F",
+    "pressure": "inHg",
+    "wind": "mph",
+    "rain": "in",
+    "rainRate": "in/h",
+    "cloudBase": "ft",
+    "tempTrend": "F"
+  },
+  "measurement": {
+    "cycleSec": 300,
+    "windSampleSec": 1,
+    "mqttWindAggregation": "interval",
+    "altitudeM": 560,
+    "clockSynced": true,
+    "timeZone": "EST5EDT,M3.2.0,M11.1.0"
+  },
+  "history": {
+    "ranges": [
+      {
+        "range": "24h",
+        "bucketSec": 300,
+        "maxPoints": 288
+      },
+      {
+        "range": "7d",
+        "bucketSec": 3600,
+        "maxPoints": 168
+      }
+    ]
+  },
+  "outputs": {
+    "wifi": true,
+    "webApi": true,
+    "mqtt": false,
+    "mqttCommands": false,
+    "lorawan": false,
+    "loxone": false,
+    "updateCheck": true,
+    "weatherNetworks": []
+  },
+  "available": {
+    "temp": true,
+    "humidity": true,
+    "pressure": true,
+    "wind": true,
+    "rain": true,
+    "uvIndex": false,
+    "light": false,
+    "ds18b20Probes": 0,
+    "battery": true,
+    "wirelessSensors": false,
+    "uvSensorVolts": false,
+    "wind2": false,
+    "auxAnalog": true,
+    "auxPulses": true,
+    "heater": true,
+    "fan": false,
+    "victron": false
+  },
+  "sources": {
+    "tempHum": "board",
+    "wind": "board",
+    "rain": "board",
+    "uv": "none",
+    "light": "none"
+  }
+}

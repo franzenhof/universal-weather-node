@@ -34,6 +34,7 @@ HELP_FILES = [
     "docs/wireless-sensors.md",
     "docs/minimal-build.md",
     "docs/web-dashboard.md",
+    "docs/api.md",
     "docs/mqtt-home-assistant.md",
     "docs/weather-networks.md",
     "docs/loxone.md",

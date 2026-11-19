@@ -22,9 +22,11 @@
 #include "wind_window.h"
 #include "rf_sensors.h"
 #include "derived_now.h"
+#include "api_info.h"
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include <ESPmDNS.h>
 #include <ArduinoJson.h>
 #include "loxone.h"
 
@@ -102,6 +104,46 @@ private:
     size_t     fill_ = 0;
 };
 
+// Read-only JSON API for third-party UIs (docs/api.md): /api/data,
+// /api/history and /api/info may be read from any origin (CORS "*"; no
+// credentials, nothing secret in them). /api/settings and /api/log* get no
+// CORS headers: they stay same-origin + Digest (see requireAuth()).
+void sendPublicApiHeaders()
+{
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Cache-Control", "no-store");
+}
+
+// CORS preflight (OPTIONS) for the read-only endpoints. A plain GET needs
+// none, but a client adding a header (e.g. Cache-Control) triggers one.
+// Allow-Private-Network: Chrome's Private Network Access preflight for a
+// page from a public origin reading a node in the LAN.
+void handlePublicApiOptions()
+{
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "*");
+    server.sendHeader("Access-Control-Allow-Private-Network", "true");
+    server.sendHeader("Access-Control-Max-Age", "86400");
+    server.send(204);
+}
+
+// Streams a document built by the API builders (chunked, see ChunkedPrint).
+void sendJsonDoc(JsonDocument& doc, const char* what)
+{
+    sendPublicApiHeaders();
+    if (doc.overflowed()) {
+        dbgSerial.printf("API %s: JSON allocation failed.\n", what);
+        server.send(500, "text/plain", "JSON allocation failed");
+        return;
+    }
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "");
+    ChunkedPrint out(server);
+    serializeJson(doc, out);
+    out.flush();
+}
+
 void handleApiData()
 {
     // static: retains its underlying buffer across requests instead of
@@ -111,16 +153,15 @@ void handleApiData()
     // clears the content (not the buffer) at its own top (see buildJsonPayload()).
     static JsonDocument doc;
     buildJsonPayload(doc);
-    if (doc.overflowed()) {
-        dbgSerial.println("API telemetry: JSON allocation failed.");
-        server.send(500, "text/plain", "Telemetry allocation failed");
-        return;
-    }
-    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-    server.send(200, "application/json", "");
-    ChunkedPrint out(server);
-    serializeJson(doc, out);
-    out.flush();
+    sendJsonDoc(doc, "telemetry");
+}
+
+// Device description for third-party UIs (api_info.h). No secrets, no auth.
+void handleApiInfo()
+{
+    static JsonDocument doc;   // static: see handleApiData()
+    buildInfoJson(doc);
+    sendJsonDoc(doc, "info");
 }
 
 // Rendered README help page, works fully offline (no CDN dependency) — see
@@ -535,7 +576,10 @@ void handleStatusPage()
     } else if (wifiIsConnected()) {
         String d;
         appendEscaped(d, WiFi.SSID().c_str());
-        d += " &middot; " + WiFi.localIP().toString() + " &middot; " + String(WiFi.RSSI()) + " dBm";
+        char host[HOSTNAME_MAX_LEN + 1];
+        deviceHostname(host, sizeof(host));   // DHCP and mDNS name
+        d += " &middot; " + WiFi.localIP().toString() + " &middot; " + String(host) + ".local &middot; " +
+             String(WiFi.RSSI()) + " dBm";
         addStateRow(html, "ok", "WiFi", d);
     } else {
         addStateRow(html, "bad", "WiFi", "disconnected");
@@ -785,16 +829,11 @@ void handleApiHistory()
     // clears the content (not the buffer) at its own top (see buildHistoryJson()).
     static JsonDocument doc;
     buildHistoryJson(doc, coarse);
-    // Full history (up to HISTORY_CAPACITY samples) is much bigger than the
-    // fixed 1024-byte buf handleApiData() uses — stream it straight to the
-    // client via ChunkedPrint instead of holding the whole serialized text
-    // in RAM at once, and in a single serialize pass (see ChunkedPrint's
-    // comment above).
-    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-    server.send(200, "application/json", "");
-    ChunkedPrint out(server);
-    serializeJson(doc, out);
-    out.flush();
+    // Full history (up to HISTORY_CAPACITY samples) is big — streamed
+    // straight to the client via ChunkedPrint instead of holding the whole
+    // serialized text in RAM at once, in a single serialize pass (see
+    // ChunkedPrint's comment above).
+    sendJsonDoc(doc, "history");
 }
 
 
@@ -1201,7 +1240,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
                 "for a network that is not in range yet: stored right away, the node leaves the current network "
                 "immediately and keeps trying the new one &mdash; reach it again via the new network, LoRaWAN "
                 "(downlink <code>0x03</code> opens the config portal) or the button");
-    fieldText  (html, "devname",    "Device name", gCfg.deviceName, sizeof(gCfg.deviceName) - 1, "hostname, MQTT client ID, default topic prefix");
+    fieldText  (html, "devname",    "Device name", gCfg.deviceName, sizeof(gCfg.deviceName) - 1, "Wi-Fi/mDNS hostname (sanitised), MQTT client ID, default topic prefix");
     fieldCheck (html, "staticipen", "Static IP", gCfg.staticIpEn, "off = DHCP");
     fieldText  (html, "staticip",   "IP address", gCfg.staticIp, 15);
     fieldText  (html, "staticgw",   "Gateway", gCfg.staticGateway, 15);
@@ -1659,6 +1698,45 @@ void handleSettingsPost()
     server.send(303);
 }
 
+// mDNS (docs/api.md#discovery-mdns): <hostname>.local plus _http._tcp and
+// _weathernode._tcp on port 80, TXT api=<API_VERSION>, path=/api/info.
+// Started together with the web server, i.e. only once Wi-Fi is up; the
+// IDF mDNS responder then follows Wi-Fi reconnects by itself. The host
+// name is fixed until the next restart (the device name is a restart field).
+// A failed start is retried every 30 s by webApiTask.
+bool          mdnsStarted = false;
+unsigned long mdnsTriedMs = 0;
+
+void mdnsStart()
+{
+    if (mdnsStarted) return;
+    mdnsTriedMs = millis();
+    char host[HOSTNAME_MAX_LEN + 1];
+    deviceHostname(host, sizeof(host));   // = the DHCP hostname (wifi_mqtt.cpp)
+    if (!MDNS.begin(host)) {
+        dbgSerial.println("mDNS: start failed.");
+        return;
+    }
+    char ver[8];
+    snprintf(ver, sizeof(ver), "%d", API_VERSION);
+    const char* name = gCfg.deviceName[0] ? gCfg.deviceName : host;
+    MDNS.setInstanceName(name);
+    for (const char* svc : { "http", "weathernode" }) {
+        MDNS.addService(svc, "tcp", 80);
+        MDNS.addServiceTxt(svc, "tcp", "api", ver);
+        MDNS.addServiceTxt(svc, "tcp", "path", "/api/info");
+    }
+    mdnsStarted = true;
+    dbgSerial.printf("mDNS: http://%s.local/ (_http._tcp, _weathernode._tcp)\n", host);
+}
+
+void mdnsStop()
+{
+    if (!mdnsStarted) return;
+    MDNS.end();
+    mdnsStarted = false;
+}
+
 // Runs continuously on its own FreeRTOS task (core 0) once webApiSetup()
 // spawns it — this is what used to be webApiPoll(), called once per
 // main-loop() iteration on core 1 alongside sensor sampling and the
@@ -1675,12 +1753,15 @@ void webApiTask(void*)
             if (serverStarted) {
                 server.stop();
                 serverStarted = false;
+                mdnsStop();
             }
         } else if (!serverStarted && !apiStopped && wifiIsConnected()) {
             server.begin();
             serverStarted = true;
-            dbgSerial.println("Web API started on port 80 (/, /status, /api/data, /api/settings, /help).");
+            dbgSerial.println("Web API started on port 80 (/, /status, /api/data, /api/info, /api/history, /api/settings, /help).");
+            mdnsStart();
         }
+        if (serverStarted && !mdnsStarted && millis() - mdnsTriedMs >= 30000 && wifiIsConnected()) mdnsStart();
         if (serverStarted) server.handleClient();
         xSemaphoreGive(serverMutex);
 
@@ -1701,6 +1782,9 @@ void webApiSetup()
     server.on("/status",       HTTP_GET,  handleStatusPage);
     server.on("/chart",        HTTP_GET,  handleChartRedirect);
     server.on("/api/data",     HTTP_GET,  handleApiData);
+    server.on("/api/info",     HTTP_GET,  handleApiInfo);
+    for (const char* uri : { "/api/data", "/api/info", "/api/history" })
+        server.on(uri, HTTP_OPTIONS, handlePublicApiOptions);
     server.on("/api/settings", HTTP_GET,  handleSettingsGet);
     server.on("/api/settings", HTTP_POST, handleSettingsPost);
     server.on("/api/log",       HTTP_GET,  handleLogPage);
@@ -1734,6 +1818,7 @@ void webApiStop()
     if (serverStarted) {
         server.stop();
         serverStarted = false;
+        mdnsStop();
         dbgSerial.println("Web API stopped (port 80 freed for the config portal).");
     }
     xSemaphoreGive(serverMutex);

@@ -9,6 +9,7 @@
 #include "rf_sensors.h"
 #include "derived_now.h"
 #include "sensors.h"
+#include "api_info.h"
 #include <esp_timer.h>
 #include <time.h>
 
@@ -85,6 +86,7 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
         g.rainMm = rainMM; g.rainRateMmH = rainRateMmH;
         pv = &g;
     }
+    doc["apiVersion"] = API_VERSION;   // api_info.h: additive changes only within one version
 
     if (srcActive(SG_WIND) && pv->windValid) {   // no valid sample in the window: left out
         doc["windDirDeg"] = pv->windDirDeg;

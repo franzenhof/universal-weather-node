@@ -71,7 +71,7 @@ int main()
         assert(has("rf1_temp=4.5") && has("rf1_humidity=88") && has("rf1_battery=0") && has("rf1_rssi=-71") && hasName("rf1_age"));
         assert(has("radioBatteryLow=1") && has("rf1_windDirDeg=247") && has("warnFrost=0") && has("ds18b20_1=10.5") && has("ds18b20_3=14.5"));
         assert(hasName("temp") && hasName("pressureQnh") && hasName("cpuTemp") && hasName("victronBatteryV") && hasName("fanRpm") &&
-               hasName("heaterOn") && hasName("auxPulsesTotal") && !hasName("resetReason") && !hasName("windUnit"));
+               hasName("heaterOn") && hasName("auxPulsesTotal") && !hasName("resetReason") && !hasName("windUnit") && !hasName("apiVersion"));
     }
     gCfg.srcSel[SG_AIR]=SRC_RF1;srcUpdateCycle();buildJsonPayload(doc);
     assert(doc["temp"].as<float>()==4.5f && doc["humidityPct"].as<float>()==88 && !doc["pressureQnh"].isNull());

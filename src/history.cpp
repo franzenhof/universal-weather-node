@@ -4,6 +4,8 @@
 #include "board_io.h"
 #include "sources.h"
 #include "uv_calibration.h"
+#include "api_info.h"
+#include "time_sync.h"
 #include <Arduino.h>
 #include <DallasTemperature.h>
 #include <esp_timer.h>
@@ -28,8 +30,8 @@ uint32_t uptimeSec()
 // (DS18B20_INVALID_X10) instead of a validMask bit; same idea as
 // DEVICE_DISCONNECTED_C, which is exactly where that sentinel is checked.
 struct HistorySample {
-    uint32_t bucketEndSec;      // uptimeSec() when this bucket was finalized
-    uint8_t  validMask;
+    uint32_t bucketEndSec;      // end of the bucket's time window, in uptimeSec()
+    uint8_t  validMask;         // 0 = a gap (no cycle, or no value at all, in that window)
     int16_t  windSpeedX100;     // average over the bucket
     int16_t  windGustX100;      // max over the bucket
     uint16_t windDirDeg;        // last valid reading in the bucket (not averaged — bearings wrap)
@@ -72,7 +74,8 @@ constexpr int16_t DS18B20_INVALID_X10 = (int16_t)(DEVICE_DISCONNECTED_C * 10.0f)
 // running *sum* (it's an accumulated quantity, not an instantaneous one).
 struct OpenBucket {
     bool     started = false;
-    unsigned long startSec = 0;
+    int64_t  index = 0;          // bucket number on the aligned clock (see alignedNow())
+    uint32_t endSec = 0;         // end of its window, in uptimeSec()
     uint16_t windCount = 0, rainCount = 0, bmeCount = 0, lipoCount = 0;
     float    windSpeedSum = 0, windGustMax = 0;
     uint16_t windDirLast = 0;
@@ -85,13 +88,33 @@ struct OpenBucket {
     uint16_t ds18b20Count[3] = {0, 0, 0};
 };
 
-HistorySample fineRing[HISTORY_FINE_CAPACITY];
-size_t fineHead = 0, fineCount = 0;
-OpenBucket fineOpen;
+// One tier: a ring of finished buckets, one entry per bucket window - also
+// for a window without data (a gap entry, validMask 0), so `capacity`
+// entries always span capacity x bucketSec and the entries are evenly
+// spaced in time - plus the open bucket.
+struct Tier {
+    HistorySample* ring;
+    size_t   capacity;
+    uint32_t bucketSec;
+    size_t   head;
+    size_t   count;
+    OpenBucket open;
+};
 
+HistorySample fineRing[HISTORY_FINE_CAPACITY];
 HistorySample coarseRing[HISTORY_COARSE_CAPACITY];
-size_t coarseHead = 0, coarseCount = 0;
-OpenBucket coarseOpen;
+Tier fine   = { fineRing,   HISTORY_FINE_CAPACITY,   HISTORY_FINE_BUCKET_SEC,   0, 0, OpenBucket{} };
+Tier coarse = { coarseRing, HISTORY_COARSE_CAPACITY, HISTORY_COARSE_BUCKET_SEC, 0, 0, OpenBucket{} };
+
+// Bucket alignment. Buckets are fixed windows of the "aligned clock" =
+// uptime + clockOffset: (k x bucketSec, (k + 1) x bucketSec]. Before the
+// first time sync the offset is 0 (windows aligned to uptime); once the
+// clock is synced it is epoch - uptime, so the windows sit on wall-clock
+// boundaries (:00, :05, ... and full hours, UTC = local for whole-hour time
+// zones). The offset is kept unless it moves by more than 2 s: the two
+// clocks' seconds tick independently, so their difference jitters by 1 s.
+int64_t clockOffset = 0;
+bool    clockOffsetFromEpoch = false;
 
 // Guards both tiers' ring[]/head/count and their OpenBucket accumulators.
 // pushHistorySample() (main loop task) and buildHistoryJson() (servable from
@@ -103,10 +126,8 @@ OpenBucket coarseOpen;
 // guarantees.
 SemaphoreHandle_t historyMutex = xSemaphoreCreateMutex();
 
-void mergeIntoBucket(OpenBucket& b, unsigned long nowSec)
+void mergeIntoBucket(OpenBucket& b)
 {
-    if (!b.started) { b.startSec = nowSec; b.started = true; }
-
     if (srcActive(SG_WIND)) {
         b.windGustMax = (b.windCount == 0) ? windGustMs : max(b.windGustMax, windGustMs);
         b.windSpeedSum += windSpeedMs;
@@ -148,12 +169,12 @@ void mergeIntoBucket(OpenBucket& b, unsigned long nowSec)
 }
 
 // Converts an OpenBucket's running sums into a HistorySample without
-// touching the bucket itself — shared by finalizeBucket() (which then
+// touching the bucket itself — shared by pushTier() (which then
 // appends the result and resets the bucket) and serializeTier() (which uses
 // it to preview the *current*, not-yet-finalized bucket as a live point, see
-// below). Returns false for an empty bucket (e.g. the node was off/
-// unreachable for a whole window) rather than producing a misleadingly
-// "valid" all-zero sample.
+// below). Returns false for a bucket without any value (every sensor off)
+// rather than producing a misleadingly "valid" all-zero sample; pushTier()
+// stores a gap entry then.
 bool sampleFromBucket(const OpenBucket& b, unsigned long endSec, HistorySample& out)
 {
     bool anyDs18b20 = b.ds18b20Count[0] || b.ds18b20Count[1] || b.ds18b20Count[2];
@@ -204,18 +225,73 @@ bool sampleFromBucket(const OpenBucket& b, unsigned long endSec, HistorySample& 
     return true;
 }
 
-// Appends the OpenBucket (if non-empty) to the given tier's ring, then
-// resets it for the next window.
-void finalizeBucket(OpenBucket& b, HistorySample* ring, size_t capacity,
-                     size_t& head, size_t& count, unsigned long endSec)
+void appendSample(Tier& t, const HistorySample& s)
 {
-    HistorySample s;
-    if (sampleFromBucket(b, endSec, s)) {
-        ring[head] = s;
-        head = (head + 1) % capacity;
-        if (count < capacity) count++;
+    t.ring[t.head] = s;
+    t.head = (t.head + 1) % t.capacity;
+    if (t.count < t.capacity) t.count++;
+}
+
+// A window without any value: every field null in the JSON.
+void appendGap(Tier& t, uint32_t endSec)
+{
+    HistorySample s{};
+    s.bucketEndSec = endSec;
+    for (int i = 0; i < 3; i++) s.ds18b20X10[i] = DS18B20_INVALID_X10;
+    appendSample(t, s);
+}
+
+int64_t floorDiv(int64_t a, int64_t b)
+{
+    return a >= 0 ? a / b : -((-a + b - 1) / b);
+}
+
+int64_t alignedNow(uint32_t nowSec)
+{
+    int64_t epoch;
+    if (epochNow(epoch)) {
+        int64_t off = epoch - (int64_t)nowSec;
+        if (!clockOffsetFromEpoch || off - clockOffset > 2 || clockOffset - off > 2) {
+            clockOffset = off;
+            clockOffsetFromEpoch = true;
+        }
     }
-    b = OpenBucket{};
+    return (int64_t)nowSec + clockOffset;
+}
+
+// Adds the just-finished cycle (ended at nowSec) to the tier: to the bucket
+// whose window contains that end time. A cycle in a later window first
+// closes the open bucket - a gap entry if it has no value at all - and
+// records the windows skipped in between (cycles longer than the bucket) as
+// gaps; never more of them than fit between the closed bucket's end and now
+// in uptime, so a clock step (first sync, NTP correction) cannot produce a
+// run of fake gaps. After a step backwards a window can come again: it is
+// a new entry then, and the closed bucket's end is clamped to now so the
+// ring stays in time order.
+void pushTier(Tier& t, uint32_t nowSec, int64_t aligned)
+{
+    int64_t idx = floorDiv(aligned - 1, t.bucketSec);
+    OpenBucket& b = t.open;
+    if (b.started && idx != b.index) {
+        uint32_t endSec = (int32_t)(nowSec - b.endSec) >= 0 ? b.endSec : nowSec;
+        HistorySample s;
+        if (sampleFromBucket(b, endSec, s)) appendSample(t, s);
+        else                                appendGap(t, endSec);
+        if (idx > b.index) {
+            uint64_t skipped = (uint64_t)(idx - b.index - 1);
+            uint64_t fit = (nowSec - endSec) / t.bucketSec;
+            if (skipped > fit) skipped = fit;
+            if (skipped > t.capacity) skipped = t.capacity;
+            for (uint64_t k = 1; k <= skipped; k++) appendGap(t, endSec + (uint32_t)(k * t.bucketSec));
+        }
+        b = OpenBucket{};
+    }
+    if (!b.started) {
+        b.started = true;
+        b.index = idx;
+        b.endSec = (uint32_t)((idx + 1) * (int64_t)t.bucketSec - clockOffset);
+    }
+    mergeIntoBucket(b);
 }
 
 // Shared by both tiers in buildHistoryJson() — capacity/ring/head/count
@@ -227,9 +303,11 @@ void finalizeBucket(OpenBucket& b, HistorySample* ring, size_t capacity,
 // bucket's whole window (5 min/1h) right after boot or a clear — a live
 // preview naturally gets more representative as the bucket fills, same as
 // any in-progress average.
-void serializeTier(JsonDocument& doc, unsigned long nowSec, const HistorySample* ring,
-                    size_t capacity, size_t head, size_t count, const OpenBucket& openBucket)
+void serializeTier(JsonDocument& doc, unsigned long nowSec, const Tier& tier)
 {
+    const HistorySample* ring = tier.ring;
+    const size_t capacity = tier.capacity, head = tier.head, count = tier.count;
+    const OpenBucket& openBucket = tier.open;
     JsonArray ageSec      = doc["ageSec"].to<JsonArray>();
     JsonArray windSpeed   = doc["windSpeed"].to<JsonArray>();
     JsonArray windGust    = doc["windGust"].to<JsonArray>();
@@ -318,26 +396,19 @@ void serializeTier(JsonDocument& doc, unsigned long nowSec, const HistorySample*
 
 void pushHistorySample()
 {
-    unsigned long nowSec = uptimeSec();
+    uint32_t nowSec = uptimeSec();
 
     xSemaphoreTake(historyMutex, portMAX_DELAY);
-
-    mergeIntoBucket(fineOpen, nowSec);
-    mergeIntoBucket(coarseOpen, nowSec);
-
-    if (nowSec - fineOpen.startSec >= HISTORY_FINE_BUCKET_SEC) {
-        finalizeBucket(fineOpen, fineRing, HISTORY_FINE_CAPACITY, fineHead, fineCount, nowSec);
-    }
-    if (nowSec - coarseOpen.startSec >= HISTORY_COARSE_BUCKET_SEC) {
-        finalizeBucket(coarseOpen, coarseRing, HISTORY_COARSE_CAPACITY, coarseHead, coarseCount, nowSec);
-    }
-
+    int64_t aligned = alignedNow(nowSec);
+    pushTier(fine, nowSec, aligned);
+    pushTier(coarse, nowSec, aligned);
     xSemaphoreGive(historyMutex);
 }
 
-void buildHistoryJson(JsonDocument& doc, bool coarse)
+void buildHistoryJson(JsonDocument& doc, bool coarseRange)
 {
     doc.clear();
+    doc["apiVersion"] = API_VERSION;
     unsigned long nowSec = uptimeSec();
 
     // Holds the lock for the whole read+JSON-build loop, not just an index
@@ -345,8 +416,7 @@ void buildHistoryJson(JsonDocument& doc, bool coarse)
     // short (at most a few hundred iterations of scaling math) and
     // infrequent (one request at a time, one push per uplink cycle).
     xSemaphoreTake(historyMutex, portMAX_DELAY);
-    if (coarse) serializeTier(doc, nowSec, coarseRing, HISTORY_COARSE_CAPACITY, coarseHead, coarseCount, coarseOpen);
-    else        serializeTier(doc, nowSec, fineRing,   HISTORY_FINE_CAPACITY,   fineHead,   fineCount,   fineOpen);
+    serializeTier(doc, nowSec, coarseRange ? coarse : fine);
     xSemaphoreGive(historyMutex);
 }
 
@@ -355,15 +425,15 @@ namespace {
 // bucket that is at least ageSec - 5 min and at most ageSec + 10 min old
 // counts: its average then covers a time at least the nominal age back (a
 // "1 h" trend needs about an hour of uptime, the 3-h tendency about 3 h),
-// and a slightly older one bridges a missing bucket.
+// and a slightly older one bridges a missing bucket (gap).
 constexpr long AGO_EARLY_SEC = 300, AGO_LATE_SEC = 600;
 // Caller holds historyMutex.
 const HistorySample* fineSampleAgo(unsigned long nowSec, uint32_t ageSec, uint8_t needMask)
 {
     const HistorySample* best = nullptr;
     long bestDiff = 0;
-    for (size_t i = 0; i < fineCount; i++) {
-        const HistorySample& s = fineRing[i];
+    for (size_t i = 0; i < fine.count; i++) {
+        const HistorySample& s = fine.ring[i];
         if (!(s.validMask & needMask)) continue;
         long diff = (long)(nowSec - s.bucketEndSec) - (long)ageSec;
         if (diff < -AGO_EARLY_SEC || diff > AGO_LATE_SEC) continue;
@@ -391,25 +461,22 @@ bool historyTempAgo(uint32_t ageSec, float& tempC)
     return s != nullptr;
 }
 
-// A finished bucket holds the rain of the cycles merged since the previous
-// bucket was finalized, i.e. it covers (previous bucket's end, its own end].
-// It counts only if that whole span lies within the window, so the sum never
-// covers more than windowSec (it may cover up to one bucket, 5 min, less).
-// The open bucket - everything since the newest finished one - always counts.
+// A finished fine bucket covers the window (end - 5 min, end] and holds the
+// rain of the cycles that ended in it. It counts only if that whole window
+// lies within the requested one, so the sum never covers more than windowSec
+// (it may miss up to one bucket, 5 min, at the old end). The open bucket -
+// everything since the newest finished one - always counts.
 float historyRainSum(uint32_t windowSec)
 {
-    unsigned long nowSec = uptimeSec();
+    uint32_t nowSec = uptimeSec();
     float mm = 0.0f;
     xSemaphoreTake(historyMutex, portMAX_DELAY);
-    for (size_t k = 0; k < fineCount; k++) {   // newest first
-        const HistorySample& s = fineRing[(fineHead + HISTORY_FINE_CAPACITY - 1 - k) % HISTORY_FINE_CAPACITY];
-        unsigned long startSec = k + 1 < fineCount
-            ? fineRing[(fineHead + HISTORY_FINE_CAPACITY - 2 - k) % HISTORY_FINE_CAPACITY].bucketEndSec
-            : s.bucketEndSec - HISTORY_FINE_BUCKET_SEC;   // oldest one: nominal length
-        if (nowSec - startSec > windowSec) break;
+    for (size_t k = 0; k < fine.count; k++) {   // newest first
+        const HistorySample& s = fine.ring[(fine.head + fine.capacity - 1 - k) % fine.capacity];
+        if ((uint32_t)(nowSec - s.bucketEndSec + fine.bucketSec) > windowSec) break;
         if (s.validMask & VALID_RAIN) mm += s.rainAmountX100 / 100.0f;
     }
-    if (fineOpen.rainCount) mm += fineOpen.rainAmountSum;
+    if (fine.open.rainCount) mm += fine.open.rainAmountSum;
     xSemaphoreGive(historyMutex);
     return mm;
 }

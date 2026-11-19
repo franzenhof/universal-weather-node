@@ -50,6 +50,22 @@ Host-side project tests (no hardware required, run from the project root):
     matched rotation offsets, Q7 centroid 1.4 mm towards the leads, all other
     positions unchanged, plus the article/angle guards. Requires python3.
 
+- node test/api_contract.test.js
+    Compiles json_payload.cpp, history.cpp and api_info.cpp with
+    test/firmware_api.cpp (five deterministic fixtures: Bresser 7-in-1 +
+    BME280, Ecowitt WS90/WH31/WH51/WH57, PCB v2.0 fully equipped, imperial,
+    Heltec V4 after boot) and checks /api/data, /api/history and /api/info:
+    equal to docs/api/examples/ (numbers within 1e-4), valid against
+    docs/api/schemas/ (validator: test/json_schema_lite.js), every emitted
+    key described in a schema, every schema property described, no secret
+    in any document. Regenerate the examples after an intended change:
+    UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js
+    Requires a C++11 compiler and ArduinoJson from the PlatformIO build.
+
+- node test/doc_links.test.js
+    Every relative link, image and #anchor (GitHub heading ids) in the
+    project's Markdown files (git-tracked and new, without lib/) resolves.
+
 Run all scripts together: node --test test/*.test.js
 
 These are plain Node.js scripts, not PlatformIO unit tests; `pio test` is

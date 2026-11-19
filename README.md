@@ -50,6 +50,7 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 | receive my Bresser / Ecowitt / Froggit / TFA station | [Wireless Sensors](docs/wireless-sensors.md) |
 | build a station without the custom PCB | [Minimal Wireless Build](docs/minimal-build.md) |
 | see the dashboard, status page or REST API | [Web Interface](docs/web-dashboard.md) |
+| build my own display / app | [HTTP API for Your Own Display](docs/api.md) — contract, examples, mock server |
 | connect Home Assistant (MQTT) | [MQTT and Home Assistant](docs/mqtt-home-assistant.md) |
 | upload to AWEKAS, Weather Underground, Windy … | [Weather Networks](docs/weather-networks.md) |
 | feed a Loxone Miniserver | [Loxone](docs/loxone.md) |

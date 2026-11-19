@@ -14,6 +14,20 @@ The node can additionally receive wireless sensors on 868.3 MHz (FSK) **with the
 - **Fine Offset / Ecowitt / Froggit sensors** (868 MHz versions only): set *Wireless sensor type* to *Fine Offset / Ecowitt / Froggit* — or, together with IT+ thermo-hygro sensors, *TFA IT+ 17.241 kbit/s + Fine Offset*: both use 17.24 kbit/s with the same sync word and are received **in the same phase, nothing is missed**. Supported (formats from the rtl_433 documentation, each frame checked by CRC-8 and checksum): outdoor arrays **WH65 / WS69** (e.g. Froggit WH3000SE / WH4000SE; WS69 with pressure), **WS68**, **WS80**, **WS85**, **WS90**; thermo-hygro **WH31 / WN31 / DP50** (8 channels); probes **WN34 / DP35 / DP150**, **WN38** (globe temperature — select them as a temperature source deliberately); rain **WH40 / DP80**, **WN20** (the WS80, WS85, WS90, WS68 and WH65/WS69 arrays are solar-powered with a super capacitor, AA batteries only as backup — WS85 / WS90 also report the capacitor voltage); soil moisture **WH51 / DP100** and lightning **WH57 / DP60** (JSON and status page only). IDs read **`FFiiiiii`** — `FF` the model code, `iiiiii` the sensor ID as the Ecowitt app or rtl_433 shows it, e.g. WS90 `9000342B`, WH31 channel 1 `300001C3`. The old **WH24** sends the same frame as the WH65 with other units and can't be told apart — values follow the WH65. Not supported: WH25/WH32, air-quality, leak and WH1080 sensors, 433/915 MHz versions. **Not yet tested with real sensors.**
 - Decoding: Bresser with a fork of [BresserWeatherSensorReceiver](https://github.com/matthias-bs/BresserWeatherSensorReceiver) (MIT) in `lib/BresserWeatherSensorReceiver` — adapted to share the transceiver with LoRaWAN and to RadioLib 7; changes in its `FORK.md`. IT+ with `lib/TfaWeatherSensorReceiver` (own, MIT, same usage pattern — kept self-contained so it can become a stand-alone library). Fine Offset with `lib/FineOffsetSensorReceiver` (own, MIT, written from the rtl_433 format documentation, no code copied). 433 MHz (OOK) sensors are not supported (the SX1262 has no OOK receiver).
 
+## Idea: Davis wireless (Vantage Pro2 / Vantage Vue ISS)
+
+**Not implemented — looking for a tester.** The EU versions of the Davis Vantage Pro2 / Vue ISS and the anemometer transmitter 6332 also transmit on 868 MHz, and the protocol is publicly documented by the community (e.g. the VPTools project). Receiving it with the Heltec's SX1262 is possible in principle, but harder than Bresser or Ecowitt:
+
+- **Frequency hopping:** every packet on the next of 5 channels in a fixed sequence, at a fixed interval (about 2.56 s, depending on the transmitter ID). The receiver must stay synchronised with the hop sequence and timing; after a gap it has to re-acquire the transmitter, which takes several seconds.
+- **Rotating data:** wind comes in every packet, temperature, humidity, rain (bucket-tip counter with wrap-around), UV, solar radiation and battery in rotating message types.
+- **Exclusive use of the radio:** the radio has to follow the hop sequence continuously, so it would be a **Davis-only mode**:
+  - **no LoRaWAN in parallel** — every uplink with its receive windows breaks the synchronisation (at most occasional uplinks with gaps in the Davis data);
+  - **no other wireless sensors in parallel** (Bresser, Ecowitt, TFA);
+  - outputs via Wi-Fi only (dashboard, MQTT / Home Assistant, weather networks, Loxone).
+- It can only be developed and verified with a real **868 MHz Davis ISS** — the timing can't be tested against recorded frames alone.
+
+**You have a Davis Vantage Pro2 / Vue (868 MHz) and would like to test?** Please get in touch (GitHub issue or the [forum thread](https://wetterstationsforum.info/viewtopic.php?t=3273)). Wired Davis sensors (6410 anemometer, AeroCone rain gauge) are already supported via the [custom PCB](pcb.md).
+
 ## Value Sources
 
 Board sensors and wireless sensors can measure the same quantities. For each group one setting (web settings *Measurement*, portal field `srcs`, parameters 45–49) decides which sensor feeds **all** outputs — LoRaWAN, `/api/data` / MQTT, Home Assistant, weather networks, history, display:

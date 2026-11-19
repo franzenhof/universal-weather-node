@@ -68,7 +68,7 @@ It also shows the latest measurements and the [derived values](values.md#derived
 </table>
 <!-- /help:skip -->
 
-For scripts and integrations there is also a JSON API — see [REST API Endpoints](#rest-api-endpoints).
+For scripts, integrations and your own displays there is also a JSON API — see [REST API Endpoints](#rest-api-endpoints) and the [developer guide](api.md).
 
 ## Built-in Help Page
 
@@ -76,18 +76,19 @@ A snapshot of this documentation from **build time** — the README, the pages i
 
 ## REST API Endpoints
 
+The JSON endpoints are a documented, versioned contract for your own displays and apps — fields, units, polling, CORS and mDNS discovery: **[Building Your Own Display or App](api.md)** (with [OpenAPI file](api/openapi.yaml), JSON Schemas, example responses and a mock server).
+
 | Endpoint | Method | Auth | Purpose |
 |----------|--------|------|---------|
-| `/` | GET | – | Dashboard |
-| `/status` | GET | – | Status page (plain HTML, no JavaScript needed) |
-| `/chart` | GET | – | Redirect to `/` (old address) |
-| `/api/data` | GET | – | Current measurement JSON (same as the MQTT data topic) |
-| `/api/history` | GET | – | History JSON for the dashboard — 24 h, or 7 days with `?range=7d` |
+| `/api/info` | GET | – | Device description: name, firmware, board, units, available values, sources, cycle (CORS `*`) |
+| `/api/data` | GET | – | Current measurement JSON, same as the MQTT data topic (CORS `*`) |
+| `/api/history` | GET | – | History JSON — 24 h, or 7 days with `?range=7d` (CORS `*`) |
+| `/`, `/status`, `/help`, `/help.md` | GET | – | Dashboard, status page, help page and its Markdown source; `/chart` redirects to `/` |
 | `/api/settings` | GET / POST | admin | Settings form / save (POST: same-origin only, fields not sent keep their value) |
-| `/api/log` | GET | admin | Log viewer |
-| `/api/log/raw` | GET | admin | Log as plain text |
+| `/api/log`, `/api/log/raw` | GET | admin | Log viewer / log as plain text |
 | `/api/log/clear` | POST | admin | Clear the log (same-origin only) |
-| `/help`, `/help.md` | GET | – | Help page / its Markdown source (README + docs, one page) |
+
+The node also announces itself as `<hostname>.local` via mDNS (the device name in lower case, other characters as `-`; the same name is its Wi-Fi/DHCP hostname, shown on the status page) — see [Discovery](api.md#discovery-mdns).
 
 <!-- help:skip -->
 <img src="../pictures/wifi-rest-json.png" alt="REST API JSON response" width="60%">
@@ -100,4 +101,4 @@ chunked response, and MQTT sizes both its serialization buffer and packet buffer
 to the measured payload plus topic/header overhead. Allocation failures are
 logged (HTTP returns 500), rather than publishing truncated JSON.
 
-**History buffer:** two in-RAM ring buffers — 288 × 5 min (24 h) and 168 × 1 h (7 days), about 9 KB in total. Each cycle is merged into the current bucket of both: average for most values, maximum for gust, sum for rain amount. Disabled sensors leave gaps instead of zeros. The still-open bucket is included as the newest point, so charts show data right after boot. The buffer is cleared by a restart; for long-term history use Grafana via MQTT/ChirpStack. The dashboard's "now" values come from `/api/data`, not from the history; the rain tile is the exception and shows the sum of the history's rain amounts over the selected range.
+**History buffer:** two in-RAM ring buffers — 288 × 5 min (24 h) and 168 × 1 h (7 days), about 9 KB in total. The buckets are fixed windows (wall clock `:00`, `:05`, … and full hours once the clock is synced, uptime before); each cycle is merged into the bucket of both buffers in which it ends: average for most values, maximum for gust, sum for rain amount. One point per window, so the buffers cover exactly 24 h / 7 days whatever the measurement cycle: 60-s cycles give 5 per 5-min bucket, cycles longer than a bucket leave the windows in between empty. Disabled sensors and empty windows leave gaps instead of zeros. The still-open bucket is included as the newest point, so charts show data right after boot. The buffer is cleared by a restart; for long-term history use Grafana via MQTT/ChirpStack. The dashboard's "now" values come from `/api/data`, not from the history; the rain tile is the exception and shows the sum of the history's rain amounts over the selected range.

@@ -80,6 +80,14 @@ bool timeIsValid()
     return time(nullptr) >= MIN_VALID_EPOCH;
 }
 
+bool epochNow(int64_t& out)
+{
+    time_t now = time(nullptr);
+    if (now < MIN_VALID_EPOCH) return false;
+    out = (int64_t)now;
+    return true;
+}
+
 bool localTimeNow(struct tm& out)
 {
     time_t now = time(nullptr);

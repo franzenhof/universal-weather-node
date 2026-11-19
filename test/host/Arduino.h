@@ -41,6 +41,7 @@ inline void setCpuFrequencyMhz(int) {}
 struct HostESP {
     bool restarted=false;
     unsigned getFreeHeap() const { return 125000; }
+    uint64_t getEfuseMac() const { return 0x563412CDAB24ULL; }   // MAC 24:AB:CD:12:34:56 (byte 0 in the lowest bits)
     void restart() { restarted=true; }
 };
 extern HostESP ESP;

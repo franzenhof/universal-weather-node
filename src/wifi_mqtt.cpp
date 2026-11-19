@@ -8,9 +8,11 @@
 #include "units.h"
 #include "generated_version.h"
 #include "serial_log.h"
+#include "api_info.h"
 
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <esp_netif.h>
 #include <ping/ping_sock.h>
 #include <lwip/dns.h>
 #include <lwip/tcpip.h>
@@ -415,14 +417,26 @@ void handleCommandMessage(char* /*topic*/, byte* payload, unsigned int length)
     if (anyApplied) saveConfig(gCfg);
 }
 
-// Station mode, hostname and (optional) static IP before every WiFi.begin().
+// Hostname, station mode and (optional) static IP before every WiFi.begin().
+// The hostname is the same sanitised one mDNS announces (deviceHostname(),
+// also without a device name). The Arduino core applies WiFi.setHostname()
+// to the interface only when WiFi.mode() switches STA on, so it is set
+// before mode(); with STA already on (Wi-Fi change test, rollback) it goes
+// to the interface directly - DHCP sends it with the next WiFi.begin().
 // forceDhcp: ignore the configured static IP (a WiFi change to another
 // network - the static address belongs to the current one) and switch the
 // DHCP client back on if a static address was set before.
 bool prepareSta(bool forceDhcp = false)
 {
+    char host[HOSTNAME_MAX_LEN + 1];
+    deviceHostname(host, sizeof(host));
+    WiFi.setHostname(host);
+    bool staWasOn = WiFi.getMode() & WIFI_MODE_STA;
     WiFi.mode(WIFI_STA);
-    if (gCfg.deviceName[0] != '\0') WiFi.setHostname(gCfg.deviceName);
+    if (staWasOn) {
+        esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (sta) esp_netif_set_hostname(sta, host);
+    }
     bool useStaticIp = gCfg.staticIpEn && gCfg.staticIp[0] != '\0';
     if (useStaticIp && forceDhcp) {
         const IPAddress none(0, 0, 0, 0);   // not INADDR_NONE: lwIP defines that as 255.255.255.255

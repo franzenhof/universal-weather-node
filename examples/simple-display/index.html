@@ -1,0 +1,107 @@
+<!doctype html>
+<!-- Minimal display for a Universal Weather Node — a template for your own UI (docs/api.md).
+     No dependencies. Data from <node>/api/info and <node>/api/data; <node> = ?node=http://192.168.1.50
+     (any origin works: the node sends CORS headers), default: the origin this page was loaded from. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weather</title>
+<style>
+  :root { --bg: #f4f5f7; --card: #fff; --fg: #1d232b; --dim: #6b7480; --warn: #b4232c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111418; --card: #1b2027; --fg: #e8ebef; --dim: #8d96a1; --warn: #ff6b6b; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0 0 12px; font-size: 1.3rem; }
+  #state { color: var(--dim); font-size: .85rem; }
+  main { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+  .tile { background: var(--card); border-radius: 10px; padding: 14px; }
+  .label { color: var(--dim); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+  .value { font-size: 1.75rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sub { color: var(--dim); font-size: .9rem; min-height: 1.3em; }
+  #warnings { margin-top: 12px; color: var(--warn); font-weight: 600; }
+</style>
+</head>
+<body>
+<header><h1 id="name">Weather</h1><span id="state">connecting …</span></header>
+<main id="tiles"></main>
+<div id="warnings"></div>
+<script>
+'use strict';
+// Base URL of the node: ?node=http://garden.local, else this page's own origin.
+const NODE = (new URLSearchParams(location.search).get('node') || location.origin).replace(/\/+$/, '');
+let info = null, lastOk = 0;
+
+const has = (o, k) => o && o[k] !== undefined && o[k] !== null;   // absent = not available: never guess
+const fmt = (v, digits) => Number(v).toFixed(digits);
+const ARROWS = { rising: '↗', falling: '↘', steady: '→' };
+const tendencyArrow = (t) => (t ? ARROWS[t.split(' ')[0]] || '' : '');
+
+async function getJson(path) {
+  const r = await fetch(NODE + path, { cache: 'no-store' });
+  if (!r.ok) throw new Error(path + ': HTTP ' + r.status);
+  return r.json();
+}
+
+// One tile per available value; tiles for missing values are simply not drawn.
+function tiles(d) {
+  const t = [];
+  if (has(d, 'temp')) t.push(['Temperature', fmt(d.temp, 1) + ' °' + d.tempUnit,
+    has(d, 'feelsLike') ? 'feels like ' + fmt(d.feelsLike, 1) + ' °' + d.tempUnit : '']);
+  if (has(d, 'humidityPct')) t.push(['Humidity', fmt(d.humidityPct, 0) + ' %',
+    has(d, 'dewPoint') ? 'dew point ' + fmt(d.dewPoint, 1) + ' °' + d.tempUnit : '']);
+  if (has(d, 'pressureQnh')) t.push(['Pressure', fmt(d.pressureQnh, d.pressureUnit === 'inHg' ? 2 : 1) + ' ' + d.pressureUnit,
+    has(d, 'pressureTendency') ? tendencyArrow(d.pressureTendency) + ' ' + d.pressureTendency : 'tendency after ~3 h']);
+  if (has(d, 'windSpeed')) t.push(['Wind', fmt(d.windSpeed, 1) + ' ' + d.windUnit,
+    (d.windDirText || '') + ' · gusts ' + fmt(d.windGust, 1) + ' ' + d.windUnit]);
+  if (has(d, 'rainToday')) t.push(['Rain today', fmt(d.rainToday, d.rainUnit === 'in' ? 2 : 1) + ' ' + d.rainUnit,
+    has(d, 'rainRate') && d.rainRate > 0 ? fmt(d.rainRate, 1) + ' ' + d.rainRateUnit + ' now' : '']);
+  else if (has(d, 'rain24h')) t.push(['Rain 24 h', fmt(d.rain24h, d.rainUnit === 'in' ? 2 : 1) + ' ' + d.rainUnit, 'today: after clock sync']);
+  return t;
+}
+
+function render(d) {
+  const main = document.getElementById('tiles');
+  main.replaceChildren(...tiles(d).map(([label, value, sub]) => {
+    const div = document.createElement('div');
+    div.className = 'tile';
+    for (const [cls, text] of [['label', label], ['value', value], ['sub', sub]]) {
+      const e = document.createElement('div');
+      e.className = cls;
+      e.textContent = text;
+      div.append(e);
+    }
+    return div;
+  }));
+  const w = d.warnings || {};
+  const names = { frost: 'Frost', fog: 'Fog', sultry: 'Sultry' };
+  document.getElementById('warnings').textContent =
+    Object.keys(names).filter((k) => w[k]).map((k) => '⚠ ' + names[k]).join('   ');
+}
+
+async function refresh() {
+  let delaySec = 30;
+  try {
+    if (!info) {
+      info = await getJson('/api/info');
+      if (info.apiVersion !== 1) console.warn('written for apiVersion 1, node has', info.apiVersion);
+      document.getElementById('name').textContent = info.device.name || info.device.hostname;
+      document.title = (info.device.name || 'Weather') + ' — weather';
+    }
+    const d = await getJson('/api/data');
+    render(d);
+    lastOk = Date.now();
+    // New values exist after the current cycle: poll then (+2 s), within 5 s .. one cycle.
+    delaySec = Math.min(Math.max(d.nextCycleInSec + 2, 5), info.measurement.cycleSec);
+    document.getElementById('state').textContent = 'updated ' + new Date().toLocaleTimeString() + ' · next in ' + delaySec + ' s';
+  } catch (e) {
+    const age = lastOk ? Math.round((Date.now() - lastOk) / 1000) + ' s old' : 'no data';
+    document.getElementById('state').textContent = 'node not reachable (' + e.message + ') · ' + age;
+    info = null;   // re-read /api/info after an outage (the node may have restarted)
+  }
+  setTimeout(refresh, delaySec * 1000);
+}
+refresh();
+</script>
+</body>
+</html>

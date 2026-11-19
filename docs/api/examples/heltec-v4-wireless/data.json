@@ -1,0 +1,82 @@
+{
+  "apiVersion": 1,
+  "windDirDeg": 289,
+  "windSpeed": 14.19032,
+  "windGust": 25.75831,
+  "windUnit": "km/h",
+  "rainRate": 0,
+  "rainRateUnit": "mm/h",
+  "rain": 0,
+  "rainSinceStart": 0,
+  "rainUnit": "mm",
+  "temp": 18.34162,
+  "tempUnit": "C",
+  "humidityPct": 49.64927,
+  "pressureAbs": 946.8036,
+  "pressureQnh": 1013.004,
+  "pressureUnit": "hPa",
+  "sources": {
+    "tempHum": "board",
+    "wind": "radio:0000A1F3",
+    "rain": "radio:0000A1F3",
+    "uv": "none",
+    "light": "none"
+  },
+  "radioBatteryLow": false,
+  "dewPoint": 7.6,
+  "vpd": 1.06,
+  "vpdUnit": "kPa",
+  "feelsLike": 18.3,
+  "cloudBase": 1339,
+  "cloudBaseUnit": "m",
+  "windDirText": "WNW",
+  "rain1h": 0,
+  "rain24h": 0,
+  "warnings": {
+    "frost": false,
+    "fog": false,
+    "sultry": false
+  },
+  "status": {
+    "bme280Present": true,
+    "bus1Present": false,
+    "sendFailCount": 0,
+    "pcbRev": 0,
+    "board": "V4",
+    "boardFem": "KCT8103L",
+    "uvEnabled": false,
+    "uvIndexCalibrated": false
+  },
+  "nextCycleInSec": 237,
+  "cpuTemp": 41.5,
+  "cpuTempUnit": "C",
+  "resetReason": "power-on",
+  "rfSensors": [
+    {
+      "id": "0000A1F3",
+      "slot": 1,
+      "type": 1,
+      "protocol": "Bresser",
+      "rssi": -74,
+      "ageSec": 72,
+      "batteryOk": true,
+      "temp": 18.3,
+      "humidityPct": 50,
+      "windSpeed": 14.04,
+      "windGust": 25.92,
+      "windDirDeg": 289,
+      "rainTotal": 0
+    },
+    {
+      "id": "0000002C",
+      "slot": 2,
+      "type": 2,
+      "protocol": "IT+ 17.241 kbit/s",
+      "rssi": -90,
+      "ageSec": 94,
+      "batteryOk": false,
+      "temp": 17,
+      "humidityPct": 77
+    }
+  ]
+}

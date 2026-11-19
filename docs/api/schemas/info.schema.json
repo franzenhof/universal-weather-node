@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/franzenhof/universal-weather-node/docs/api/schemas/info.schema.json",
+  "title": "Universal Weather Node — device description (/api/info)",
+  "description": "What this node is and what /api/data will contain: read it once at start-up (and again after the node restarted, i.e. device.uptimeSec went down) to build your UI. Contains no secrets (no passwords, keys, station IDs, broker or coordinates). Stability: within apiVersion 1 fields are only added.",
+  "type": "object",
+  "required": ["apiVersion", "device", "firmware", "hardware", "units", "measurement", "history", "outputs", "available", "sources"],
+  "additionalProperties": true,
+  "properties": {
+    "apiVersion": { "type": "integer", "minimum": 1, "description": "API contract version (1). Check it first: refuse or warn on an unknown major version.", "x-present": "always" },
+    "device": {
+      "type": "object", "description": "Identity.", "x-present": "always",
+      "required": ["name", "hostname", "uptimeSec"], "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string", "maxLength": 32, "description": "Device name as configured (\"\" = none set). Use it as the station title.", "x-present": "always" },
+        "hostname": { "type": "string", "maxLength": 31, "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", "description": "Host name for mDNS (reachable as <hostname>.local) and Wi-Fi/DHCP (the same name). The device name in lower case with other characters as '-' (at most 31), else weathernode-<last 6 MAC hex digits>.", "x-present": "always" },
+        "uptimeSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last restart (the history is cleared by a restart).", "x-unit": "s", "x-present": "always" }
+      }
+    },
+    "firmware": {
+      "type": "object", "description": "Firmware.", "x-present": "always",
+      "required": ["version"], "additionalProperties": true,
+      "properties": {
+        "version": { "type": "string", "description": "Firmware version (git describe, e.g. 2.0.0, 2.0.0-rc.3, 2.0.0-rc.3-4-gabc1234-dirty for development builds).", "x-present": "always" },
+        "updateAvailable": { "type": "string", "pattern": "^[0-9A-Za-z.+-]+$", "description": "A newer version found by the update check (= /api/data firmwareUpdate).", "x-present": "update check on and a newer version found" }
+      }
+    },
+    "hardware": {
+      "type": "object", "description": "Board.", "x-present": "always",
+      "required": ["board", "pcbRev"], "additionalProperties": true,
+      "properties": {
+        "board": { "type": "string", "enum": ["V3", "V4", "V4-R8"], "description": "Heltec WiFi LoRa 32 board (= /api/data status.board).", "x-present": "always" },
+        "boardFem": { "type": "string", "enum": ["GC1109", "KCT8103L"], "description": "RF front end of a V4.", "x-present": "V4 with a detected front end" },
+        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20], "description": "PCB revision (= /api/data status.pcbRev): 12, 13 (also a board without PCB), 20 = v2.0, 0 = no PCB possible (V4).", "x-present": "always" }
+      }
+    },
+    "units": {
+      "type": "object", "description": "Units of every value in /api/data, /api/history and MQTT — always present, also when /api/data has no sibling unit field (e.g. rfSensors[] without a temperature source).", "x-present": "always",
+      "required": ["system", "temp", "pressure", "wind", "rain", "rainRate", "cloudBase", "tempTrend"], "additionalProperties": true,
+      "properties": {
+        "system": { "type": "string", "enum": ["metric", "imperial"], "description": "Unit system setting.", "x-present": "always" },
+        "temp": { "type": "string", "enum": ["C", "F"], "description": "Temperatures (temp, dewPoint, feelsLike, ds18b20, cpuTemp, rfSensors[].temp).", "x-present": "always" },
+        "pressure": { "type": "string", "enum": ["hPa", "inHg"], "description": "Pressures and pressureTrend3h.", "x-present": "always" },
+        "wind": { "type": "string", "enum": ["m/s", "km/h", "mph"], "description": "Wind speeds (also wind2 and rfSensors[]).", "x-present": "always" },
+        "rain": { "type": "string", "enum": ["mm", "in"], "description": "Rain amounts (rain, rain1h … rainYear, rfSensors[].rainTotal, history rainMm).", "x-present": "always" },
+        "rainRate": { "type": "string", "enum": ["mm/h", "in/h"], "description": "Rain rate.", "x-present": "always" },
+        "cloudBase": { "type": "string", "enum": ["m", "ft"], "description": "cloudBase.", "x-present": "always" },
+        "tempTrend": { "type": "string", "enum": ["K", "F"], "description": "tempTrend1h (a temperature difference: K or °F).", "x-present": "always" }
+      }
+    },
+    "measurement": {
+      "type": "object", "description": "Timing and station settings.", "x-present": "always",
+      "required": ["cycleSec", "windSampleSec", "mqttWindAggregation", "altitudeM", "clockSynced", "timeZone"], "additionalProperties": true,
+      "properties": {
+        "cycleSec": { "type": "integer", "minimum": 1, "description": "Measurement (base) cycle: /api/data changes once per cycle. Default 300.", "x-unit": "s", "x-present": "always" },
+        "windSampleSec": { "type": "integer", "enum": [1, 3], "description": "Wind sample interval of the board anemometer.", "x-unit": "s", "x-present": "always" },
+        "mqttWindAggregation": { "type": "string", "enum": ["interval", "10min"], "description": "Wind window of the MQTT payload: the MQTT interval, or the WMO 10-min mean. /api/data always uses the base cycle.", "x-present": "always" },
+        "altitudeM": { "type": "integer", "description": "Station altitude used for pressureQnh.", "x-unit": "m", "x-present": "always" },
+        "clockSynced": { "type": "boolean", "description": "NTP time has been received since the start; without it rainToday … rainYear, lastRain and sunshine are absent.", "x-present": "always" },
+        "timeZone": { "type": "string", "description": "Device time zone as POSIX TZ string (defines 'today' for rainToday etc.).", "x-present": "always" }
+      }
+    },
+    "history": {
+      "type": "object", "description": "History ranges served by /api/history.", "x-present": "always",
+      "required": ["ranges"], "additionalProperties": true,
+      "properties": {
+        "ranges": {
+          "type": "array", "minItems": 1, "description": "Available ranges.", "x-present": "always",
+          "items": {
+            "type": "object", "description": "One range.", "required": ["range", "bucketSec", "maxPoints"], "additionalProperties": true,
+            "properties": {
+              "range": { "type": "string", "enum": ["24h", "7d"], "description": "Value of the range query parameter.", "x-present": "always" },
+              "bucketSec": { "type": "integer", "minimum": 1, "description": "Bucket length.", "x-unit": "s", "x-present": "always" },
+              "maxPoints": { "type": "integer", "minimum": 1, "description": "Ring capacity (finished buckets); plus one open bucket.", "x-present": "always" }
+            }
+          }
+        }
+      }
+    },
+    "outputs": {
+      "type": "object", "description": "Enabled outputs/integrations — on/off only, no addresses or credentials.", "x-present": "always",
+      "required": ["wifi", "webApi", "mqtt", "mqttCommands", "lorawan", "loxone", "updateCheck", "weatherNetworks"], "additionalProperties": true,
+      "properties": {
+        "wifi": { "type": "boolean", "description": "Wi-Fi enabled.", "x-present": "always" },
+        "webApi": { "type": "boolean", "description": "Web interface/REST API enabled (true whenever you can read this).", "x-present": "always" },
+        "mqtt": { "type": "boolean", "description": "MQTT publishing enabled (same JSON as /api/data on <prefix>/data).", "x-present": "always" },
+        "mqttCommands": { "type": "boolean", "description": "MQTT command topic enabled.", "x-present": "always" },
+        "lorawan": { "type": "boolean", "description": "LoRaWAN enabled.", "x-present": "always" },
+        "loxone": { "type": "boolean", "description": "Loxone UDP push enabled.", "x-present": "always" },
+        "updateCheck": { "type": "boolean", "description": "Daily firmware update check enabled.", "x-present": "always" },
+        "weatherNetworks": {
+          "type": "array", "description": "Weather networks the node uploads to.", "x-present": "always (may be empty)",
+          "items": { "type": "string", "enum": ["awekas", "wunderground", "weathercloud", "wetternetzwerk", "windy", "opensensemap"], "description": "Network key." }
+        }
+      }
+    },
+    "available": {
+      "type": "object", "description": "Value groups /api/data currently carries — build your tiles from this. Can change at run time (e.g. a wireless sensor goes silent); /api/data presence is authoritative per cycle.", "x-present": "always",
+      "required": ["temp", "humidity", "pressure", "wind", "rain", "uvIndex", "light", "ds18b20Probes", "battery", "wirelessSensors", "uvSensorVolts", "wind2", "auxAnalog", "auxPulses", "heater", "fan", "victron"], "additionalProperties": true,
+      "properties": {
+        "temp": { "type": "boolean", "description": "temp (+ dewPoint, feelsLike, warnings …).", "x-present": "always" },
+        "humidity": { "type": "boolean", "description": "humidityPct (+ dewPoint, vpd, cloudBase).", "x-present": "always" },
+        "pressure": { "type": "boolean", "description": "pressureAbs/pressureQnh (BME280).", "x-present": "always" },
+        "wind": { "type": "boolean", "description": "A wind source is active.", "x-present": "always" },
+        "rain": { "type": "boolean", "description": "A rain source is active.", "x-present": "always" },
+        "uvIndex": { "type": "boolean", "description": "uvIndex.", "x-present": "always" },
+        "light": { "type": "boolean", "description": "lightLux (+ sunshine).", "x-present": "always" },
+        "ds18b20Probes": { "type": "integer", "minimum": 0, "maximum": 3, "description": "Number of DS18B20 probe slots (length of /api/data ds18b20).", "x-present": "always" },
+        "battery": { "type": "boolean", "description": "batteryVolt.", "x-present": "always" },
+        "wirelessSensors": { "type": "boolean", "description": "Wireless reception on: rfSensors, sources, radioBatteryLow.", "x-present": "always" },
+        "uvSensorVolts": { "type": "boolean", "description": "Board UV input (PCB v2.0).", "x-present": "always" },
+        "wind2": { "type": "boolean", "description": "wind2 object.", "x-present": "always" },
+        "auxAnalog": { "type": "boolean", "description": "auxAnalogV.", "x-present": "always" },
+        "auxPulses": { "type": "boolean", "description": "auxPulses/auxPulsesTotal.", "x-present": "always" },
+        "heater": { "type": "boolean", "description": "heater object.", "x-present": "always" },
+        "fan": { "type": "boolean", "description": "fan object.", "x-present": "always" },
+        "victron": { "type": "boolean", "description": "victron object.", "x-present": "always" }
+      }
+    },
+    "sources": {
+      "type": "object", "description": "Current source per value group (same format as /api/data sources, but always present).", "x-present": "always",
+      "required": ["tempHum", "wind", "rain", "uv", "light"], "additionalProperties": true,
+      "properties": {
+        "tempHum": { "$ref": "data.schema.json#/$defs/source", "description": "Temperature/humidity source." },
+        "wind": { "$ref": "data.schema.json#/$defs/source", "description": "Wind source." },
+        "rain": { "$ref": "data.schema.json#/$defs/source", "description": "Rain source." },
+        "uv": { "$ref": "data.schema.json#/$defs/source", "description": "UV source." },
+        "light": { "$ref": "data.schema.json#/$defs/source", "description": "Light source." }
+      }
+    }
+  }
+}

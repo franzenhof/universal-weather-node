@@ -1,0 +1,353 @@
+openapi: 3.1.0
+info:
+  title: Universal Weather Node HTTP API
+  version: "1"
+  summary: Local HTTP API of the Universal Weather Node (ESP32-S3 weather station firmware).
+  description: |
+    The node serves its measurements as JSON on port 80 of its Wi-Fi address
+    (also `http://<hostname>.local/`, see `/api/info` and docs/api.md).
+    The project deliberately has no big display — build your own UI against
+    the read-only endpoints `/api/info`, `/api/data` and `/api/history`.
+
+    * **Read-only endpoints** need no authentication and send
+      `Access-Control-Allow-Origin: *`, so a page from any origin may read
+      them (CORS). They never contain secrets.
+    * **Settings and log** (`/api/settings`, `/api/log*`) use HTTP Digest
+      authentication (user `admin`, the admin password set in the config
+      portal; without a password they answer 403). They send no CORS headers
+      and refuse cross-site POSTs (Origin/Referer must match Host).
+    * Plain HTTP only — keep the node inside your LAN.
+
+    **Contract and versioning:** every JSON document carries `apiVersion`
+    (currently `1`). Within one apiVersion fields are only *added*; renaming,
+    removing or changing the type/unit/meaning of a field requires
+    apiVersion 2. Ignore fields you don't know. A field that is absent means
+    "not available" — never assume 0.
+
+    Developer guide: docs/api.md. Example responses: docs/api/examples/.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+externalDocs:
+  description: Developer guide (docs/api.md)
+  url: https://github.com/franzenhof/universal-weather-node/blob/main/docs/api.md
+servers:
+  - url: http://{host}
+    description: A Universal Weather Node in your LAN
+    variables:
+      host:
+        default: weathernode.local
+        description: IP address or mDNS name (<hostname>.local, see /api/info device.hostname)
+  - url: http://localhost:8080
+    description: Mock server (tools/api-mock/mock_server.py)
+
+tags:
+  - name: data
+    description: Read-only JSON for UIs and integrations (no auth, CORS *)
+  - name: pages
+    description: The node's own HTML pages
+  - name: admin
+    description: Settings and log (Digest auth, same-origin)
+
+paths:
+  /api/info:
+    get:
+      tags: [data]
+      operationId: getInfo
+      summary: Device description
+      description: |
+        Name, mDNS host name, firmware, board, units, enabled outputs, which
+        value groups `/api/data` carries, value sources, cycle length and
+        history ranges. Read it at start-up and again when
+        `device.uptimeSec` went down (the node restarted).
+      responses:
+        "200":
+          description: Device description.
+          headers:
+            Access-Control-Allow-Origin: { $ref: "#/components/headers/AllowOrigin" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema: { $ref: "./schemas/info.schema.json" }
+              examples:
+                pcb-v2-full: { externalValue: "./examples/pcb-v2-full/info.json" }
+                bresser: { externalValue: "./examples/bresser-7in1-bme280/info.json" }
+        "500": { $ref: "#/components/responses/AllocationFailed" }
+    options:
+      tags: [data]
+      operationId: preflightInfo
+      summary: CORS preflight
+      responses:
+        "204": { $ref: "#/components/responses/Preflight" }
+
+  /api/data:
+    get:
+      tags: [data]
+      operationId: getData
+      summary: Current measurement
+      description: |
+        Values of the last completed measurement cycle — the same JSON the
+        node publishes on the MQTT topic `<prefix>/data` (MQTT may use a
+        different wind window, see `/api/info` measurement.mqttWindAggregation).
+        Does not trigger a measurement. New values exist every
+        `measurement.cycleSec`; poll again `nextCycleInSec` + 2 s later.
+        The response is sent with chunked transfer encoding.
+      responses:
+        "200":
+          description: Current values. Fields appear only while their sensor/function delivers.
+          headers:
+            Access-Control-Allow-Origin: { $ref: "#/components/headers/AllowOrigin" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema: { $ref: "./schemas/data.schema.json" }
+              examples:
+                bresser-7in1-bme280: { externalValue: "./examples/bresser-7in1-bme280/data.json" }
+                ecowitt: { externalValue: "./examples/ecowitt-ws90-wh31-wh51-wh57/data.json" }
+                pcb-v2-full: { externalValue: "./examples/pcb-v2-full/data.json" }
+                pcb-v2-imperial: { externalValue: "./examples/pcb-v2-imperial/data.json" }
+                heltec-v4-wireless: { externalValue: "./examples/heltec-v4-wireless/data.json" }
+        "500": { $ref: "#/components/responses/AllocationFailed" }
+    options:
+      tags: [data]
+      operationId: preflightData
+      summary: CORS preflight
+      responses:
+        "204": { $ref: "#/components/responses/Preflight" }
+
+  /api/history:
+    get:
+      tags: [data]
+      operationId: getHistory
+      summary: Bucketed history (in RAM, cleared by a restart)
+      description: |
+        Parallel arrays, oldest first; `ageSec[i]` is the age of bucket i's end
+        at the time of the response, the last element (ageSec 0) is the
+        still-open bucket. `null` = no data in that bucket.
+      parameters:
+        - name: range
+          in: query
+          required: false
+          description: |
+            `24h` (default): fine tier, nominal 5-min buckets, up to 288.
+            `7d`: coarse tier, nominal 1-h buckets, up to 168.
+            Any other value is treated as `24h`.
+          schema:
+            type: string
+            enum: ["24h", "7d"]
+            default: "24h"
+      responses:
+        "200":
+          description: History of the requested range.
+          headers:
+            Access-Control-Allow-Origin: { $ref: "#/components/headers/AllowOrigin" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema: { $ref: "./schemas/history.schema.json" }
+              examples:
+                24h: { externalValue: "./examples/pcb-v2-full/history-24h.json" }
+                7d: { externalValue: "./examples/pcb-v2-full/history-7d.json" }
+        "500": { $ref: "#/components/responses/AllocationFailed" }
+    options:
+      tags: [data]
+      operationId: preflightHistory
+      summary: CORS preflight
+      responses:
+        "204": { $ref: "#/components/responses/Preflight" }
+
+  /:
+    get:
+      tags: [pages]
+      operationId: getDashboard
+      summary: Built-in dashboard (HTML + JavaScript, reads /api/data and /api/history)
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+  /status:
+    get:
+      tags: [pages]
+      operationId: getStatusPage
+      summary: Status page (plain HTML, reloads every 30 s)
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+  /chart:
+    get:
+      tags: [pages]
+      operationId: getChartRedirect
+      summary: Old dashboard address
+      responses:
+        "302":
+          description: Redirect to `/`.
+          headers:
+            Location: { schema: { type: string, const: "/" } }
+  /help:
+    get:
+      tags: [pages]
+      operationId: getHelp
+      summary: Built-in documentation (README + docs + changelog as one page, works offline)
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+  /help.md:
+    get:
+      tags: [pages]
+      operationId: getHelpMarkdown
+      summary: Markdown source of /help
+      responses:
+        "200":
+          description: Markdown.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /api/settings:
+    get:
+      tags: [admin]
+      operationId: getSettings
+      summary: Settings form (HTML)
+      security: [{ digest: [] }]
+      parameters:
+        - name: saved
+          in: query
+          required: false
+          description: Present after a successful save (shows "Saved.").
+          schema: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+        "503": { $ref: "#/components/responses/LowMemory" }
+    post:
+      tags: [admin]
+      operationId: postSettings
+      summary: Save settings
+      description: |
+        Form fields as on the settings page (names in docs/settings.md); only
+        fields present in the request change, others keep their value. The
+        field `form` must be present. Same-origin only: a request carrying an
+        `Origin` or `Referer` whose host differs from `Host` is refused (403);
+        requests with neither header (curl, scripts) are accepted.
+      security: [{ digest: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [form]
+              properties:
+                form: { type: string, description: "Marker of a complete form submission (any value)." }
+              additionalProperties: { type: string }
+      responses:
+        "200":
+          description: Saved; the node restarts or switches Wi-Fi (HTML notice page).
+          content:
+            text/html:
+              schema: { type: string }
+        "303":
+          description: Saved without restart; redirect to `/api/settings?saved=1`.
+          headers:
+            Location: { schema: { type: string, const: "/api/settings?saved=1" } }
+        "400":
+          description: Incomplete form (no `form` field) or some values rejected (HTML page names them; the rest was saved).
+          content:
+            text/html:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403":
+          description: No admin password configured, or a cross-site request.
+          content:
+            text/plain:
+              schema: { type: string }
+        "503": { $ref: "#/components/responses/LowMemory" }
+
+  /api/log:
+    get:
+      tags: [admin]
+      operationId: getLogPage
+      summary: Live log viewer (HTML)
+      security: [{ digest: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+  /api/log/raw:
+    get:
+      tags: [admin]
+      operationId: getLogRaw
+      summary: Log buffer as plain text (last ~8 KB)
+      security: [{ digest: [] }]
+      responses:
+        "200":
+          description: Log text.
+          content:
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+  /api/log/clear:
+    post:
+      tags: [admin]
+      operationId: clearLog
+      summary: Clear the log buffer (same-origin only)
+      security: [{ digest: [] }]
+      responses:
+        "200":
+          description: Cleared.
+          content:
+            text/plain:
+              schema: { type: string, const: cleared }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403":
+          description: No admin password configured, or a cross-site request.
+          content:
+            text/plain:
+              schema: { type: string }
+
+components:
+  securitySchemes:
+    digest:
+      type: http
+      scheme: digest
+      description: HTTP Digest, user `admin`, realm "WeatherNode settings". Disabled (403) while no admin password is set.
+  headers:
+    AllowOrigin:
+      description: Any origin may read this read-only resource.
+      schema: { type: string, const: "*" }
+    NoStore:
+      description: Live data — do not cache.
+      schema: { type: string, const: no-store }
+  responses:
+    Html:
+      description: HTML page.
+      content:
+        text/html:
+          schema: { type: string }
+    AllocationFailed:
+      description: The JSON document could not be allocated (low memory) — retry later.
+      headers:
+        Access-Control-Allow-Origin: { $ref: "#/components/headers/AllowOrigin" }
+      content:
+        text/plain:
+          schema: { type: string }
+    DigestChallenge:
+      description: Authentication required (WWW-Authenticate Digest challenge).
+      headers:
+        WWW-Authenticate: { schema: { type: string } }
+    NoAdminPassword:
+      description: No admin password configured — the page is disabled.
+      content:
+        text/plain:
+          schema: { type: string }
+    LowMemory:
+      description: Not enough free memory to render the page right now — retry.
+      content:
+        text/plain:
+          schema: { type: string }
+    Preflight:
+      description: CORS preflight accepted (only needed when a client adds request headers).
+      headers:
+        Access-Control-Allow-Origin: { $ref: "#/components/headers/AllowOrigin" }
+        Access-Control-Allow-Methods: { schema: { type: string, const: "GET, OPTIONS" } }
+        Access-Control-Allow-Headers: { schema: { type: string, const: "*" } }
+        Access-Control-Allow-Private-Network: { schema: { type: string, const: "true" } }
+        Access-Control-Max-Age: { schema: { type: string, const: "86400" } }

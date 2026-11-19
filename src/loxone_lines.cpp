@@ -155,6 +155,7 @@ int loxoneLines(const JsonDocument& doc, const char* prefix, LoxLineFn fn, void*
     for (JsonPairConst kv : doc.as<JsonObjectConst>()) {
         const char* key = kv.key().c_str();
         JsonVariantConst v = kv.value();
+        if (!strcmp(key, "apiVersion")) continue;   // API contract version, not a measurement
         if (v.is<JsonObjectConst>()) {
             if      (!strcmp(key, "warnings")) emitObject(w, "warn", v.as<JsonObjectConst>());
             else if (!strcmp(key, "wind2") || !strcmp(key, "heater") || !strcmp(key, "fan") ||

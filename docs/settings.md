@@ -75,7 +75,7 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | **Wi-Fi + MQTT** | | |
 | Wi-Fi / web API | On/off switches | on |
 | MQTT / MQTT commands | On/off switches — see [MQTT and Home Assistant](mqtt-home-assistant.md) | off |
-| Device name | Wi-Fi hostname, MQTT client ID (characters outside `A–Z a–z 0–9 _ -` become `_`), default topic prefix | – |
+| Device name | Hostname for Wi-Fi/DHCP and mDNS (`<hostname>.local`): lower case, characters outside `a–z 0–9` → `-` (runs collapsed, none at the start or end), at most 31 characters (`"Weather Mast"` → `weather-mast`); without a name `weathernode-<last 6 MAC hex digits>`. Also the MQTT client ID (characters outside `A–Z a–z 0–9 _ -` become `_`) and default topic prefix | – |
 | Wi-Fi network and password | Portal (*Configure WiFi*) or web settings (tested for 60 s with rollback, or *store without test* for pre-provisioning) | – |
 | Static IP, gateway, subnet, DNS | Optional fixed LAN address; leave disabled to use DHCP. Configure in the portal's Wi-Fi form or the web settings page (restart required) | DHCP; subnet 255.255.255.0; DNS defaults to gateway |
 | MQTT broker, port, user, password, topic prefix, TLS mode, CA certificate | Broker connection | port 1883, no TLS |

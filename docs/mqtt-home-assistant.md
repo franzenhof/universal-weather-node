@@ -26,10 +26,11 @@ Any combination works. If the network is down, the MQTT message is simply skippe
 | `<prefix>/cmd` | broker → node | Commands (only with MQTT commands enabled) |
 | `<prefix>/status` | node → broker | `online` / `offline` (retained, via last will) |
 
-**Measurement JSON** (example with wind + BME280). Fields only appear for sensors that are enabled/detected, and each value has a sibling `*Unit` field:
+**Measurement JSON** (example with wind + BME280). Fields only appear for sensors that are enabled/detected, and each value has a sibling `*Unit` field. It is the same document as [`/api/data`](api.md) — every field with type, unit and presence rule is in the [JSON Schema](api/schemas/data.schema.json):
 
 ```json
 {
+  "apiVersion": 1,
   "windDirDeg": 345,
   "windSpeed": 3.546406,
   "windGust": 7.092811,
@@ -101,5 +102,5 @@ With MQTT enabled, the node registers itself in Home Assistant automatically (MQ
 - With wireless sensors on, temperature, humidity, wind, rain, *UV Index* and *Illuminance* are always announced (they follow the [value sources](wireless-sensors.md#value-sources) and show as unavailable while no source delivers them).
 - Derived values: *Dew Point*, *Feels Like*, *Cloud Base*, *Temperature Change (1 h)*, *Pressure Change (3 h)*, *Pressure Tendency*, *Weather Trend*, *Wind Direction (compass)*, *Rain Last Hour / Last 24 h / Today / Yesterday / This Week / This Month / This Year*, *Vapour Pressure Deficit*, *Last Rain* (timestamp), with wireless sensors *Sunshine Today / Yesterday*, and the warnings *Frost*, *Fog / Dew* and *Sultry* as binary sensors — ready for automations (e.g. a frost notification). *Firmware Update* with the update check on.
 - If you switch a sensor on or off, the entity list updates on the next MQTT reconnect.
-- The device ID (MQTT client ID, discovery `node_id`, `unique_id`) is the *device name* reduced to `A–Z a–z 0–9 _ -` (other characters become `_`); without a name `weathernode-<MAC>` (full 12-digit MAC). Since 2.0.0-beta.2 names with spaces or other characters, and unnamed nodes, get a new ID — Home Assistant then shows a new device; delete the old one.
+- The device ID (MQTT client ID, discovery `node_id`, `unique_id`) is the *device name* reduced to `A–Z a–z 0–9 _ -` (other characters become `_`); without a name `weathernode-<MAC>` (full 12-digit MAC). Since 2.0.0-beta.2 names with spaces or other characters, and unnamed nodes, get a new ID — Home Assistant then shows a new device; delete the old one. The node's network hostname (Wi-Fi/DHCP and mDNS `<hostname>.local`) is a different, DNS-safe form of the name: lower case with `-` (see [Device name](settings.md#settings-reference)).
 - If the broker is unreachable, reconnects back off from 15 s to at most 5 min.

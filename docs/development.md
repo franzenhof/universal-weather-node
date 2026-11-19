@@ -37,10 +37,10 @@ Or everything in one go with the factory image: `esptool.py --chip esp32s3 write
 Host-side, no hardware needed: Node.js and a C++11 compiler (`c++`, `g++` or `clang++`). Run a normal PlatformIO build first to restore ArduinoJson for the runtime regressions.
 
 ```bash
-node --test test/*.test.js           # all six test files: firmware runtime regressions and PCB v2.0 BOM/CPL checks
+node --test test/*.test.js           # all test files: firmware runtime regressions, API contract, doc links, PCB v2.0 BOM/CPL checks
 ```
 
-The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 design/BOM/CPL consistency (needs python3), and five real-module C++ regression programs with deterministic hardware fakes (sensors, I/O, LoRa transport, telemetry and payloads). See [test/README](../test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
+The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 design/BOM/CPL consistency (needs python3), and five real-module C++ regression programs with deterministic hardware fakes (sensors, I/O, LoRa transport, telemetry and payloads). The **API contract test** (`test/api_contract.test.js`) regenerates the [example responses](api.md#example-responses) of `/api/data`, `/api/history` and `/api/info` with the real serializers, compares them with `docs/api/examples/`, validates them against `docs/api/schemas/` and fails on any JSON key the schemas don't describe — after an intended change: `UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js`. The **link check** (`test/doc_links.test.js`) resolves every relative link and `#anchor` in the Markdown files. See [test/README](../test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
 
 ## Robustness
 
@@ -89,9 +89,10 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 │   ├── portal.h/.cpp        # Config portal (/decoder, /help, /calibrate)
 │   ├── params.h/.cpp        # Parameter IDs + commands (LoRaWAN, MQTT, web)
 │   ├── json_payload.h/.cpp  # Measurement JSON (MQTT + REST)
+│   ├── api_info.h/.cpp      # /api/info, API version, mDNS host name (docs/api.md)
 │   ├── units.h/.cpp         # Metric/Imperial conversion
 │   ├── wifi_mqtt.h/.cpp     # Wi-Fi/MQTT, Home Assistant discovery, MQTT commands
-│   ├── web_api.h/.cpp       # REST API, status page, settings page
+│   ├── web_api.h/.cpp       # REST API (CORS), mDNS, status page, settings page
 │   ├── time_sync.h/.cpp     # NTP + time zone
 │   └── wx_upload.h/.cpp     # Weather network uploads, daily totals, firmware update check
 ├── include/
@@ -104,7 +105,10 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 ├── lib/TfaWeatherSensorReceiver/     # TFA / LaCrosse IT+ 868 MHz receiver + decoder (own, MIT), see its README
 ├── lib/FineOffsetSensorReceiver/    # Fine Offset (Ecowitt / Froggit) 868 MHz receiver + decoder (own, MIT)
 ├── chirpstack/decoder.js    # Payload decoder (ChirpStack v3/v4, TTN)
-├── test/                    # Decoder, round-trip, VE.Direct and firmware runtime tests
+├── test/                    # Decoder, round-trip, VE.Direct, firmware runtime, API contract and link tests
+├── docs/api/                # OpenAPI file, JSON Schemas, generated example responses
+├── examples/simple-display/ # Minimal third-party display (one HTML file)
+├── tools/api-mock/          # Mock node for UI development (Python stdlib)
 ├── tools/version.py         # Pre-build script: version, decoder, help (README + docs) headers
 ├── partitions.csv           # Partition table (with cfgdata)
 ├── firmware/                # Release binaries (OTA)

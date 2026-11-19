@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/franzenhof/universal-weather-node/docs/api/schemas/data.schema.json",
+  "title": "Universal Weather Node — current measurement (/api/data, MQTT <prefix>/data)",
+  "description": "Values of the last completed measurement cycle. A field is present only while its sensor/function delivers a value: absent = not available (never 0 or a guess). Numbers are not rounded unless stated; round for display. Units: a field with x-unit-field takes its unit from that sibling field (or from /api/info units when the sibling is absent); x-unit is a fixed unit. x-present says when the field exists. Stability: within apiVersion 1 fields are only added, never renamed, removed or retyped.",
+  "type": "object",
+  "required": ["apiVersion", "status", "nextCycleInSec", "cpuTemp", "cpuTempUnit", "resetReason"],
+  "additionalProperties": true,
+  "properties": {
+    "apiVersion": {
+      "type": "integer", "minimum": 1,
+      "description": "API contract version (1). Incremented only for incompatible changes (rename, removal, type or unit change).",
+      "x-present": "always"
+    },
+
+    "windDirDeg": {
+      "type": "integer", "minimum": 0, "maximum": 360,
+      "description": "Wind direction the wind blows FROM, degrees clockwise from north (0 and 360 = north). Average of the cycle (board vane: last value; wireless: vector mean).",
+      "x-unit": "deg", "x-present": "a wind source is active (sources.wind not \"none\") and the cycle had a valid wind sample"
+    },
+    "windSpeed": {
+      "type": "number", "minimum": 0,
+      "description": "Mean wind speed of the cycle (MQTT: of the MQTT interval or the 10-min WMO window, see the device setting).",
+      "x-unit-field": "windUnit", "x-present": "like windDirDeg"
+    },
+    "windGust": {
+      "type": "number", "minimum": 0,
+      "description": "Highest 3-s gust of the cycle (wireless sensors: the highest gust the sensor reported).",
+      "x-unit-field": "windUnit", "x-present": "like windDirDeg"
+    },
+    "windUnit": {
+      "type": "string", "enum": ["m/s", "km/h", "mph"],
+      "description": "Unit of windSpeed, windGust, wind2.speed/gust and the rfSensors[] wind values. Imperial = mph; metric = m/s or km/h (device setting).",
+      "x-present": "like windDirDeg"
+    },
+
+    "rainRate": {
+      "type": "number", "minimum": 0,
+      "description": "Rain intensity: rain of the cycle scaled to one hour.",
+      "x-unit-field": "rainRateUnit", "x-present": "a rain source is active (sources.rain not \"none\")"
+    },
+    "rainRateUnit": {
+      "type": "string", "enum": ["mm/h", "in/h"],
+      "description": "Unit of rainRate.", "x-present": "like rainRate"
+    },
+    "rain": {
+      "type": "number", "minimum": 0,
+      "description": "Rain amount of this cycle (MQTT: of the MQTT interval).",
+      "x-unit-field": "rainUnit", "x-present": "like rainRate"
+    },
+    "rainSinceStart": {
+      "type": "number", "minimum": 0,
+      "description": "Running rain total since the last restart or rain reset (monotonic; for your own differencing).",
+      "x-unit-field": "rainUnit", "x-present": "like rainRate"
+    },
+    "rainUnit": {
+      "type": "string", "enum": ["mm", "in"],
+      "description": "Unit of rain, rainSinceStart, rain1h … rainYear and rfSensors[].rainTotal.",
+      "x-present": "like rainRate"
+    },
+
+    "temp": {
+      "type": "number",
+      "description": "Air temperature from the selected source (sources.tempHum: board BME280 or a wireless sensor).",
+      "x-unit-field": "tempUnit", "x-present": "a temperature source delivers (sources.tempHum not \"none\")"
+    },
+    "tempUnit": {
+      "type": "string", "enum": ["C", "F"],
+      "description": "Unit of temp, dewPoint, feelsLike and tempTrend1h (C → K, F → °F difference). Not present without a temperature source — use /api/info units.temp for rfSensors[] temperatures.",
+      "x-present": "like temp"
+    },
+    "humidityPct": {
+      "type": "number", "minimum": 0, "maximum": 100,
+      "description": "Relative humidity from the same source as temp.",
+      "x-unit": "%", "x-present": "temp is present and the source delivers humidity"
+    },
+
+    "pressureAbs": {
+      "type": "number", "minimum": 0,
+      "description": "Station (absolute) air pressure, BME280.",
+      "x-unit-field": "pressureUnit", "x-present": "a BME280 is detected (status.bme280Present)"
+    },
+    "pressureQnh": {
+      "type": "number", "minimum": 0,
+      "description": "Pressure reduced to sea level (QNH) with the configured altitude — the value to display.",
+      "x-unit-field": "pressureUnit", "x-present": "like pressureAbs"
+    },
+    "pressureUnit": {
+      "type": "string", "enum": ["hPa", "inHg"],
+      "description": "Unit of pressureAbs, pressureQnh and pressureTrend3h.",
+      "x-present": "like pressureAbs"
+    },
+
+    "ds18b20": {
+      "type": "array", "minItems": 1, "maxItems": 3,
+      "items": {
+        "type": ["number", "null"],
+        "description": "Temperature of probe slot i; null = probe found at start but not readable now."
+      },
+      "description": "DS18B20 1-Wire probes (PCB), one entry per probe slot found at start, in ROM search order (not cable order).",
+      "x-unit-field": "ds18b20Unit", "x-present": "at least one probe was found (status.bus1Present)"
+    },
+    "ds18b20Unit": {
+      "type": "string", "enum": ["C", "F"],
+      "description": "Unit of the ds18b20 values.", "x-present": "like ds18b20"
+    },
+
+    "batteryVolt": {
+      "type": ["number", "null"], "minimum": 0,
+      "description": "LiPo battery voltage at the Heltec board (null = failed reading).",
+      "x-unit": "V", "x-present": "LiPo measurement enabled (setting lipoEn)"
+    },
+
+    "uvEnabled": {
+      "type": "boolean",
+      "description": "PCB v2.0 UV input in use as the UV source (always true when present).",
+      "x-present": "PCB v2.0 and the board UV input is the selected UV source"
+    },
+    "uvIndexCalibrated": {
+      "type": "boolean",
+      "description": "The board UV input has an enabled, confirmed calibration (only then uvIndex comes from the board).",
+      "x-present": "like uvEnabled"
+    },
+    "uvSensorVolts": {
+      "type": "number", "minimum": 0,
+      "description": "Raw UV sensor terminal voltage, cycle average (PCB v2.0 UV input).",
+      "x-unit-field": "uvSensorVoltsUnit", "x-present": "like uvEnabled, and a valid reading"
+    },
+    "uvSensorVoltsUnit": {
+      "type": "string", "const": "V",
+      "description": "Unit of uvSensorVolts.", "x-present": "like uvSensorVolts"
+    },
+    "uvIndex": {
+      "type": "number", "minimum": 0,
+      "description": "UV index: from a wireless sensor (sources.uv = radio:…) or the calibrated board UV input.",
+      "x-unit-field": "uvIndexUnit", "x-present": "a UV source delivers an index"
+    },
+    "uvIndexUnit": {
+      "type": "string", "const": "index",
+      "description": "Unit of uvIndex (dimensionless UV index).", "x-present": "like uvIndex"
+    },
+
+    "auxAnalogV": {
+      "type": "number",
+      "description": "PCB v2.0 AUX analog input, cycle average, scaled to the terminal voltage.",
+      "x-unit": "V", "x-present": "PCB v2.0, AUX analog enabled and not used by wind 2 direction"
+    },
+    "wind2": {
+      "type": "object",
+      "description": "Second anemometer on the PCB v2.0 AUX inputs.",
+      "x-present": "PCB v2.0 and wind 2 enabled (setting wind2Mode 1 or 2)",
+      "required": ["speed", "gust"],
+      "additionalProperties": true,
+      "properties": {
+        "speed": { "type": "number", "minimum": 0, "description": "Mean wind speed of the cycle.", "x-unit-field": "windUnit (top level) / /api/info units.wind", "x-present": "always in wind2" },
+        "gust": { "type": "number", "minimum": 0, "description": "Highest 3-s gust of the cycle.", "x-unit-field": "windUnit (top level) / /api/info units.wind", "x-present": "always in wind2" },
+        "dirDeg": { "type": "integer", "minimum": 0, "maximum": 360, "description": "Direction of the second vane, degrees from north.", "x-unit": "deg", "x-present": "wind2Mode 2 (speed + direction)" }
+      }
+    },
+    "auxPulses": {
+      "type": "integer", "minimum": 0,
+      "description": "PCB v2.0 AUX pulse counter: pulses in this cycle.",
+      "x-unit": "pulses", "x-present": "PCB v2.0, AUX pulse counter enabled and wind 2 off"
+    },
+    "auxPulsesTotal": {
+      "type": "integer", "minimum": 0,
+      "description": "AUX pulses since power-on or the last resetAuxPulses command.",
+      "x-unit": "pulses", "x-present": "like auxPulses"
+    },
+    "heater": {
+      "type": "object",
+      "description": "PCB v2.0 heater output state.",
+      "x-present": "PCB v2.0 and heater mode on or auto",
+      "required": ["mode", "on", "dutyPct"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "type": "string", "enum": ["on", "auto"], "description": "Configured mode.", "x-present": "always in heater" },
+        "on": { "type": "boolean", "description": "Output currently driven.", "x-present": "always in heater" },
+        "dutyPct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "PWM duty currently driven.", "x-unit": "%", "x-present": "always in heater" }
+      }
+    },
+    "fan": {
+      "type": "object",
+      "description": "PCB v2.0 fan output state and tacho.",
+      "x-present": "PCB v2.0 and fan mode on/auto or the tacho enabled",
+      "required": ["mode", "on", "dutyPct"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "on", "auto"], "description": "Configured mode.", "x-present": "always in fan" },
+        "on": { "type": "boolean", "description": "Output currently driven.", "x-present": "always in fan" },
+        "dutyPct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "PWM duty currently driven.", "x-unit": "%", "x-present": "always in fan" },
+        "rpm": { "type": "integer", "minimum": 0, "description": "Fan speed, cycle average.", "x-unit": "rpm", "x-present": "tacho enabled" },
+        "stalled": { "type": "boolean", "description": "Fan on at 100 % for a whole cycle without tacho pulses.", "x-present": "tacho enabled" }
+      }
+    },
+    "victron": {
+      "type": "object",
+      "description": "Victron VE.Direct charger/battery monitor (PCB v2.0). Each value only if the device sends it.",
+      "x-present": "PCB v2.0 and VE.Direct enabled",
+      "required": ["valid"],
+      "additionalProperties": true,
+      "properties": {
+        "valid": { "type": "boolean", "description": "A valid VE.Direct block arrived within the last 10 s; the values below only exist while true.", "x-present": "always in victron" },
+        "batteryV": { "type": "number", "description": "Battery voltage.", "x-unit": "V", "x-present": "valid and sent by the device" },
+        "batteryA": { "type": "number", "description": "Battery current, negative = discharge.", "x-unit": "A", "x-present": "valid and sent by the device" },
+        "pvV": { "type": "number", "description": "PV (panel) voltage.", "x-unit": "V", "x-present": "valid and sent (MPPT chargers)" },
+        "pvW": { "type": "number", "description": "PV power.", "x-unit": "W", "x-present": "valid and sent (MPPT chargers)" },
+        "yieldTodayKWh": { "type": "number", "minimum": 0, "description": "Yield today (charger's own day).", "x-unit": "kWh", "x-present": "valid and sent (MPPT chargers)" },
+        "socPct": { "type": "number", "minimum": 0, "maximum": 100, "description": "State of charge.", "x-unit": "%", "x-present": "valid and sent (BMV/SmartShunt)" },
+        "loadA": { "type": "number", "description": "Load output current.", "x-unit": "A", "x-present": "valid and sent (MPPT with load output)" },
+        "chargeState": { "type": "integer", "minimum": 0, "description": "VE.Direct CS: 0 off, 2 fault, 3 bulk, 4 absorption, 5 float, 7 equalize, 245 starting up, 247 auto equalize, 252 external control.", "x-present": "valid and sent" },
+        "error": { "type": "integer", "minimum": 0, "description": "VE.Direct ERR code, 0 = no error.", "x-present": "valid and sent" }
+      }
+    },
+
+    "lightLux": {
+      "type": "number", "minimum": 0,
+      "description": "Illuminance from the selected light source (wireless sensor).",
+      "x-unit": "lx", "x-present": "a light source delivers (sources.light not \"none\")"
+    },
+    "sources": {
+      "type": "object",
+      "description": "Which sensor currently feeds each value group: \"board\", \"radio:<8-hex-digit sensor id>\" (see rfSensors[].id) or \"none\".",
+      "x-present": "wireless sensors enabled (setting rfEn); /api/info sources is always present",
+      "required": ["tempHum", "wind", "rain", "uv", "light"],
+      "additionalProperties": true,
+      "properties": {
+        "tempHum": { "$ref": "#/$defs/source", "description": "Source of temp/humidityPct." },
+        "wind": { "$ref": "#/$defs/source", "description": "Source of windSpeed/windGust/windDirDeg." },
+        "rain": { "$ref": "#/$defs/source", "description": "Source of the rain values." },
+        "uv": { "$ref": "#/$defs/source", "description": "Source of uvIndex." },
+        "light": { "$ref": "#/$defs/source", "description": "Source of lightLux and the sunshine duration." }
+      }
+    },
+    "radioBatteryLow": {
+      "type": "boolean",
+      "description": "A wireless sensor that is currently a value source reports a low battery (also present as false).",
+      "x-present": "wireless sensors enabled"
+    },
+
+    "dewPoint": {
+      "type": "number",
+      "description": "Dew point from temp and humidityPct, rounded to 0.1.",
+      "x-unit-field": "tempUnit", "x-present": "temp and humidityPct present"
+    },
+    "vpd": {
+      "type": "number", "minimum": 0,
+      "description": "Vapour pressure deficit, rounded to 0.01.",
+      "x-unit-field": "vpdUnit", "x-present": "temp and humidityPct present"
+    },
+    "vpdUnit": {
+      "type": "string", "const": "kPa",
+      "description": "Unit of vpd (kPa in both unit systems).", "x-present": "like vpd"
+    },
+    "feelsLike": {
+      "type": "number",
+      "description": "Feels-like temperature: wind chill when it applies, else heat index when it applies, else temp. Rounded to 0.1.",
+      "x-unit-field": "tempUnit", "x-present": "temp present"
+    },
+    "cloudBase": {
+      "type": "integer", "minimum": 0,
+      "description": "Estimated cumulus cloud base above the station (125 m per K of temperature/dew-point spread).",
+      "x-unit-field": "cloudBaseUnit", "x-present": "temp and humidityPct present"
+    },
+    "cloudBaseUnit": {
+      "type": "string", "enum": ["m", "ft"],
+      "description": "Unit of cloudBase.", "x-present": "like cloudBase"
+    },
+    "windDirText": {
+      "type": "string", "enum": ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"],
+      "description": "16-point compass text of windDirDeg (English abbreviations; translate in your UI).",
+      "x-present": "a wind source is active"
+    },
+    "pressureTrend3h": {
+      "type": "number",
+      "description": "QNH change over the last 3 hours, rounded to 0.01.",
+      "x-unit-field": "pressureUnit", "x-present": "BME280 and at least ~3 h of history since the start"
+    },
+    "pressureTendency": {
+      "type": "string",
+      "enum": ["falling very rapidly", "falling quickly", "falling", "falling slowly", "steady", "rising slowly", "rising", "rising quickly", "rising very rapidly"],
+      "description": "Barometric tendency class of pressureTrend3h (Met Office classes). Machine-readable English keys.",
+      "x-present": "like pressureTrend3h"
+    },
+    "weatherTrend": {
+      "type": "string", "enum": ["storm warning", "worsening", "improving", "settled", "unsettled", "no change"],
+      "description": "Barometer rule of thumb from the 3-h tendency and QNH (no forecast model). Machine-readable English keys.",
+      "x-present": "like pressureTrend3h"
+    },
+    "tempTrend1h": {
+      "type": "number",
+      "description": "Temperature change over the last hour (K in metric, °F in imperial), rounded to 0.1.",
+      "x-unit-field": "tempUnit (C → K, F → °F)", "x-present": "temp present and at least ~1 h of history"
+    },
+    "rain1h": {
+      "type": "number", "minimum": 0,
+      "description": "Rain in the last hour (rolling; at most one 5-min bucket short).",
+      "x-unit-field": "rainUnit", "x-present": "a rain source is active"
+    },
+    "rain24h": {
+      "type": "number", "minimum": 0,
+      "description": "Rain in the last 24 hours (rolling; since start if the node runs shorter).",
+      "x-unit-field": "rainUnit", "x-present": "a rain source is active"
+    },
+    "rainToday": {
+      "type": "number", "minimum": 0,
+      "description": "Rain since local midnight (device time zone).",
+      "x-unit-field": "rainUnit", "x-present": "a rain source is active and the clock has been synced (NTP)"
+    },
+    "rainWeek": {
+      "type": "number", "minimum": 0,
+      "description": "Rain this ISO week (Monday start, local time).",
+      "x-unit-field": "rainUnit", "x-present": "like rainToday"
+    },
+    "rainMonth": {
+      "type": "number", "minimum": 0,
+      "description": "Rain this calendar month.",
+      "x-unit-field": "rainUnit", "x-present": "like rainToday"
+    },
+    "rainYear": {
+      "type": "number", "minimum": 0,
+      "description": "Rain this calendar year.",
+      "x-unit-field": "rainUnit", "x-present": "like rainToday"
+    },
+    "rainYesterday": {
+      "type": "number", "minimum": 0,
+      "description": "Rain yesterday (local day).",
+      "x-unit-field": "rainUnit", "x-present": "like rainToday, and the node knows yesterday's total"
+    },
+    "lastRain": {
+      "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "Time of the last rain, ISO 8601 UTC (the only absolute timestamp in this document).",
+      "x-present": "a rain source is active and rain has been recorded since the clock was synced"
+    },
+    "sunshineTodayMin": {
+      "type": "integer", "minimum": 0, "maximum": 1440,
+      "description": "Sunshine duration today, estimated from illuminance ≥ 15 000 lx.",
+      "x-unit": "min", "x-present": "a light source is active and the clock has been synced"
+    },
+    "sunshineYesterdayMin": {
+      "type": "integer", "minimum": 0, "maximum": 1440,
+      "description": "Sunshine duration yesterday.",
+      "x-unit": "min", "x-present": "like sunshineTodayMin, and yesterday is known"
+    },
+    "warnings": {
+      "type": "object",
+      "description": "Weather warnings computed on the node.",
+      "x-present": "temp present",
+      "required": ["frost", "fog", "sultry"],
+      "additionalProperties": true,
+      "properties": {
+        "frost": { "type": "boolean", "description": "Temperature ≤ 0 °C.", "x-present": "always in warnings" },
+        "fog": { "type": "boolean", "description": "Fog/dew likely: spread ≤ 1 K and humidity ≥ 95 %.", "x-present": "always in warnings" },
+        "sultry": { "type": "boolean", "description": "Dew point ≥ 16 °C.", "x-present": "always in warnings" }
+      }
+    },
+    "firmwareUpdate": {
+      "type": "string", "pattern": "^[0-9A-Za-z.+-]+$",
+      "description": "A newer firmware version found by the daily update check.",
+      "x-present": "update check enabled and a newer version found"
+    },
+
+    "status": {
+      "type": "object",
+      "description": "Device and hardware status.",
+      "x-present": "always",
+      "required": ["bme280Present", "bus1Present", "sendFailCount", "pcbRev", "board", "uvEnabled", "uvIndexCalibrated"],
+      "additionalProperties": true,
+      "properties": {
+        "bme280Present": { "type": "boolean", "description": "A BME280 was detected.", "x-present": "always" },
+        "bus1Present": { "type": "boolean", "description": "At least one DS18B20 probe was found.", "x-present": "always" },
+        "sendFailCount": { "type": "integer", "minimum": 0, "description": "Consecutive failed LoRaWAN uplinks (0 without LoRaWAN).", "x-present": "always" },
+        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20], "description": "PCB revision: 12 = Rev 1.2, 13 = Rev 1.3 (also the default of a board without PCB), 20 = v2.0, 0 = none possible (Heltec V4).", "x-present": "always" },
+        "board": { "type": "string", "enum": ["V3", "V4", "V4-R8"], "description": "Heltec WiFi LoRa 32 board in effect (V4-R8 = unsupported PSRAM variant).", "x-present": "always" },
+        "boardFem": { "type": "string", "enum": ["GC1109", "KCT8103L"], "description": "RF front-end module detected on a V4.", "x-present": "Heltec V4 with a detected front end" },
+        "uvEnabled": { "type": "boolean", "description": "PCB v2.0 UV input enabled.", "x-present": "always" },
+        "uvIndexCalibrated": { "type": "boolean", "description": "PCB v2.0 UV input enabled with a valid calibration.", "x-present": "always" },
+        "batteryLowLockout": { "type": "boolean", "const": true, "description": "Heater/fan held off because of a low battery.", "x-present": "only while the lockout holds" }
+      }
+    },
+    "nextCycleInSec": {
+      "type": "integer", "minimum": 0,
+      "description": "Seconds until the current measurement cycle completes and new values exist. Poll /api/data a few seconds after this.",
+      "x-unit": "s", "x-present": "always"
+    },
+    "cpuTemp": {
+      "type": "number",
+      "description": "ESP32-S3 chip temperature (10–20 K above ambient) — enclosure health, not an air temperature.",
+      "x-unit-field": "cpuTempUnit", "x-present": "always"
+    },
+    "cpuTempUnit": {
+      "type": "string", "enum": ["C", "F"],
+      "description": "Unit of cpuTemp (follows the unit system; always present).", "x-present": "always"
+    },
+    "resetReason": {
+      "type": "string",
+      "enum": ["power-on", "external reset", "software restart", "crash (panic)", "watchdog (interrupt)", "watchdog (task)", "watchdog", "deep-sleep wake", "brownout (supply voltage dip)", "SDIO reset", "unknown"],
+      "description": "Cause of the last restart.", "x-present": "always"
+    },
+
+    "rfSensors": {
+      "type": "array",
+      "description": "Every wireless sensor received since the start (at most 4), in reception order. Values in the configured units: temperatures in /api/info units.temp, wind in windUnit/units.wind, rain in rainUnit/units.rain.",
+      "x-present": "wireless sensors enabled (setting rfEn); may be empty",
+      "items": { "$ref": "#/$defs/rfSensor" }
+    },
+
+    "cycle": {
+      "type": "integer", "minimum": 0, "maximum": 255,
+      "description": "Debug: measurement cycle counter (8 bit, wraps).", "x-present": "debug mode on"
+    },
+    "freeHeapKiB": {
+      "type": "number", "minimum": 0,
+      "description": "Debug: free heap.", "x-unit": "KiB", "x-present": "debug mode on"
+    },
+    "uptimeH": {
+      "type": "number", "minimum": 0,
+      "description": "Debug: uptime.", "x-unit": "h", "x-present": "debug mode on (/api/info device.uptimeSec is always there)"
+    }
+  },
+
+  "$defs": {
+    "source": {
+      "type": "string", "pattern": "^(board|none|radio:[0-9A-F]{8})$",
+      "description": "\"board\", \"none\" or \"radio:<sensor id>\"."
+    },
+    "rfSensor": {
+      "type": "object",
+      "description": "One wireless sensor. Value fields exist only for what the sensor sends.",
+      "required": ["id", "type", "protocol", "rssi", "ageSec", "batteryOk"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9A-F]{8}$", "description": "Sensor ID, 8 upper-case hex digits (Bresser IDs change with a battery change).", "x-present": "always" },
+        "slot": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Wireless sensor number 1–4 used by the value-source setting (ID-list order, else reception order).", "x-present": "the sensor occupies a source slot" },
+        "type": { "type": "integer", "minimum": 0, "maximum": 15, "description": "Bresser sensor type number: 0/1/12/13 weather station, 2 thermo-hygro, 3 pool thermometer, 4 soil, 5 leakage, 8 air quality PM, 9 rain gauge or lightning, 10 CO2, 11 HCHO/VOC. Fine Offset and IT+ sensors are mapped to the same numbers.", "x-present": "always" },
+        "protocol": { "type": "string", "enum": ["Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset"], "description": "Radio protocol it was received with.", "x-present": "always" },
+        "model": { "type": "string", "description": "Fine Offset model, e.g. WS90, WS85, WS80, WS69, WH65, WH24, WH31, WH31B, WH40, WN20, WN34, WN38, WH51, WH57, WS68.", "x-present": "Fine Offset sensors" },
+        "channel": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Channel switch of a WH31.", "x-present": "WH31" },
+        "rssi": { "type": "integer", "maximum": 0, "description": "Signal strength of the last packet.", "x-unit": "dBm", "x-present": "always" },
+        "ageSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last packet of this sensor.", "x-unit": "s", "x-present": "always" },
+        "batteryOk": { "type": "boolean", "description": "Battery state reported by the sensor (false = low).", "x-present": "always" },
+        "temp": { "type": "number", "description": "Temperature.", "x-unit-field": "/api/info units.temp (= tempUnit when present)", "x-present": "the sensor sends temperature" },
+        "humidityPct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Relative humidity.", "x-unit": "%", "x-present": "the sensor sends humidity" },
+        "windSpeed": { "type": "number", "minimum": 0, "description": "Wind mean speed of the last packet.", "x-unit-field": "windUnit / /api/info units.wind", "x-present": "the sensor sends wind" },
+        "windGust": { "type": "number", "minimum": 0, "description": "Wind gust of the last packet.", "x-unit-field": "windUnit / /api/info units.wind", "x-present": "the sensor sends wind" },
+        "windDirDeg": { "type": "integer", "minimum": 0, "maximum": 360, "description": "Wind direction of the last packet.", "x-unit": "deg", "x-present": "the sensor sends wind" },
+        "rainTotal": { "type": "number", "minimum": 0, "description": "The sensor's own rain counter (resets with a battery change) — use the top-level rain values for display.", "x-unit-field": "rainUnit / /api/info units.rain", "x-present": "the sensor sends rain" },
+        "uvIndex": { "type": "number", "minimum": 0, "description": "UV index.", "x-unit": "index", "x-present": "the sensor sends UV" },
+        "lightLux": { "type": "integer", "minimum": 0, "description": "Illuminance.", "x-unit": "lx", "x-present": "the sensor sends light" },
+        "soilMoisturePct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Soil moisture (Fine Offset WH51).", "x-unit": "%", "x-present": "WH51" },
+        "supercapV": { "type": "number", "minimum": 0, "description": "Super-capacitor voltage, rounded to 0.1 (WS85/WS90).", "x-unit": "V", "x-present": "WS85, WS90" },
+        "lightningCount": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Strikes counted by the sensor (8 bit, wraps; difference it yourself).", "x-present": "lightning sensor (WH57)" },
+        "lightningDistKm": { "type": "integer", "minimum": 1, "description": "Distance to the storm front.", "x-unit": "km", "x-present": "lightning sensor with a detected storm" },
+        "stale": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["temp", "humidity", "wind", "rain", "uv", "light"], "description": "Value group." },
+          "description": "Value groups not received for more than 5 minutes (shown values are old; the node no longer uses them).",
+          "x-present": "at least one value is stale"
+        }
+      }
+    }
+  }
+}

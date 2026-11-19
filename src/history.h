@@ -13,10 +13,16 @@
 // tier keeps short buckets for a detailed recent view, a "coarse" tier keeps
 // long buckets for a full week at a fraction of the RAM a flat buffer of
 // the same duration/resolution would need. Each pushHistorySample() call
-// merges the just-finished uplink cycle's values into *both* tiers' current
-// bucket (running average, except wind gust = running max and rain amount =
-// running sum — see history.cpp); a bucket is finalized into the ring array
-// once its time window elapses, independent of uplinkIntervalSec.
+// merges the just-finished cycle's values into *both* tiers' bucket whose
+// window contains the cycle's end time (running average, except wind gust =
+// running max and rain amount = running sum — see history.cpp). Windows are
+// fixed, back to back: (k x bucketSec, (k+1) x bucketSec] on the wall clock
+// (epoch) once it is synced, on the uptime before. One ring entry per
+// window, also for a window without any cycle or value (a gap: null in the
+// JSON, never 0), so 288 entries are exactly 24 h and 168 exactly 7 days,
+// whatever the cycle length: 60-s cycles put 5 cycles into a 5-min bucket,
+// 600-s cycles leave every other 5-min bucket a gap. The open (current)
+// bucket is served as the newest point (ageSec 0).
 constexpr size_t HISTORY_FINE_CAPACITY        = 288;  // 288 x 5 min   = 24h
 constexpr unsigned long HISTORY_FINE_BUCKET_SEC   = 300;
 constexpr size_t HISTORY_COARSE_CAPACITY      = 168;  // 168 x 1h      = 7 days
@@ -34,9 +40,9 @@ void pushHistorySample();
 void buildHistoryJson(JsonDocument& doc, bool coarse);
 
 // Lookups in the fine tier (5-min buckets, 24 h) for trends and rolling sums.
-// Value about ageSec ago (closest bucket ending between ageSec - 5 min and
-// ageSec + 10 min ago); false = no data that old yet (e.g. less than about
-// 3 h since start for the pressure tendency, 1 h for the temperature trend).
+// Value about ageSec ago (closest non-gap bucket ending between ageSec - 5 min
+// and ageSec + 10 min ago); false = no data that old yet (e.g. less than
+// about 3 h since start for the pressure tendency, 1 h for the temperature trend).
 bool historyPressureAgo(uint32_t ageSec, float& qnhHpa);   // QNH, hPa
 bool historyTempAgo(uint32_t ageSec, float& tempC);        // selected temperature source, °C
 // Rain of the selected source over the last windowSec at most: finished
