@@ -31,13 +31,18 @@ int16_t TfaWeatherSensor::startReceive(Rate rate)
     return radio->startReceive();
 }
 
-bool TfaWeatherSensor::getMessage(ItPlusFrame& frame, float& rssi)
+bool TfaWeatherSensor::getRaw(uint8_t* buf, float& rssi)
 {
     if (!radio || !received) return false;
     received = false;
-    uint8_t b[ITPLUS_FRAME_LEN];
-    int16_t st = radio->readData(b, sizeof(b));
+    int16_t st = radio->readData(buf, ITPLUS_FRAME_LEN);
     rssi = radio->getRSSI();
     radio->startReceive();
-    return st == RADIOLIB_ERR_NONE && itPlusDecode(b, frame);
+    return st == RADIOLIB_ERR_NONE;
+}
+
+bool TfaWeatherSensor::getMessage(ItPlusFrame& frame, float& rssi)
+{
+    uint8_t b[ITPLUS_FRAME_LEN];
+    return getRaw(b, rssi) && itPlusDecode(b, frame);
 }

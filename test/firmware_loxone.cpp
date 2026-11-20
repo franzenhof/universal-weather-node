@@ -76,8 +76,18 @@ int main()
     r1["rssi"] = -71; r1["ageSec"] = 12; r1["batteryOk"] = false;
     r1["temp"] = 4.5f; r1["humidityPct"] = 88; r1["windSpeed"] = 3.1f; r1["lightLux"] = 5322;
     r1["stale"].to<JsonArray>().add("wind");
-    JsonObject r2 = rf.add<JsonObject>();   // not a value-source slot: not sent
+    JsonObject r2 = rf.add<JsonObject>();   // no slot (not in the ID list): not sent
     r2["id"] = "00000099"; r2["rssi"] = -90; r2["temp"] = 1.0f;
+    JsonObject r32 = rf.add<JsonObject>();  // wireless 32: sent as rf32_ (all 32 slots, not only the value sources)
+    r32["id"] = "34000A1B"; r32["slot"] = 32; r32["type"] = 3; r32["model"] = "WN34"; r32["rssi"] = -80;
+    r32["ageSec"] = 40; r32["batteryOk"] = true; r32["temp"] = 21.3f;
+    JsonObject r3 = rf.add<JsonObject>();   // Fine Offset air quality + leak values: generic keys
+    r3["id"] = "45003660"; r3["slot"] = 3; r3["type"] = 8; r3["model"] = "WH45"; r3["rssi"] = -60;
+    r3["ageSec"] = 5; r3["batteryOk"] = true; r3["pm25"] = 3.5f; r3["pm10"] = 4.1f; r3["co2Ppm"] = 553;
+    r3["externalPower"] = true; r3["leak"] = true; r3["leakRaw"] = 267; r3["leafWetnessPct"] = 7;
+    r3["conductivityUsCm"] = 643; r3["pressure"] = 1001.7f;
+    JsonObject r33 = rf.add<JsonObject>();  // beyond the table: never sent
+    r33["id"] = "34000A1C"; r33["slot"] = 33; r33["temp"] = 5.0f;
 
     std::vector<std::string> lines;
     std::map<std::string, std::string> m = run(doc, "", lines);
@@ -101,7 +111,14 @@ int main()
     assert(m["rf2_temp"] == "4.5" && m["rf2_humidity"] == "88" && m["rf2_battery"] == "0" &&
            m["rf2_rssi"] == "-71" && m["rf2_age"] == "12" && m["rf2_lightLux"] == "5322");
     assert(!m.count("rf2_windSpeed") && !m.count("rf2_id") && !m.count("rf2_slot") && !m.count("rf2_type"));
-    for (const auto& kv : m) assert(kv.first.compare(0, 3, "rf1") != 0 && kv.first.find("rf_") == std::string::npos);
+    assert(m["rf3_pm25"] == "3.5" && m["rf3_pm10"] == "4.1" && m["rf3_co2Ppm"] == "553" && m["rf3_externalPower"] == "1");
+    assert(m["rf3_leak"] == "1" && m["rf3_leakRaw"] == "267" && m["rf3_leafWetnessPct"] == "7");
+    assert(m["rf3_conductivityUsCm"] == "643" && m["rf3_pressure"] == "1001.7" && !m.count("rf3_model"));
+    assert(m["rf32_temp"] == "21.3" && m["rf32_rssi"] == "-80" && m["rf32_battery"] == "1" && m["rf32_age"] == "40");
+    assert(!m.count("rf33_temp") && !m.count("rf32_model") && !m.count("rf32_type"));
+    for (const auto& kv : m)
+        assert(kv.first.compare(0, 3, "rf1") != 0 &&
+               kv.first.find("rf_") == std::string::npos);
     // plain ASCII, '.' decimal separator, no exponent
     for (const std::string& l : lines)
     {

@@ -25,13 +25,23 @@
 // kbit/s) and 090000xx (9.579 kbit/s), xx = ID (+0x40 for a second probe
 // channel). Fine Offset sensors appear as FFiiiiii: FF = family code (= model
 // number: 24 WH65/WS69, 30 WH31, 40 WH40, 51 WH51, 57 WH57, 80 WS80, 90 WS90,
-// ...), iiiiii = the sensor ID as the Ecowitt app / rtl_433 show it; WH31:
-// 3000CCii with CC = channel 1-8 and ii = ID.
+// 45 WH45, 55 WH55, A2 WH52, ...; 25 WN32P/WH25 and 32 WN32/WH32, which send no
+// family code), iiiiii = the sensor ID as the Ecowitt app / rtl_433 show it;
+// WH31: 3000CCii with CC = channel 1-8 and ii = ID.
 #include <stdint.h>
 #include <vector>
 #include "sources.h"         // SRC_RF_FRESH_MS
 
-constexpr int RF_MAX_SENSORS = 4;
+// Wireless sensors received at the same time (table gRfSensors[], also the
+// maximum of the ID list). Slot n (1..RF_MAX_SENSORS) = the n-th ID of
+// "Wireless sensor IDs", or - with an empty list - table index n-1 (the order
+// the sensors were first received). Only slots 1..RF_SOURCE_SLOTS (sources.h)
+// can be selected as value sources ("Wireless 1-4"); all slots appear in the
+// JSON (rfSensors[].slot), MQTT, Home Assistant, Loxone and the web pages.
+// A fixed static table (no dynamic allocation: no heap fragmentation on a
+// node that runs for months); about 170 bytes per entry.
+constexpr int RF_MAX_SENSORS = 32;
+static_assert(RF_MAX_SENSORS >= RF_SOURCE_SLOTS, "the value-source slots must fit into the table");
 
 // Value bits (RfValues::ok, RfSensorReading::staleMask); the same values as
 // the Bresser library's MSG_OK_* (checked in rf_sensors.cpp).
@@ -67,20 +77,38 @@ struct RfSensorReading {
     float uvIndex = 0.0f;
     float lightLux = 0.0f;
     // Fine Offset only (rfSensors JSON, status page; no value-source groups)
-    const char* model = nullptr;     // "WS90", "WH31", ... (static string); nullptr = not Fine Offset
-    uint8_t channel = 0;             // WH31: 1-8; 0 = none
+    const char* model = nullptr;     // "WS90", "WH31", "Vantage Pro2", ... (static string); nullptr = none
+    uint8_t channel = 0;             // WH31: 1-8; Davis: transmitter ID 1-8; 0 = none
     bool    hasMoisture = false;     // WH51 soil moisture
     uint8_t moisturePct = 0;
-    bool    hasSupercap = false;     // WS85 / WS90 super capacitor (solar-charged)
+    bool    hasSolar = false;        // Davis: solar radiation (lightLux holds the lux approximation)
+    float   solarWm2 = 0.0f;
+    bool    hasSupercap = false;     // WS85 / WS90 / Davis Vue super capacitor (solar-charged)
     float   supercapV = 0.0f;
     bool    hasLightning = false;    // WH57
     uint8_t lightningCount = 0;      // strikes counted by the sensor (8 bit, wraps)
     uint8_t lightningKm = 0;         // distance to the storm front; 0 = none detected
+    // Fine Offset, per sensor only (no value-source groups); latest value
+    bool    hasPressure = false;     // WN32P / WH25 / WH32B (station pressure, hPa)
+    float   pressureHpa = 0.0f;
+    bool    hasPm25 = false, hasPm10 = false, hasPm1 = false, hasPm4 = false;   // ug/m3
+    bool    pm10Estimated = false;   // WH41 / WH0290 / WH43: PM10 derived from PM2.5 by the sensor
+    float   pm25 = 0.0f, pm10 = 0.0f, pm1 = 0.0f, pm4 = 0.0f;
+    bool    hasCo2 = false;          // WH45 / WH46
+    uint16_t co2Ppm = 0;
+    bool    extPower = false;        // air quality sensor powered via USB
+    bool    hasLeak = false, leak = false, leakHighSensitivity = false;   // WH55: leak = water detected
+    uint16_t leakRaw = 0;
+    bool    hasLeafWetness = false;  // WN35
+    uint8_t leafWetnessPct = 0;
+    bool    hasConductivity = false; // WH52 soil EC
+    float   conductivityUsCm = 0.0f;
 };
 
 extern RfSensorReading gRfSensors[RF_MAX_SENSORS];
 
-// "39582376, 1234" -> IDs (hex; max RF_MAX_SENSORS; empty = accept any)
+// "39582376, 1234" -> IDs (hex; at most RF_MAX_SENSORS, more are ignored;
+// empty = accept any)
 std::vector<uint32_t> rfParseIds(const char* s);
 
 // ---- Table handling (rf_sensors_data.cpp, no RadioLib: host-tested) ----
@@ -108,6 +136,12 @@ float rfStoreValues(RfSensorReading& r, const RfValues& v, unsigned long now, un
 // onlyProto != 0: take over only a sensor received with that RF_PROTO_*.
 int rfSlotFor(uint32_t id, unsigned long now, unsigned long takeOverMs = SRC_RF_FRESH_MS, int onlyProto = 0);
 
+// Indoor sensors (Fine Offset WH45 / WH46 air quality, WN32P / WH25 indoor
+// thermo-hygro-barometer): never picked by the *Auto* value source for
+// temperature / humidity - without an ID list one could otherwise land in
+// wireless 1-4 and feed the outdoor temperature. "Wireless n" may still use them.
+bool rfIsIndoor(const RfSensorReading& r);
+
 // Forget all sensors (ID filter changed).
 void rfSensorsClear();
 
@@ -128,7 +162,7 @@ bool    rfSensorsReceiving();
 int16_t rfSensorsLastError();
 uint32_t rfSensorsPacketsTotal();
 const char* rfSensorsListening();      // protocol currently listened to, e.g. "IT+ 17.241 kbit/s"
-const char* rfProtoName(int proto);    // "Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset"
+const char* rfProtoName(int proto);    // "Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset", "Davis"
 
 // Receive phases for a protocol set (RF_PROTO_* bit mask): Fine Offset is
 // received in the IT+ 17.241 kbit/s phase, so its bit maps to RF_PROTO_ITPLUS17.
@@ -137,7 +171,8 @@ int rfPhaseSet(int protoSet);
 // ---- Receive scheduling and the "Auto (search)" type (host-tested) ----
 
 // Protocol set (RF_PROTO_* bit mask) received for a gCfg.rfProto value:
-// RF_PROTO_AUTO searches all families (RF_PROTO_ALL), an invalid value = Bresser.
+// RF_PROTO_AUTO searches all families (RF_PROTO_ALL, never Davis), an invalid
+// value = Bresser; RF_PROTO_DAVIS = 0 (no phases: davis_rx.cpp owns the radio).
 int rfProtoSetFor(int cfgProto);
 
 // The phase after `cur` within a phase set (rfPhaseSet()), in the order
@@ -166,4 +201,9 @@ bool rfAutoShouldLock(int cfgProto, bool idAccepted);
 // configured type (status page "detected: ..."), else 0.
 int rfSensorsDetectedProto();
 
+// Davis transmitters appear as DA0000ii, ii = transmitter ID 1-8.
+constexpr uint32_t RF_ID_DAVIS = 0xDA000000UL;
+// Davis solar radiation -> illuminance for the light value source (sunlight,
+// about 126.7 lx per W/m2; an approximation, the native value is solarWm2).
+constexpr float RF_DAVIS_LUX_PER_WM2 = 126.7f;
 constexpr uint32_t RF_ID_ITPLUS17 = 0x17000000UL, RF_ID_ITPLUS9 = 0x09000000UL;

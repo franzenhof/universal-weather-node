@@ -88,6 +88,16 @@ int rfSensorIndexForSlot(int slot)
     return gRfSensors[slot].used ? slot : -1;
 }
 
+int rfSlotOfIndex(int idx)
+{
+    if (idx < 0 || idx >= RF_MAX_SENSORS || !gRfSensors[idx].used) return -1;
+    std::vector<uint32_t> ids = rfParseIds(gCfg.rfIds);
+    if (ids.empty()) return idx;
+    for (size_t k = 0; k < ids.size(); k++)
+        if (ids[k] == gRfSensors[idx].id) return (int)k;
+    return -1;
+}
+
 int srcResolve(SrcGroup g)
 {
     if (g >= SG_COUNT) return SRC_NONE;
@@ -98,10 +108,13 @@ int srcResolve(SrcGroup g)
         int idx = rfSensorIndexForSlot(sel - SRC_RF1);
         return radioHas(idx, g) ? idx : SRC_NONE;
     }
-    // Auto: board first, then wireless 1..4
+    // Auto: board first, then wireless 1..4 (only the value-source slots,
+    // never sensors 5..32; for temperature / humidity no indoor sensor)
     if (boardHas(g)) return SRC_IS_BOARD;
-    for (int slot = 0; slot < RF_MAX_SENSORS; slot++) {
+    for (int slot = 0; slot < RF_SOURCE_SLOTS; slot++) {
         int idx = rfSensorIndexForSlot(slot);
+        // indoor sensors never feed the (outdoor) temperature / humidity by themselves
+        if (g == SG_AIR && idx >= 0 && rfIsIndoor(gRfSensors[idx])) continue;
         if (radioHas(idx, g)) return idx;
     }
     return SRC_NONE;

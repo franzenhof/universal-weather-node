@@ -7,6 +7,7 @@
 #include "heltec_board.h"
 #include "sources.h"
 #include "rf_sensors.h"
+#include "davis_diag.h"
 #include "derived_now.h"
 #include "sensors.h"
 #include "api_info.h"
@@ -74,6 +75,77 @@ static void addDerivedJson(JsonDocument& doc, float windMs, int dirDeg)
     char upd[24];
     wxUpdateAvailable(upd, sizeof(upd));
     if (upd[0]) doc["firmwareUpdate"] = upd;
+}
+
+// One wireless sensor (rfSensors[] item, also the MQTT topic <prefix>/rf/<ID>).
+void addRfSensorJson(JsonObject o, int i)
+{
+    const RfSensorReading& r = gRfSensors[i];
+    char id[11];
+    snprintf(id, sizeof(id), "%08lX", (unsigned long)r.id);
+    o["id"]        = id;
+    // wireless sensor number 1-32 (ID list order, else reception order); 1-4
+    // are the value-source slots. Missing = not in the ID list (not possible
+    // while the list filters the reception).
+    int slot = rfSlotOfIndex(i);
+    if (slot >= 0) o["slot"] = slot + 1;
+    o["type"]      = r.type;
+    o["protocol"]  = rfProtoName(r.proto);
+    if (r.model)   o["model"]   = r.model;      // Fine Offset: "WS90", "WH31", ...
+    if (r.channel) o["channel"] = r.channel;    // WH31
+    o["rssi"]      = (int)lroundf(r.rssi);
+    // after a millis() wrap the raw difference is meaningless once the sensor is stale
+    unsigned long age = (millis() - r.lastMs) / 1000;
+    if ((r.staleMask & RF_VAL_ANY) && age < SRC_RF_FRESH_MS / 1000) age = SRC_RF_FRESH_MS / 1000;
+    o["ageSec"]    = age;
+    o["batteryOk"] = r.batteryOk;
+    if (r.hasTemp)     o["temp"]     = temperatureForOutput(r.tempC, gCfg);
+    if (r.hasHumidity) o["humidityPct"] = r.humidity;
+    if (r.hasWind) {
+        o["windSpeed"]  = windSpeedForOutput(r.windAvgMs, gCfg);
+        o["windGust"]   = windSpeedForOutput(r.windGustMs, gCfg);
+        o["windDirDeg"] = (int)lroundf(r.windDirDeg);
+    }
+    if (r.hasRain)  o["rainTotal"] = rainForOutput(r.rainTotalMm, gCfg);
+    if (r.hasUv)    o["uvIndex"]   = r.uvIndex;
+    if (r.hasLight) o["lightLux"]  = (long)lroundf(r.lightLux);
+    if (r.hasMoisture) o["soilMoisturePct"] = r.moisturePct;
+    if (r.hasSolar) o["solarWm2"] = (long)lroundf(r.solarWm2);       // Davis: solar radiation
+    if (r.hasSupercap) o["supercapV"] = roundf(r.supercapV * 10.0f) / 10.0f;   // only stations with one (WS85/WS90, Davis Vue)
+    if (r.hasLightning) {
+        o["lightningCount"] = r.lightningCount;   // the sensor's 8-bit counter (wraps)
+        if (r.lightningKm) o["lightningDistKm"] = r.lightningKm;
+    }
+    // Fine Offset per-sensor values (latest packet; no value-source groups)
+    if (r.hasPressure) {   // station pressure (not reduced to sea level), in the node's pressure unit
+        float p = pressureForOutput(r.pressureHpa, gCfg);
+        o["pressure"] = gCfg.unitSystem == 1 ? roundf(p * 100.0f) / 100.0f : roundf(p * 10.0f) / 10.0f;
+    }
+    if (r.hasPm25) o["pm25"] = roundf(r.pm25 * 10.0f) / 10.0f;                  // ug/m3
+    if (r.hasPm10) {
+        o["pm10"] = roundf(r.pm10 * 10.0f) / 10.0f;
+        if (r.pm10Estimated) o["pm10Estimated"] = true;
+    }
+    if (r.hasPm1) o["pm1"] = roundf(r.pm1 * 10.0f) / 10.0f;
+    if (r.hasPm4) o["pm4"] = roundf(r.pm4 * 10.0f) / 10.0f;
+    if (r.hasCo2) o["co2Ppm"] = r.co2Ppm;
+    if (r.extPower) o["externalPower"] = true;
+    if (r.hasLeak) {
+        o["leak"] = r.leak;
+        o["leakHighSensitivity"] = r.leakHighSensitivity;
+        o["leakRaw"] = r.leakRaw;
+    }
+    if (r.hasLeafWetness) o["leafWetnessPct"] = r.leafWetnessPct;
+    if (r.hasConductivity) o["conductivityUsCm"] = (long)lroundf(r.conductivityUsCm);
+    // values not received for more than 5 min (the sensor still sends others)
+    const bool has[6] = { r.hasTemp, r.hasHumidity, r.hasWind, r.hasRain, r.hasUv, r.hasLight };
+    static const char* const keys[6] = { "temp", "humidity", "wind", "rain", "uv", "light" };
+    JsonArray stale;
+    for (int k = 0; k < 6; k++)
+        if (has[k] && !srcRfValueFresh(i, keys[k])) {
+            if (stale.isNull()) stale = o["stale"].to<JsonArray>();
+            stale.add(keys[k]);
+        }
 }
 
 void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
@@ -230,51 +302,55 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
     // Wireless sensors (rf_sensors.cpp): latest values per sensor, units as configured.
     if (gCfg.rfEn) {
         JsonArray rf = doc["rfSensors"].to<JsonArray>();
-        for (int i = 0; i < RF_MAX_SENSORS; i++) {
-            const RfSensorReading& r = gRfSensors[i];
-            if (!r.used) continue;
-            JsonObject o = rf.add<JsonObject>();
-            char id[11];
-            snprintf(id, sizeof(id), "%08lX", (unsigned long)r.id);
-            o["id"]        = id;
-            // wireless sensor 1-4 of the value sources (ID list order, else reception order); missing = none
-            for (int k = 0; k < RF_MAX_SENSORS; k++)
-                if (rfSensorIndexForSlot(k) == i) { o["slot"] = k + 1; break; }
-            o["type"]      = r.type;
-            o["protocol"]  = rfProtoName(r.proto);
-            if (r.model)   o["model"]   = r.model;      // Fine Offset: "WS90", "WH31", ...
-            if (r.channel) o["channel"] = r.channel;    // WH31
-            o["rssi"]      = (int)lroundf(r.rssi);
-            // after a millis() wrap the raw difference is meaningless once the sensor is stale
-            unsigned long age = (millis() - r.lastMs) / 1000;
-            if ((r.staleMask & RF_VAL_ANY) && age < SRC_RF_FRESH_MS / 1000) age = SRC_RF_FRESH_MS / 1000;
-            o["ageSec"]    = age;
-            o["batteryOk"] = r.batteryOk;
-            if (r.hasTemp)     o["temp"]     = temperatureForOutput(r.tempC, gCfg);
-            if (r.hasHumidity) o["humidityPct"] = r.humidity;
-            if (r.hasWind) {
-                o["windSpeed"]  = windSpeedForOutput(r.windAvgMs, gCfg);
-                o["windGust"]   = windSpeedForOutput(r.windGustMs, gCfg);
-                o["windDirDeg"] = (int)lroundf(r.windDirDeg);
-            }
-            if (r.hasRain)  o["rainTotal"] = rainForOutput(r.rainTotalMm, gCfg);
-            if (r.hasUv)    o["uvIndex"]   = r.uvIndex;
-            if (r.hasLight) o["lightLux"]  = (long)lroundf(r.lightLux);
-            if (r.hasMoisture) o["soilMoisturePct"] = r.moisturePct;
-            if (r.hasSupercap) o["supercapV"] = roundf(r.supercapV * 10.0f) / 10.0f;   // only stations with one (WS85/WS90)
-            if (r.hasLightning) {
-                o["lightningCount"] = r.lightningCount;   // the sensor's 8-bit counter (wraps)
-                if (r.lightningKm) o["lightningDistKm"] = r.lightningKm;
-            }
-            // values not received for more than 5 min (the sensor still sends others)
-            const bool has[6] = { r.hasTemp, r.hasHumidity, r.hasWind, r.hasRain, r.hasUv, r.hasLight };
-            static const char* const keys[6] = { "temp", "humidity", "wind", "rain", "uv", "light" };
-            JsonArray stale;
-            for (int k = 0; k < 6; k++)
-                if (has[k] && !srcRfValueFresh(i, keys[k])) {
-                    if (stale.isNull()) stale = o["stale"].to<JsonArray>();
-                    stale.add(keys[k]);
-                }
+        for (int i = 0; i < RF_MAX_SENSORS; i++)
+            if (gRfSensors[i].used) addRfSensorJson(rf.add<JsonObject>(), i);
+    }
+
+    // Davis (exclusive) receiver diagnostics (davis_rx.cpp)
+    if (rfDavisMode(gCfg.rfEn, gCfg.rfProto)) {
+        const DavisDiag& d = gDavisDiag;
+        JsonObject dv = doc["davis"].to<JsonObject>();
+        static const char* const states[4] = { "acquire", "track", "lost", "raw" };
+        dv["running"]      = d.running;
+        dv["state"]        = states[d.state & 3];
+        if (d.txId) dv["txId"] = d.txId;
+        dv["model"]        = gCfg.davisModel ? "vue" : "vp2";
+        dv["channelTable"] = gCfg.davisTable ? "classic" : "measured";
+        dv["channel"]      = d.channel;
+        if (d.freqMHz > 0.0f) dv["freqMHz"] = (double)lround((double)d.freqMHz * 10000.0) / 10000.0;
+        if (d.periodMs > 0.0f) dv["periodMs"] = roundf(d.periodMs * 100.0f) / 100.0f;
+        dv["offsetKhz"]        = roundf(d.offsetHz / 100.0f) / 10.0f;
+        dv["offsetLearnedKhz"] = roundf(d.learnedOffsetHz / 100.0f) / 10.0f;
+        float sync = davisSyncPct(d);
+        if (sync >= 0.0f) dv["syncPct"] = roundf(sync * 10.0f) / 10.0f;
+        dv["packets"]      = d.packets;
+        dv["crcErrors"]    = d.crcErrors;
+        dv["otherPackets"] = d.otherPackets;
+        dv["misses"]       = d.misses;
+        dv["resyncs"]      = d.resyncs;
+        if (d.havePacket) {
+            dv["lastPacketAgeSec"] = (millis() - d.lastPacketMs) / 1000;
+            dv["lastRssi"]         = (int)lroundf(d.lastRssi);
+        }
+        if (d.haveTiming)  dv["lastTimingErrMs"] = roundf(d.lastTimingErrUs / 100.0f) / 10.0f;
+        if (d.hasRainRate) dv["rainRate"]  = rainRateForOutput(d.rainRateMmH, gCfg);
+        if (d.hasGust)     dv["gust10Min"] = windSpeedForOutput(d.gust10MinMs, gCfg);
+        dv["sniffer"]    = gCfg.davisSniffer != 0;
+        dv["rawCapture"] = gCfg.davisRaw != 0;
+        if (d.radioError) dv["radioError"] = d.radioError;
+        JsonArray msgs = dv["messages"].to<JsonArray>();
+        for (int t = 0; t < 16; t++) {
+            const DavisTypeDiag& m = d.types[t];
+            if (!m.count) continue;
+            JsonObject o = msgs.add<JsonObject>();
+            o["type"]   = t;
+            o["name"]   = davisDiagTypeName((uint8_t)t);
+            o["count"]  = m.count;
+            o["ageSec"] = (millis() - m.lastMs) / 1000;
+            char hex[13];
+            for (int i = 0; i < 6; i++) snprintf(hex + 2 * i, 3, "%02X", m.bytes[i]);
+            o["bytes"]  = hex;
+            o["text"]   = m.text;
         }
     }
 

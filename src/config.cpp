@@ -1,4 +1,5 @@
 #include "config.h"
+#include "ha_rf.h"
 #include "loxone.h"
 #include "wind_window.h"
 #include "serial_log.h"
@@ -112,7 +113,20 @@ void sanitizeConfig(Config& c)
     choice(c.loraWindAgg, d.loraWindAgg, 0, 1);
     choice(c.mqttWindAgg, d.mqttWindAgg, 0, 1);
     choice(c.rfEn, d.rfEn, RF_RADIO_OFF, RF_RADIO_SX1262);
-    if (!rfProtoValid(c.rfProto)) c.rfProto = d.rfProto;   // bit mask RF_PROTO_* or RF_PROTO_AUTO
+    if (!rfProtoValid(c.rfProto)) c.rfProto = d.rfProto;   // bit mask RF_PROTO_*, RF_PROTO_AUTO or RF_PROTO_DAVIS
+    range (c.davisTxId, 0, 8);
+    range (c.davisOffsetHz, -100000, 100000);
+    range (c.davisWindowMs, 5, 500);
+    range (c.davisGuardMs, 5, 500);
+    choice(c.davisBucket, d.davisBucket, 0, 1);
+    choice(c.davisModel, d.davisModel, 0, 1);
+    choice(c.davisSniffer, d.davisSniffer, 0, 1);
+    choice(c.davisRaw, d.davisRaw, 0, 1);
+    range (c.davisRawCh, 0, 4);
+    range (c.davisScanKhz, 0, 60);
+    choice(c.davisAfc, d.davisAfc, 0, 1);
+    choice(c.davisTable, d.davisTable, 0, 1);
+    if (!davisRxBwValid(c.davisRxBw)) c.davisRxBw = d.davisRxBw;
     range (c.windDirOffsetDeg, -180, 180);
     choice(c.windUnitMs, d.windUnitMs, 0, 1);
     choice(c.windEn, d.windEn, 0, 1);
@@ -210,6 +224,19 @@ Config loadConfig()
     c.rfEn             = prefs.getInt    ("rfen",      c.rfEn);
     c.rfProto          = prefs.getInt    ("rfproto",   c.rfProto);
     prefs.getString("rfids", c.rfIds, sizeof(c.rfIds));
+    c.davisTxId        = prefs.getInt    ("dvid",      c.davisTxId);
+    c.davisOffsetHz    = prefs.getInt    ("dvoff",     c.davisOffsetHz);
+    c.davisWindowMs    = prefs.getInt    ("dvwin",     c.davisWindowMs);
+    c.davisGuardMs     = prefs.getInt    ("dvguard",   c.davisGuardMs);
+    c.davisBucket      = prefs.getInt    ("dvbucket",  c.davisBucket);
+    c.davisModel       = prefs.getInt    ("dvmodel",   c.davisModel);
+    c.davisSniffer     = prefs.getInt    ("dvsniff",   c.davisSniffer);
+    c.davisRaw         = prefs.getInt    ("dvraw",     c.davisRaw);
+    c.davisRawCh       = prefs.getInt    ("dvrawch",   c.davisRawCh);
+    c.davisScanKhz     = prefs.getInt    ("dvscan",    c.davisScanKhz);
+    c.davisAfc         = prefs.getInt    ("dvafc",     c.davisAfc);
+    c.davisTable       = prefs.getInt    ("dvtable",   c.davisTable);
+    c.davisRxBw        = prefs.getInt    ("dvbw",      c.davisRxBw);
     for (int i = 0; i < 5; i++) {
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
         int v = prefs.getInt(key, c.srcSel[i]);
@@ -341,6 +368,19 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("rfen",        prefs.putInt    ("rfen",      c.rfEn), 4);
     ok &= checkWrite   ("rfproto",     prefs.putInt    ("rfproto",   c.rfProto), 4);
     ok &= checkWriteStr("rfids",       prefs.putString ("rfids",     c.rfIds), c.rfIds);
+    ok &= checkWrite   ("dvid",        prefs.putInt    ("dvid",      c.davisTxId), 4);
+    ok &= checkWrite   ("dvoff",       prefs.putInt    ("dvoff",     c.davisOffsetHz), 4);
+    ok &= checkWrite   ("dvwin",       prefs.putInt    ("dvwin",     c.davisWindowMs), 4);
+    ok &= checkWrite   ("dvguard",     prefs.putInt    ("dvguard",   c.davisGuardMs), 4);
+    ok &= checkWrite   ("dvbucket",    prefs.putInt    ("dvbucket",  c.davisBucket), 4);
+    ok &= checkWrite   ("dvmodel",     prefs.putInt    ("dvmodel",   c.davisModel), 4);
+    ok &= checkWrite   ("dvsniff",     prefs.putInt    ("dvsniff",   c.davisSniffer), 4);
+    ok &= checkWrite   ("dvraw",       prefs.putInt    ("dvraw",     c.davisRaw), 4);
+    ok &= checkWrite   ("dvrawch",     prefs.putInt    ("dvrawch",   c.davisRawCh), 4);
+    ok &= checkWrite   ("dvscan",      prefs.putInt    ("dvscan",    c.davisScanKhz), 4);
+    ok &= checkWrite   ("dvafc",       prefs.putInt    ("dvafc",     c.davisAfc), 4);
+    ok &= checkWrite   ("dvtable",     prefs.putInt    ("dvtable",   c.davisTable), 4);
+    ok &= checkWrite   ("dvbw",        prefs.putInt    ("dvbw",      c.davisRxBw), 4);
     for (int i = 0; i < 5; i++) {
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
         ok &= checkWrite(key, prefs.putInt(key, c.srcSel[i]), 4);
@@ -461,5 +501,29 @@ void saveRfProto(int proto)
         return;
     }
     checkWrite("rfproto", prefs.putInt("rfproto", proto), 4);
+    prefs.end();
+}
+
+// IDs whose Home Assistant configs were published (ha_rf.h): written only
+// when that set changes. Not part of Config (no setting), but in the same
+// namespace, so a factory reset clears it too.
+void loadHaRfIds(char* out, size_t len)
+{
+    if (!len) return;
+    out[0] = '\0';
+    Preferences prefs;
+    if (!prefs.begin("config", true, "cfgdata")) return;
+    if (prefs.isKey("harfids")) prefs.getString("harfids", out, len);
+    prefs.end();
+}
+
+void saveHaRfIds(const char* ids)
+{
+    Preferences prefs;
+    if (!prefs.begin("config", false, "cfgdata")) {
+        dbgSerial.println("Config save: FAILED to open NVS namespace 'config' - HA wireless sensor list not saved.");
+        return;
+    }
+    checkWriteStr("harfids", prefs.putString("harfids", ids), ids);
     prefs.end();
 }

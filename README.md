@@ -10,7 +10,7 @@
 
 ## Quick Start (wireless station, about 15 minutes)
 
-**You need:** a **Heltec WiFi LoRa 32 V3** (or V4, see [installation](docs/installation.md#installing-the-firmware-browser-no-software)) with its **868 MHz antenna**, a USB-C power supply, and a wireless outdoor station — **Bresser** 5/6/7-in-1, **Ecowitt / Froggit** (WS69, WS80, WS85, WS90, WH31 …) or **TFA / LaCrosse IT+**. Recommended: a **BME280** module for the air pressure (four jumper wires, see [Minimal Wireless Build](docs/minimal-build.md)).
+**You need:** a **Heltec WiFi LoRa 32 V3** (or V4, see [installation](docs/installation.md#installing-the-firmware-browser-no-software)) with its **868 MHz antenna**, a USB-C power supply, and a wireless outdoor station — **Bresser** 5/6/7-in-1, **Ecowitt / Froggit** (WS69, WS80, WS85, WS90, WH31, WN34, WH51, WH57, air quality, leak …) or **TFA / LaCrosse IT+**. Recommended: a **BME280** module for the air pressure (four jumper wires, see [Minimal Wireless Build](docs/minimal-build.md)).
 
 1. **Install the firmware in the browser** — Chrome/Edge, [web.esphome.io](https://web.esphome.io), the `-factory.bin` from [`firmware/`](firmware/). Step by step: [Installing the Firmware](docs/installation.md#installing-the-firmware-browser-no-software).
 2. **Connect your phone** to the Wi-Fi **`WeatherNode`** and open **http://192.168.4.1** (opens by itself on most phones).
@@ -22,13 +22,13 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 
 ## Features
 
-- 📻 **Wireless sensors received directly** — Bresser 5/6/7-in-1 and other Bresser sensors, Ecowitt / Froggit (Fine Offset) outdoor arrays and sensors, TFA / LaCrosse IT+; type detected automatically. Per value you choose the source (board or wireless, automatic fallback). *(Ecowitt / Froggit and IT+ not yet tested with real sensors.)*
+- 📻 **Up to 32 wireless sensors received directly** — Bresser 5/6/7-in-1 and other Bresser sensors, Ecowitt / Froggit (Fine Offset) outdoor arrays, thermo-hygro, soil, rain, lightning, air quality (PM2.5, CO₂), leak and leaf-wetness sensors, TFA / LaCrosse IT+, and Davis Vantage Pro2 / Vue (experimental); type detected automatically. Every sensor with all its values in the dashboard, REST API and MQTT; per value you choose the source for the main readings (board or wireless, automatic fallback). *(First Ecowitt sensors confirmed by a tester; most of the newer types and IT+ not yet tested with real sensors.)*
 - 🌐 **Built-in web dashboard** with live values, warnings, rain totals (hour … year), wind rose and trend charts — works without internet; plus a REST API
-- 🏠 **MQTT + Home Assistant** auto-discovery (TLS-capable) — every value, derived value and warning as an entity; **Loxone** via UDP push or HTTP
+- 🏠 **MQTT + Home Assistant** auto-discovery (TLS-capable) — every value, derived value and warning as an entity, plus one HA device per listed wireless sensor; **Loxone** via UDP push or HTTP
 - ☁️ **Direct uploads to weather networks** — AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap
 - 🧮 **Computed on the node:** dew point, feels-like, cloud base, VPD, 3-h pressure tendency with a weather trend, temperature trend, rain last hour / 24 h / today / yesterday / week / month / year, sunshine duration, frost / fog / sultry warnings, WMO wind (3-s gusts, 10-min values)
 - 🧩 **Everything runs on the ESP32** — no PC, Raspberry Pi, script or cloud service; sensors are read directly, Wi-Fi is output only
-- 🔧 **Set up from your phone** — browser installation, config portal, web settings, firmware updates over Wi-Fi
+- 🔧 **Set up from your phone** — browser installation, config portal, web settings, firmware updates over Wi-Fi; a built-in **radio trace** (diagnostic file) helps us add new sensors
 - 📡 **Optional:** LoRaWAN (ChirpStack / TTN) for sites without Wi-Fi, and a custom PCB for Davis and other wired sensors, heater/fan outputs, UV, Victron VE.Direct
 
 <!-- help:skip -->
@@ -40,14 +40,14 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 </p>
 <!-- /help:skip -->
 
-**Current status:** [2.0.0-rc.3](firmware/universal-weather-node-2.0.0-rc.3.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.3-factory.bin) for the first installation) is the release candidate for 2.0.0.
+**Current status:** [2.0.0-rc.4](firmware/universal-weather-node-2.0.0-rc.4.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.4-factory.bin) for the first installation) is the release candidate for 2.0.0.
 
 ## Documentation
 
 | I want to … | Read |
 |-------------|------|
 | install the firmware, open the config portal, update over Wi-Fi | [Installation and First Setup](docs/installation.md) |
-| receive my Bresser / Ecowitt / Froggit / TFA station | [Wireless Sensors](docs/wireless-sensors.md) |
+| receive my Bresser / Ecowitt / Froggit / TFA / Davis sensors, record a radio trace | [Wireless Sensors](docs/wireless-sensors.md) |
 | build a station without the custom PCB | [Minimal Wireless Build](docs/minimal-build.md) |
 | see the dashboard, status page or REST API | [Web Interface](docs/web-dashboard.md) |
 | build my own display / app | [HTTP API for Your Own Display](docs/api.md) — contract, examples, mock server |

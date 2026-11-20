@@ -19,10 +19,14 @@ try {
     ['itplus', ['lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp']],
     ['fineoffset', ['lib/FineOffsetSensorReceiver/src/FineOffsetDecoder.cpp', 'lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp',
       'src/rf_sensors_data.cpp']],
+    ['davis', ['lib/DavisSensorReceiver/src/DavisDecoder.cpp', 'lib/DavisSensorReceiver/src/DavisHopper.cpp']],
     ['netids', []],
     ['otacheck', []],
     ['telemetry', [...common, 'src/json_payload.cpp', 'src/units.cpp', 'src/loxone_lines.cpp']],
     ['rf', common],
+    ['rftrace', [...common, 'src/rf_trace.cpp', 'lib/FineOffsetSensorReceiver/src/FineOffsetDecoder.cpp',
+      'lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp']],
+    ['harf', [...common, 'src/json_payload.cpp', 'src/units.cpp', 'src/ha_rf.cpp']],
     ['history', [...common.filter((f) => f !== 'test/host/runtime.cpp'), 'src/units.cpp']],   // includes runtime.cpp + history.cpp
     ['board', [...common, 'src/params.cpp']],
     ['payload', [...common, 'src/lora_payload.cpp', 'src/payload_binary.cpp', 'src/units.cpp',
@@ -33,6 +37,7 @@ try {
     execFileSync(process.env.CXX || 'c++', [
       '-std=c++11', '-Wall', '-Wextra', '-Werror',
       '-I', 'test/host', '-I', 'src', '-I', 'lib/TfaWeatherSensorReceiver/src', '-I', 'lib/FineOffsetSensorReceiver/src',
+      '-I', 'lib/DavisSensorReceiver/src',
       '-I', '.pio/libdeps/heltec_wifi_lora_32_V3/ArduinoJson/src',
       '-I', '.pio/libdeps/heltec_wifi_lora_32_V3/CayenneLPP/src',
       ...sources, `test/firmware_${name}.cpp`, '-o', exe,

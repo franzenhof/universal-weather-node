@@ -330,6 +330,8 @@ bool WeatherSensor::getData(uint32_t timeout, uint8_t flags, uint8_t type, void 
     return false;
 }
 
+WeatherSensor::RawHook WeatherSensor::rawHook = nullptr;
+
 DecodeStatus WeatherSensor::getMessage(void)
 {
     uint8_t recvData[MSG_BUF_SIZE];
@@ -372,6 +374,8 @@ DecodeStatus WeatherSensor::getMessage(void)
             // some other error occurred
             log_d("%s Receive failed: [%d]", RECEIVER_CHIP, state);
         }
+        if (rawHook && state == RADIOLIB_ERR_NONE)
+            rawHook(recvData, sizeof(recvData), rssi, decode_res);
     }
 
     return decode_res;

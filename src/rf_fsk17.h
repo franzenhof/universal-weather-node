@@ -22,11 +22,14 @@ inline RfFskKind rfFsk17Decode(const uint8_t* b, size_t len, bool fineOffset, bo
 }
 
 // Table ID of a Fine Offset sensor: family code in the top byte, then the
-// sensor's own ID (8-24 bit); WH31: channel in bits 8-15, the 8-bit ID below.
+// sensor's own ID (8-24 bit); WH31: channel in bits 8-15, the 8-bit ID below
+// (the WH55's ID already contains its channel bits, as the Ecowitt app shows it).
+// WH25 / WH32 family (no family byte on the air): 25 / 32.
 inline uint32_t rfFineOffsetId(const FoFrame& f)
 {
     uint32_t id = f.id & 0xFFFFFFUL;
-    if (f.channel) id = (uint32_t)f.channel << 8 | (f.id & 0xFF);
+    if (f.channel && (f.family == FO_FAMILY_WH31 || f.family == FO_FAMILY_WH31B))
+        id = (uint32_t)f.channel << 8 | (f.id & 0xFF);
     return (uint32_t)f.family << 24 | id;
 }
 
@@ -45,4 +48,22 @@ inline RfValues rfFineOffsetValues(const FoFrame& f)
     if (f.hasUv)       { v.ok |= RF_VAL_UV;    v.uvIndex = f.uvIndex; }
     if (f.hasLight)    { v.ok |= RF_VAL_LIGHT; v.lightLux = f.lightLux; }
     return v;
+}
+
+// The per-sensor values of a Fine Offset frame outside the value-source groups
+// (air quality, leak, leaf wetness, EC, pressure) into the table entry.
+inline void rfFineOffsetExtras(RfSensorReading& r, const FoFrame& f)
+{
+    if (f.hasPressure)  { r.hasPressure = true;  r.pressureHpa = f.pressureHpa; }
+    if (f.hasPm25)      { r.hasPm25 = true;      r.pm25 = f.pm25; }
+    if (f.hasPm10)      { r.hasPm10 = true;      r.pm10 = f.pm10; r.pm10Estimated = f.pm10Estimated; }
+    if (f.hasPm1)       { r.hasPm1 = true;       r.pm1 = f.pm1; }
+    if (f.hasPm4)       { r.hasPm4 = true;       r.pm4 = f.pm4; }
+    if (f.hasCo2)       { r.hasCo2 = true;       r.co2Ppm = f.co2Ppm; }
+    if (f.hasPm25)      r.extPower = f.extPower;
+    if (f.hasLeak) {
+        r.hasLeak = true;  r.leak = f.leak;  r.leakHighSensitivity = f.leakHighSensitivity;  r.leakRaw = f.leakRaw;
+    }
+    if (f.hasLeafWetness)  { r.hasLeafWetness = true;  r.leafWetnessPct = f.leafWetnessPct; }
+    if (f.hasConductivity) { r.hasConductivity = true; r.conductivityUsCm = f.conductivityUsCm; }
 }

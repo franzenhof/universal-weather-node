@@ -22,6 +22,7 @@ With **Wi-Fi** and the **web API** enabled, open the node's IP address in a brow
 - 🌍 5 languages (English, German, French, Spanish, Portuguese), light/dark theme, Metric/Imperial — saved in your browser only, the device settings stay untouched.
 - 🔄 Auto-refresh from 1 s to 1 min, or off.
 - 🙈 Sensors without data (e.g. no BME280 connected) are hidden automatically.
+- 📡 **Wireless sensors:** one card per received sensor (up to 32) with its number (`#n`, the order of *Wireless sensor IDs*), kind (e.g. *Temperature probe* for a WN34, *Air quality sensor*, *Leak sensor*, *Leaf wetness sensor*), model, ID, signal, age, battery (and *USB power*) and values — incl. PM1/PM2.5/PM4/PM10, CO₂, leak (*Leak!* / *Dry*), leaf wetness, soil EC and pressure (converted with the unit toggle); values older than 5 min are struck through, and the value groups it currently supplies are marked.
 - ✈️ Works without internet — no external scripts or fonts.
 
 **Status page:** one line per connection — 🟢 working, 🟡 waiting, 🔴 problem, ⚪ off:
@@ -39,6 +40,7 @@ It also shows the latest measurements and the [derived values](values.md#derived
 | Box | Shows |
 |-----|-------|
 | LoRaWAN | Data rate / SF, channel and TX power of the last uplink; device address and uplink frame counter (compare with the network server); time, RSSI and SNR of the last downlink; uplinks since the last downlink against the [silent-session rejoin](lorawan.md#join-and-session) limit; rejoins since start |
+| Wireless sensors (868 MHz) | Receiver state (*listening* — "between LoRaWAN uplinks" only with LoRaWAN on), sensor type, and one line per received sensor (up to 32) as *Wireless n · ID … (type, model)* with age, RSSI, battery and values (also PM, CO₂, leak state with raw value and sensitivity, leaf wetness, EC, pressure); with MQTT on, whether Home Assistant gets a device per sensor (only for IDs in the list); **Radio trace**: start a capture (5 / 15 / 60 min, all / only failed or unknown / one ID), its progress, *Download diagnostic file*, *Stop*, *Discard* — see [Capturing a radio trace](wireless-sensors.md#capturing-a-radio-trace-for-us) |
 | Device | Next measurement, PCB revision, sensors, **CPU temperature** (chip, above ambient), uptime, *firmware update* (with the [update check](values.md#firmware-update-check) on), **cause of the last restart** (power-on, watchdog, crash, brownout …), free heap and its minimum since start |
 
 > 🔒 **Security:** the settings page and the log use HTTP Digest authentication (user `admin`), so the password itself is never sent in plain text. The connection is still unencrypted HTTP — anything you *type into* the settings form can be read by someone sniffing your network. Use a strong admin password and never expose the node to the internet. Without an admin password, these pages are disabled.
@@ -86,6 +88,8 @@ The JSON endpoints are a documented, versioned contract for your own displays an
 | `/`, `/status`, `/help`, `/help.md` | GET | – | Dashboard, status page, help page and its Markdown source; `/chart` redirects to `/` |
 | `/api/settings` | GET / POST | admin | Settings form / save (POST: same-origin only, fields not sent keep their value) |
 | `/api/log`, `/api/log/raw` | GET | admin | Log viewer / log as plain text |
+| `/api/rf/trace` | GET / POST | admin | [Radio trace](wireless-sensors.md#capturing-a-radio-trace-for-us): download the diagnostic file (`?status`: progress JSON) / start, stop, discard (POST: same-origin only) |
+| `/api/davis/log` | GET | admin | Davis sniffer capture = the radio trace shown inline (Davis mode starts one; see [Davis wireless](wireless-sensors.md#davis-wireless-experimental)) |
 | `/api/log/clear` | POST | admin | Clear the log (same-origin only) |
 
 The node also announces itself as `<hostname>.local` via mDNS (the device name in lower case, other characters as `-`; the same name is its Wi-Fi/DHCP hostname, shown on the status page) — see [Discovery](api.md#discovery-mdns).

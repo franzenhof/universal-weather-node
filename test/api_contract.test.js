@@ -20,7 +20,7 @@ const {SchemaSet} = require('./json_schema_lite');
 const root = path.join(__dirname, '..');
 const examplesDir = path.join(root, 'docs/api/examples');
 const schemas = new SchemaSet(path.join(root, 'docs/api/schemas'));
-const FIXTURES = ['bresser-7in1-bme280', 'ecowitt-ws90-wh31-wh51-wh57', 'pcb-v2-full', 'pcb-v2-imperial', 'heltec-v4-wireless'];
+const FIXTURES = ['bresser-7in1-bme280', 'ecowitt-ws90-wh31-wh51-wh57', 'pcb-v2-full', 'pcb-v2-imperial', 'heltec-v4-wireless', 'davis-vantage-pro2'];
 const DOCS = {data: 'data.schema.json', 'history-24h': 'history.schema.json', 'history-7d': 'history.schema.json', info: 'info.schema.json'};
 const UPDATE = process.env.UPDATE_API_EXAMPLES === '1';
 const REGEN = 'UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js';

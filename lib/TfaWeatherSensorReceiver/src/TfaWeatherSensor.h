@@ -30,6 +30,11 @@ public:
     // last call; rssi in dBm. Restarts the reception after each packet.
     bool getMessage(ItPlusFrame& frame, float& rssi);
 
+    // true = a frame was received since the last call: its ITPLUS_FRAME_LEN
+    // bytes after the sync word, not checked (for diagnostics: frames that
+    // fail itPlusDecode() too). Restarts the reception after each packet.
+    bool getRaw(uint8_t* buf, float& rssi);
+
     Rate rate() const { return currentRate; }
 
 private:

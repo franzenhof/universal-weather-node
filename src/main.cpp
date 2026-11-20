@@ -1,3 +1,5 @@
+#include "davis_rx.h"
+#include "davis_diag.h"
 #include <Arduino.h>
 
 /**
@@ -660,7 +662,8 @@ static void drawDisplay()
         if (gCfg.rfEn) {
             int n = 0;
             for (int i = 0; i < RF_MAX_SENSORS; i++) n += gRfSensors[i].used;
-            if (gCfg.rfProto == RF_PROTO_AUTO) snprintf(buf, sizeof(buf), "RF: searching sensor...");
+            if (gCfg.rfProto == RF_PROTO_DAVIS) snprintf(buf, sizeof(buf), "Davis: %s id%u", davisDiagStateName(gDavisDiag.state), gDavisDiag.txId);
+            else if (gCfg.rfProto == RF_PROTO_AUTO) snprintf(buf, sizeof(buf), "RF: searching sensor...");
             else                               snprintf(buf, sizeof(buf), "RF: %d sensor(s)", n);
             display.drawString(0, 55, buf);
         }
@@ -909,7 +912,8 @@ void loop()
         if (displayActive) drawDisplay();
 
         // LoRaWAN: its own window, values as configured (interval / 10 min)
-        if (gCfg.loraEn && pathDue(PATH_LORA, cycleEnd, loraEffMs, baseMs)) {
+        // Davis (exclusive) owns the radio: LoRaWAN paused (davis_rx.h)
+        if (gCfg.loraEn && !davisLoraPaused() && pathDue(PATH_LORA, cycleEnd, loraEffMs, baseMs)) {
             if (loraReady()) {
                 PathValues lv = pathValues(PATH_LORA, gCfg.loraWindAgg, cycleEnd);
                 // Largest payload the current data rate allows (ADR can switch to
@@ -946,7 +950,7 @@ void loop()
         }
 
         // A disabled path keeps no window (it would only grow until re-enabled).
-        if (!gCfg.loraEn) resetPath(PATH_LORA, cycleEnd);
+        if (!gCfg.loraEn || davisLoraPaused()) resetPath(PATH_LORA, cycleEnd);
         if (!mqttOn)      resetPath(PATH_MQTT, cycleEnd);
         if (!loxOn)       resetPath(PATH_LOX, cycleEnd);
 
@@ -964,7 +968,7 @@ void loop()
 
     // RadioLib's individual join exchange is synchronous (several seconds),
     // but no retry loop can hold setup/measurement service indefinitely.
-    if (!sendPending) loraPoll();
+    if (!sendPending && !davisLoraPaused()) loraPoll();
     // Wireless sensors: restart FSK reception after LoRaWAN used the SX1262,
     // decode received packets (non-blocking; no-op unless rfEn).
     rfSensorsLoop();

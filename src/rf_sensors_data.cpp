@@ -2,10 +2,13 @@
 // file without RadioLib so the JSON/telemetry host tests can link it.
 #include "rf_sensors.h"
 #include "config.h"
+#include "davis_diag.h"
 
 RfSensorReading gRfSensors[RF_MAX_SENSORS];
+DavisDiag gDavisDiag;
 
 #include <stdlib.h>
+#include <FineOffsetDecoder.h>
 
 std::vector<uint32_t> rfParseIds(const char* s)
 {
@@ -89,6 +92,13 @@ int rfSlotFor(uint32_t id, unsigned long now, unsigned long takeOverMs, int only
     return oldIdx;
 }
 
+bool rfIsIndoor(const RfSensorReading& r)
+{
+    if (!r.used || r.proto != RF_PROTO_FINEOFFSET) return false;
+    const uint8_t family = (uint8_t)(r.id >> 24);
+    return family == FO_FAMILY_WH45 || family == FO_FAMILY_WH46 || family == FO_FAMILY_WH25;
+}
+
 void rfSensorsClear()
 {
     for (RfSensorReading& r : gRfSensors) r = RfSensorReading();
@@ -110,6 +120,7 @@ const char* rfProtoName(int proto)
         case RF_PROTO_ITPLUS17:   return "IT+ 17.241 kbit/s";
         case RF_PROTO_ITPLUS9:    return "IT+ 9.579 kbit/s";
         case RF_PROTO_FINEOFFSET: return "Fine Offset";
+        case RF_PROTO_DAVIS:      return "Davis";
         default:                  return "Bresser";
     }
 }
@@ -124,6 +135,7 @@ int rfPhaseSet(int protoSet)
 int rfProtoSetFor(int cfgProto)
 {
     if (cfgProto == RF_PROTO_AUTO) return RF_PROTO_ALL;
+    if (cfgProto == RF_PROTO_DAVIS) return 0;
     int p = cfgProto & RF_PROTO_ALL;
     return p ? p : RF_PROTO_BRESSER;
 }

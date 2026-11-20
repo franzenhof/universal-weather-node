@@ -21,10 +21,14 @@
 #include "lora_transport.h"
 #include "wind_window.h"
 #include "rf_sensors.h"
+#include "davis_rx.h"
+#include "rf_trace.h"
+#include "davis_diag.h"
 #include "derived_now.h"
 #include "api_info.h"
 
 #include <Arduino.h>
+#include <new>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <ArduinoJson.h>
@@ -281,6 +285,7 @@ const RfTypeEntry RF_TYPES[] = {
     { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9 | RF_PROTO_FINEOFFSET, "TFA IT+ (both data rates) + Fine Offset" },
     { RF_PROTO_BRESSER | RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9, "Bresser + TFA IT+ alternating (not recommended)" },
     { RF_PROTO_BRESSER | RF_PROTO_FINEOFFSET, "Bresser + Fine Offset alternating (not recommended)" },
+    { RF_PROTO_DAVIS, "Davis Vantage Pro2 / Vue (exclusive: LoRaWAN paused, no other wireless sensors; experimental)" },
 };
 constexpr size_t RF_TYPE_COUNT = sizeof(RF_TYPES) / sizeof(RF_TYPES[0]);
 
@@ -367,6 +372,58 @@ void addWeatherNetworkRows(String& html)
         }
         addStateRow(html, cls, s.name, d);
     }
+}
+
+// Status page box "Davis": receiver state and the last value per message type.
+// radio trace (defined further down)
+void addRfTraceRows(String& html);
+void sendRfTraceFile(bool attachment);
+
+void addDavisBox(String& html)
+{
+    const DavisDiag& d = gDavisDiag;
+    html += "<section><h4>Davis (experimental)</h4><table>";
+    if (!d.running) {
+        addStateRow(html, "bad", "Receiver", d.radioError ? "radio error " + String(d.radioError) : String("not running"));
+    } else {
+        const char* cls = d.state == DAVIS_DIAG_TRACK ? "ok" : d.state == DAVIS_DIAG_RAW ? "warn" : "warn";
+        String st = String(davisDiagStateName(d.state));
+        if (d.state == DAVIS_DIAG_ACQUIRE) st += " &middot; parked on one channel, waiting for the transmitter (up to 15 s per offset step)";
+        if (d.state == DAVIS_DIAG_LOST)    st += " &middot; lost, searching again";
+        if (d.state == DAVIS_DIAG_RAW)     st += " &middot; raw capture, no hopping, values not used";
+        if (d.radioError) { cls = "bad"; st += " &middot; radio error " + String(d.radioError); }
+        addStateRow(html, cls, "State", st);
+    }
+    addRow(html, "Transmitter ID", d.txId ? String(d.txId) + (gCfg.davisTxId ? "" : " <span class='dim'>(first heard)</span>")
+                                          : String(gCfg.davisTxId ? String(gCfg.davisTxId) + " <span class='dim'>(set, not heard yet)</span>" : "<span class='dim'>first heard &mdash; none yet</span>"));
+    float sync = davisSyncPct(d);
+    addRow(html, "Sync", sync >= 0.0f ? String(sync, 1) + " % <span class='dim'>(" + String(d.trackSlots - d.misses) + " of " + String(d.trackSlots) + " tracked slots)</span>"
+                                      : String("<span class='dim'>not tracked yet</span>"));
+    addRow(html, "Last packet", d.havePacket ? agoText(d.lastPacketMs) + " &middot; RSSI " + String(d.lastRssi, 0) + " dBm" +
+                                (d.haveTiming ? " &middot; timing " + String(d.lastTimingErrUs / 1000.0f, 1) + " ms" : String())
+                                : String("<span class='dim'>none yet</span>"));
+    addRow(html, "Packets / CRC errors / other / misses", String(d.packets) + " / " + String(d.crcErrors) + " / " + String(d.otherPackets) +
+                 " / " + String(d.misses) + (d.resyncs ? " &middot; " + String(d.resyncs) + " resyncs" : String()));
+    addRow(html, "Channel", String(d.channel) + " &middot; " + String(d.freqMHz, 4) + " MHz <span class='dim'>(" +
+                 (gCfg.davisTable ? "classic" : "measured") + " table, RX bandwidth " + String(gCfg.davisRxBw / 10.0f, 1) + " kHz)</span>");
+    addRow(html, "Period", d.periodMs > 0.0f ? String(d.periodMs, 2) + " ms" : String("<span class='dim'>unknown until the ID is known</span>"));
+    addRow(html, "Frequency offset", "set " + String(d.offsetHz / 1000.0f, 1) + " kHz &middot; in use " + String(d.learnedOffsetHz / 1000.0f, 1) +
+                 " kHz" + (gCfg.davisScanKhz ? " <span class='dim'>(scan &plusmn;" + String(gCfg.davisScanKhz) + " kHz)</span>" : String()) +
+                 (gCfg.davisAfc ? " <span class='dim'>(AFC on)</span>" : String()));
+    if (d.hasRainRate) addRow(html, "Rain rate (ISS)", String(rainRateForOutput(d.rainRateMmH, gCfg), 2) + " " + rainRateUnitLabel(gCfg));
+    if (d.hasGust)     addRow(html, "10-min gust (ISS)", String(windSpeedForOutput(d.gust10MinMs, gCfg), 1) + " " + windSpeedUnitLabel(gCfg));
+    for (int t = 0; t < 16; t++) {
+        const DavisTypeDiag& m = d.types[t];
+        if (!m.count) continue;
+        char hex[20];
+        snprintf(hex, sizeof(hex), "%02X %02X %02X %02X %02X %02X", m.bytes[0], m.bytes[1], m.bytes[2], m.bytes[3], m.bytes[4], m.bytes[5]);
+        String v; appendEscaped(v, m.text);
+        addRow(html, String("Message ") + String(t, HEX) + " (" + davisDiagTypeName((uint8_t)t) + ")",
+               v + " &middot; " + agoText(m.lastMs) + " &middot; " + String(m.count) + "&times; <span class='dim'><code>" + hex + "</code></span>");
+    }
+    addRow(html, "Sniffer", String(gCfg.davisSniffer ? "on" : "off") + (gCfg.davisRaw ? " &middot; <b>raw capture ch" + String(gCfg.davisRawCh) + "</b>" : String()) +
+                 " &middot; <a href='/api/log'>log</a> &middot; <a href='/api/davis/log'>capture (all packets)</a>");
+    html += "</table></section>";
 }
 
 // Health overview: latest readings, device state, and whether every
@@ -564,6 +621,7 @@ void handleStatusPage()
 
     html += "<section><h4>Connections</h4><table>";
     if (!gCfg.loraEn)            addStateRow(html, "off", "LoRaWAN", "<span class='dim'>disabled</span>");
+    else if (davisLoraPaused())  addStateRow(html, "warn", "LoRaWAN", "<b>LoRaWAN paused: Davis mode</b> &middot; the radio follows the Davis transmitter; no uplinks, no join");
     else if (!loraReady())      addStateRow(html, "warn", "LoRaWAN", "not joined &middot; automatic retries; measurements/WiFi continue");
     else if (sendFailCount == 0 && lastPayloadDropped[0])
         addStateRow(html, "warn", "LoRaWAN", String("uplinks OK &middot; ") + (gCfg.payloadFormat ? "binary" : "CayenneLPP") +
@@ -655,15 +713,20 @@ void handleStatusPage()
 
     if (gCfg.rfEn) {
         html += "<section><h4>Wireless sensors (868 MHz)</h4><table>";
-        if (rfSensorsReceiving())
-            addStateRow(html, "ok", "Receiver", String("listening (") + rfSensorsListening() + ") between LoRaWAN uplinks &middot; " +
+        if (rfDavisMode(gCfg.rfEn, gCfg.rfProto))
+            addStateRow(html, gDavisDiag.running ? "ok" : "bad", "Receiver", "Davis exclusive mode &middot; see the <i>Davis</i> box below");
+        else if (rfSensorsReceiving())
+            addStateRow(html, "ok", "Receiver", String("listening (") + rfSensorsListening() + ")" +
+                        (gCfg.loraEn ? " between LoRaWAN uplinks" : "") + " &middot; " +
                         String(rfSensorsPacketsTotal()) + " packets since start");
         else if (rfSensorsLastError() == 0)   // LoRaWAN uses the chip right now (uplink + receive windows)
-            addStateRow(html, "ok", "Receiver", "paused for a LoRaWAN uplink &middot; " +
+            addStateRow(html, "ok", "Receiver", String(gCfg.loraEn ? "paused for a LoRaWAN uplink" : "starting") + " &middot; " +
                         String(rfSensorsPacketsTotal()) + " packets since start");
         else
             addStateRow(html, "bad", "Receiver", "not receiving (radio error " + String(rfSensorsLastError()) + ", retrying)");
-        if (gCfg.rfProto == RF_PROTO_AUTO)
+        if (gCfg.rfProto == RF_PROTO_DAVIS)
+            addRow(html, "Sensor type", rfSensorTypeText(gCfg.rfProto));
+        else if (gCfg.rfProto == RF_PROTO_AUTO)
             addStateRow(html, "warn", "Sensor type", "Auto: searching &mdash; Bresser, IT+ 17.241 kbit/s + Fine Offset and "
                         "IT+ 9.579 kbit/s in turn until the first valid packet" +
                         String(gCfg.rfIds[0] ? " from a listed sensor ID" : ""));
@@ -693,16 +756,42 @@ void handleStatusPage()
             if (r.hasUv)       v += " &middot; UV " + String(r.uvIndex, 1) + stale("uv");
             if (r.hasLight)    v += " &middot; " + String((long)lroundf(r.lightLux)) + " lx" + stale("light");
             if (r.hasMoisture) v += " &middot; soil moisture " + String(r.moisturePct) + " %";
+            if (r.hasSolar)    v += " &middot; solar " + String((long)lroundf(r.solarWm2)) + " W/m&sup2;";
             if (r.hasSupercap) v += " &middot; supercap " + String(r.supercapV, 1) + " V";
             if (r.hasLightning) v += " &middot; lightning count " + String(r.lightningCount) +
                                      (r.lightningKm ? " &middot; storm " + String(r.lightningKm) + " km" : String());
+            if (r.hasPressure) v += " &middot; " + String(pressureForOutput(r.pressureHpa, gCfg), gCfg.unitSystem == 1 ? 2 : 1) +
+                                    " " + pressureUnitLabel(gCfg);
+            if (r.hasPm25)     v += " &middot; PM2.5 " + String(r.pm25, 1) + " &micro;g/m&sup3;";
+            if (r.hasPm10)     v += String(" &middot; PM10 ") + (r.pm10Estimated ? "(est.) " : "") + String(r.pm10, 1) + " &micro;g/m&sup3;";
+            if (r.hasPm1)      v += " &middot; PM1 " + String(r.pm1, 1) + " &micro;g/m&sup3;";
+            if (r.hasPm4)      v += " &middot; PM4 " + String(r.pm4, 1) + " &micro;g/m&sup3;";
+            if (r.hasCo2)      v += " &middot; CO&#8322; " + String(r.co2Ppm) + " ppm";
+            if (r.extPower)    v += " &middot; USB powered";
+            if (r.hasLeak)     v += String(" &middot; ") + (r.leak ? "<b>LEAK</b>" : "dry") + " (raw " + String(r.leakRaw) +
+                                    (r.leakHighSensitivity ? ", high" : ", low") + " sensitivity)";
+            if (r.hasLeafWetness)  v += " &middot; leaf wetness " + String(r.leafWetnessPct) + " %";
+            if (r.hasConductivity) v += " &middot; EC " + String((long)lroundf(r.conductivityUsCm)) + " &micro;S/cm";
             String kind = r.proto == RF_PROTO_BRESSER ? "type " + String(r.type) : String(rfProtoName(r.proto));
             if (r.model)   kind += String(" ") + r.model;
             if (r.channel) kind += " ch " + String(r.channel);
-            addRow(html, String("ID ") + id + " (" + kind + ")", v);
+            int slot = rfSlotOfIndex(i);   // 0-based; 0..3 = value sources Wireless 1-4
+            String label = slot >= 0 ? "Wireless " + String(slot + 1) + " &middot; " : String();
+            addRow(html, label + "ID " + id + " (" + kind + ")", v);
         }
-        if (!any) addRow(html, "Sensors", "<span class='dim'>none received yet (Bresser sensors send every 12&ndash;16 s, IT+ about every 4 s, Fine Offset every 5&ndash;80 s)</span>");
+        if (!any) addRow(html, "Sensors", "<span class='dim'>none received yet (Bresser sensors send every 12&ndash;16 s, IT+ about every 4 s, Fine Offset every 5&ndash;80 s, air quality sensors every 10 min)</span>");
+        if (gCfg.mqttEn && !rfDavisMode(gCfg.rfEn, gCfg.rfProto)) {
+            size_t listed = rfParseIds(gCfg.rfIds).size();
+            if (listed)
+                addRow(html, "Home Assistant", String("one device per listed sensor ID (") + String((unsigned)listed) +
+                       " listed) &middot; topic <code>&lt;prefix&gt;/rf/&lt;ID&gt;</code>");
+            else
+                addRow(html, "Home Assistant", "<span class='dim'>no device per wireless sensor &mdash; enter the IDs under "
+                       "<i>Settings &rarr; Wireless sensor IDs</i> to get one HA device per wireless sensor</span>");
+        }
+        addRfTraceRows(html);
         html += "</table></section>";
+        if (rfDavisMode(gCfg.rfEn, gCfg.rfProto)) addDavisBox(html);
     }
 
     html += "<section><h4>Device</h4><table>";
@@ -810,6 +899,172 @@ void handleLogRaw()
     static char buf[8192];
     dbgSerial.snapshot(buf, sizeof(buf));
     server.send(200, "text/plain; charset=utf-8", buf);
+}
+
+// Davis sniffer capture: now the radio trace (Davis mode starts
+// one); same file as GET /api/rf/trace, shown inline.
+void handleDavisLog()
+{
+    if (!requireAuth()) return;
+    sendRfTraceFile(false);
+}
+
+// ---- Radio trace (rf_trace.h): status page rows, REST handlers ----
+char rfTraceMessage[200] = "";   // result of the last start/stop (shown once on the status page)
+
+String rfTraceFilterText(const RfTraceStatus& st)
+{
+    if (st.filter == RF_TRACE_PROBLEMS) return "only failed / unknown packets";
+    if (st.filter == RF_TRACE_ONE_ID) {
+        char b[24];
+        snprintf(b, sizeof(b), "only ID %08lX", (unsigned long)st.filterId);
+        return b;
+    }
+    return "all packets";
+}
+
+void addRfTraceRows(String& html)
+{
+    const RfTraceStatus st = rfTraceStatusNow();
+    String v;
+    if (rfTraceMessage[0]) { v += "<b>"; appendEscaped(v, rfTraceMessage); v += "</b><br>"; rfTraceMessage[0] = '\0'; }
+    if (st.allocated) {
+        v += st.running ? "<b>recording</b>" : "finished";
+        if (!st.running && st.stopReason[0]) { v += " ("; appendEscaped(v, st.stopReason); v += ")"; }
+        v += " &middot; " + rfTraceFilterText(st) + " &middot; " + String(st.seen) + " packets, " + String(st.recorded) +
+             " lines &middot; buffer " + String(st.usedBytes * 100UL / RF_TRACE_SIZE) + " %";
+        if (st.overwrittenBytes) v += " (oldest lines overwritten)";
+        if (st.running) v += st.durationMs ? " &middot; " + String((st.leftMs + 59999) / 60000) + " min left"
+                                           : String(" &middot; until stopped") + (st.autoStarted ? " (Davis mode)" : "");
+        v += "<br><a href='/api/rf/trace'>Download diagnostic file</a> <span class='dim'>(admin password)</span> ";
+        v += "<form method='POST' action='/api/rf/trace' style='display:inline'><input type='hidden' name='redirect' value='1'>";
+        if (st.running) v += "<button name='action' value='stop'>Stop</button> ";
+        v += "<button name='action' value='clear'>Discard</button></form>";
+        v += "<br><span class='dim'>Kept in memory (24 KB) until you discard it, start a new one or restart the node.</span><br>";
+    }
+    if (!st.running) {
+        v += "<form method='POST' action='/api/rf/trace'><input type='hidden' name='redirect' value='1'>"
+             "<input type='hidden' name='action' value='start'>"
+             "<select name='minutes'><option value='5'>5 min</option><option value='15' selected>15 min</option>"
+             "<option value='60'>60 min</option></select> "
+             "<select name='filter'><option value='all'>all packets</option>"
+             "<option value='problems'>only unknown / failed packets</option>"
+             "<option value='id'>only this ID:</option></select> "
+             "<input name='id' size='9' maxlength='8' placeholder='hex ID'> "
+             "<button type='submit'>Start capture</button></form>";
+    }
+    v += "<span class='dim'>Records every packet the receiver gets (raw bytes, checks, decoded values) for us to analyse "
+         "&mdash; the file contains the IDs and values of all sensors in range, also your neighbours'; "
+         "no passwords or keys.</span>";
+    addRow(html, "<span id='rftrace'>Radio trace</span>", v);
+}
+
+void rfTraceWriteChunked(const char* s, size_t n, void* ctx)
+{
+    static_cast<Print*>(ctx)->write((const uint8_t*)s, n);
+}
+
+String rfTraceReceiverInfo()
+{
+    String r = rfDavisMode(gCfg.rfEn, gCfg.rfProto) ? String("Davis exclusive mode")
+             : rfSensorsReceiving() ? String("receiving, now listening to ") + rfSensorsListening()
+             : String("not receiving (last radio error ") + String(rfSensorsLastError()) + ")";
+    r += ", " + String(rfSensorsPacketsTotal()) + " packets since start";
+    if (rfSensorsDetectedProto()) r += ", auto search found type " + String(rfSensorsDetectedProto());
+    return r;
+}
+
+void sendRfTraceFile(bool attachment)
+{
+    char host[HOSTNAME_MAX_LEN + 1];
+    deviceHostname(host, sizeof(host));
+    if (attachment) {
+        char name[96];
+        rfTraceFileName(name, sizeof(name), host);
+        server.sendHeader("Content-Disposition", String("attachment; filename=\"") + name + "\"");
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/plain; charset=utf-8", "");
+    ChunkedPrint out(server);
+    String info = rfTraceReceiverInfo();
+    rfTraceWriteFile(rfTraceWriteChunked, &out, host, info.c_str());
+    out.flush();
+}
+
+void sendRfTraceStatusJson(bool ok, const char* error)
+{
+    const RfTraceStatus st = rfTraceStatusNow();
+    JsonDocument doc;
+    doc["ok"] = ok;
+    if (error && error[0]) doc["error"] = error;
+    doc["allocated"] = st.allocated;
+    doc["running"] = st.running;
+    static const char* const filters[] = { "all", "problems", "id" };
+    doc["filter"] = filters[st.filter <= RF_TRACE_ONE_ID ? st.filter : 0];
+    if (st.filter == RF_TRACE_ONE_ID) {
+        char id[12];
+        snprintf(id, sizeof(id), "%08lX", (unsigned long)st.filterId);
+        doc["id"] = id;
+    }
+    doc["autoStarted"] = st.autoStarted;
+    doc["durationSec"] = st.durationMs / 1000;
+    doc["elapsedSec"] = st.elapsedMs / 1000;
+    doc["leftSec"] = st.leftMs / 1000;
+    doc["packets"] = st.seen;
+    doc["lines"] = st.recorded;
+    doc["bufferBytes"] = st.usedBytes;
+    doc["bufferSize"] = (uint32_t)RF_TRACE_SIZE;
+    doc["overwrittenBytes"] = st.overwrittenBytes;
+    if (!st.running && st.stopReason[0]) doc["stopReason"] = st.stopReason;
+    String body;
+    serializeJson(doc, body);
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(ok ? 200 : 409, "application/json", body);
+}
+
+void handleRfTraceGet()
+{
+    if (!requireAuth()) return;
+    if (server.hasArg("status")) { sendRfTraceStatusJson(true, nullptr); return; }
+    sendRfTraceFile(true);
+}
+
+void handleRfTracePost()
+{
+    if (!requireAuth() || !requireSameOrigin()) return;
+    String action = server.arg("action");
+    bool ok = true;
+    char err[160] = "";
+    if (action == "start") {
+        long minutes = server.hasArg("minutes") ? server.arg("minutes").toInt() : 15;
+        String f = server.arg("filter");
+        RfTraceFilter filter = f == "problems" ? RF_TRACE_PROBLEMS : f == "id" ? RF_TRACE_ONE_ID : RF_TRACE_ALL;
+        uint32_t id = (uint32_t)strtoul(server.arg("id").c_str(), nullptr, 16);
+        if (minutes < 1 || minutes > (long)RF_TRACE_MAX_MIN) { ok = false; snprintf(err, sizeof(err), "minutes must be 1-%lu", (unsigned long)RF_TRACE_MAX_MIN); }
+        else if (!gCfg.rfEn) { ok = false; snprintf(err, sizeof(err), "wireless sensors are off"); }
+        else if (filter == RF_TRACE_ONE_ID && !id) { ok = false; snprintf(err, sizeof(err), "enter the sensor ID (hex) for the ID filter"); }
+        else ok = rfTraceStart((uint32_t)minutes * 60000UL, filter, id, false, err, sizeof(err));
+        if (ok) snprintf(rfTraceMessage, sizeof(rfTraceMessage), "Capture started (%ld min).", minutes);
+        else    snprintf(rfTraceMessage, sizeof(rfTraceMessage), "Capture not started: %s.", err);
+        dbgSerial.printf("Radio trace: %s\n", rfTraceMessage);
+    } else if (action == "stop") {
+        rfTraceStop("stopped by the user");
+        snprintf(rfTraceMessage, sizeof(rfTraceMessage), "Capture stopped - download the file below.");
+    } else if (action == "clear") {
+        rfTraceClear();
+        snprintf(rfTraceMessage, sizeof(rfTraceMessage), "Capture discarded, memory freed.");
+    } else {
+        ok = false;
+        snprintf(err, sizeof(err), "action must be start, stop or clear");
+    }
+    if (server.hasArg("redirect")) {
+        server.sendHeader("Location", "/status#rftrace");
+        server.send(303, "text/plain", "see /status");
+        return;
+    }
+    rfTraceMessage[0] = '\0';
+    sendRfTraceStatusJson(ok, err);
 }
 
 void handleLogClear()
@@ -981,7 +1236,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
     // grow fails), String silently drops the appends - answer 503 instead of
     // serving a truncated form that would save half the settings.
     String html;
-    if (!html.reserve(26000)) {
+    if (!html.reserve(29000)) {
         server.send(503, "text/plain", "Not enough free memory for the settings page right now - please retry.");
         return;
     }
@@ -1031,7 +1286,8 @@ void renderSettings(const String& message, bool isError, int httpCode)
                     "was found. "
                     "IT+: e.g. TFA 30.3143/3144/3147/3157/3159.IT (17.241 kbit/s), 30.3155/3156.WD (9.579 kbit/s); "
                     "with both rates the receiver alternates every 5 s. Fine Offset: Ecowitt / Froggit / Ambient "
-                    "WH65/WS69 7-in-1, WS80, WS85, WS90, WS68, WH31/DP50, WN34, WH40, WN20, WH51, WH57 (868 MHz "
+                    "WH65/WS69 7-in-1, WS80, WS85, WS90, WS68, WH31/DP50, WN32/WN32P, WN34, WN35, WH40, WN20, WH51, "
+                    "WH52, WH57, WH55 leak, WH41/WH43/WH45/WH46 air quality (868 MHz "
                     "versions); same data rate as IT+ 17.241 kbit/s, so both are received together (with IT+ 9.579 "
                     "kbit/s: 17 s / 5 s alternating). Bresser + another family: the receiver alternates (17 s "
                     "Bresser, 5 s per IT+ data rate, 17 s Fine Offset) and misses packets of both &mdash; e.g. "
@@ -1039,27 +1295,28 @@ void renderSettings(const String& message, bool isError, int httpCode)
     }
     {
         // received sensors as a copy-and-paste hint ("learning" without extra buttons)
-        static char seen[160];
-        int n = snprintf(seen, sizeof(seen), "hex, comma-separated, max 4, order = wireless 1&ndash;4; empty = any sensor");
+        String seen = "hex, comma-separated, max 32, order = wireless 1&ndash;32 (1&ndash;4 can be value sources); "
+                      "empty = any sensor. Home Assistant gets one device per listed ID (none with an empty list)";
         bool first = true;
-        for (int i = 0; i < RF_MAX_SENSORS && n < (int)sizeof(seen) - 24; i++) {
+        for (int i = 0; i < RF_MAX_SENSORS; i++) {
             if (!gRfSensors[i].used) continue;
+            char e[32];
             if (gRfSensors[i].model)
-                n += snprintf(seen + n, sizeof(seen) - n, "%s%08lX (%s)", first ? ". Received: " : ", ",
-                              (unsigned long)gRfSensors[i].id, gRfSensors[i].model);
+                snprintf(e, sizeof(e), "%08lX (%s)", (unsigned long)gRfSensors[i].id, gRfSensors[i].model);
             else
-                n += snprintf(seen + n, sizeof(seen) - n, "%s%08lX (type %u)", first ? ". Received: " : ", ",
-                              (unsigned long)gRfSensors[i].id, (unsigned)gRfSensors[i].type);
+                snprintf(e, sizeof(e), "%08lX (type %u)", (unsigned long)gRfSensors[i].id, (unsigned)gRfSensors[i].type);
+            seen += first ? ". Received: " : ", ";
+            seen += e;
             first = false;
         }
-        fieldText  (html, "rfids",     "Wireless sensor IDs", gCfg.rfIds, sizeof(gCfg.rfIds) - 1, seen);
+        fieldText  (html, "rfids",     "Wireless sensor IDs", gCfg.rfIds, sizeof(gCfg.rfIds) - 1, seen.c_str());
     }
     {
         // value sources (sources.h): one select per group, wireless slots labelled with their ID
-        static char rfLabel[4][48];
-        for (int k = 0; k < 4; k++) {
+        static char rfLabel[RF_SOURCE_SLOTS][48];
+        std::vector<uint32_t> ids = rfParseIds(gCfg.rfIds);
+        for (int k = 0; k < RF_SOURCE_SLOTS; k++) {
             int idx = rfSensorIndexForSlot(k);
-            std::vector<uint32_t> ids = rfParseIds(gCfg.rfIds);
             if (idx >= 0)
                 snprintf(rfLabel[k], sizeof(rfLabel[k]), "Wireless %d (%08lX)", k + 1, (unsigned long)gRfSensors[idx].id);
             else if (k < (int)ids.size())
@@ -1105,6 +1362,44 @@ void renderSettings(const String& message, bool isError, int httpCode)
     fieldSelect(html, "cpufreq",   "CPU frequency", gCfg.cpuFreqMhz, OPTS(cpuFreqs));
     fieldCheck (html, "debugmode", "Debug mode", gCfg.debugMode, "adds diagnostic fields to every payload");
     html += "</section>";
+
+    if (rfDavisMode(gCfg.rfEn, gCfg.rfProto)) {
+        static const Option dvIds[] = { { 0, "0 = the first transmitter heard" }, { 1, "1" }, { 2, "2" }, { 3, "3" }, { 4, "4" },
+                                        { 5, "5" }, { 6, "6" }, { 7, "7" }, { 8, "8" } };
+        static const Option dvModels[]  = { { 0, "Vantage Pro2 / 6332 (potentiometer vane)" }, { 1, "Vantage Vue (Hall vane)" } };
+        static const Option dvBuckets[] = { { 0, "0.2 mm (EU)" }, { 1, "0.01 in = 0.254 mm (US)" } };
+        static const Option dvTables[]  = { { 0, "Measured 2026 (868.0589 / .2993 / .5396 / .1792 / .4196 MHz)" },
+                                            { 1, "Classic DavisRFM69 (868.0667 / .2971 / .5275 / .1819 / .4123 MHz)" } };
+        static const Option dvBws[]     = { { 586, "58.6 kHz" }, { 782, "78.2 kHz" }, { 938, "93.8 kHz (default)" },
+                                            { 1173, "117.3 kHz" }, { 1562, "156.2 kHz" }, { 2343, "234.3 kHz" } };
+        static const Option dvChs[]     = { { 0, "ch0" }, { 1, "ch1" }, { 2, "ch2" }, { 3, "ch3" }, { 4, "ch4" } };
+        sectionStart(html, "Davis (diagnostics)", false,
+                     "Experimental. All fields apply at once without a restart; the status page box <i>Davis</i> and the "
+                     "<a href='/api/log'>log</a> show the effect. Field-test guide: docs/wireless-sensors.md");
+        fieldSelect(html, "dvid",     "Transmitter ID", gCfg.davisTxId, OPTS(dvIds),
+                    "DIP switch setting of the ISS / anemometer transmitter (console: Setup &rarr; transmitter ID). Other IDs are ignored");
+        fieldSelect(html, "dvmodel",  "Station", gCfg.davisModel, OPTS(dvModels), "wind direction formula");
+        fieldSelect(html, "dvbucket", "Rain collector", gCfg.davisBucket, OPTS(dvBuckets));
+        fieldText  (html, "dvoff",    "Frequency offset (kHz)", String(gCfg.davisOffsetHz / 1000.0f, 1), 7,
+                    "-100 to +100; added to every channel. The transmitter's own error moves with temperature; "
+                    "the receiver decodes only within about &plusmn;4 kHz", "number");
+        fieldText  (html, "dvscan",   "Search: offset scan (&plusmn;kHz)", String(gCfg.davisScanKhz), 3,
+                    "0&ndash;60; while searching, try the offset in 6-kHz steps around the set one (about 15 s per step)", "number");
+        fieldCheck (html, "dvafc",    "AFC while tracking", gCfg.davisAfc,
+                    "every 4th packet is listened to 6 kHz above / below to follow a drifting transmitter (costs a few packets)");
+        fieldText  (html, "dvwin",    "RX window: late (ms)", String(gCfg.davisWindowMs), 4,
+                    "5&ndash;500; a packet may arrive this much after the prediction, later = miss", "number");
+        fieldText  (html, "dvguard",  "RX window: early / guard (ms)", String(gCfg.davisGuardMs), 4,
+                    "5&ndash;500; a packet may arrive this much before the prediction (earlier = another station)", "number");
+        fieldSelect(html, "dvtable",  "Channel table", gCfg.davisTable, OPTS(dvTables));
+        fieldSelect(html, "dvbw",     "Receiver bandwidth", gCfg.davisRxBw, OPTS(dvBws), "narrower = more sensitive, wider = more frequency tolerance of the filter (not of the demodulator)");
+        fieldCheck (html, "dvsniff",  "Sniffer: every packet to the log", gCfg.davisSniffer,
+                    "raw bytes, CRC, decoded values, timing; at most 30 lines per minute in the web log, all of them in /api/davis/log");
+        fieldCheck (html, "dvraw",    "Raw capture (no hopping)", gCfg.davisRaw,
+                    "parks on the channel below and logs everything that passes the sync word, also CRC failures &mdash; when tracking does not work at all");
+        fieldSelect(html, "dvrawch",  "Raw capture channel", gCfg.davisRawCh, OPTS(dvChs));
+        html += "</section>";
+    }
 
     if (ioV2()) {
         sectionStart(html, "Inputs &amp; outputs (PCB v2.0)", false,
@@ -1542,6 +1837,35 @@ void handleSettingsPost()
     // Not clearable: an empty admin password would lock this page out.
     storeSecret(gCfg.webAdminPass, "webadminpw", ignored);
     storeText(gCfg.rfIds, "rfids", ignored);   // rf_sensors.cpp picks up changes on its next loop
+    {   // Davis (diagnostics): live, davis_rx.cpp compares the settings every loop
+        auto liveInt = [&](volatile int& field, const char* name, long lo, long hi, const char* label) {
+            int v = field;
+            storeInt(v, name, lo, hi, label, rejected, ignored);
+            field = v;
+        };
+        liveInt(gCfg.davisTxId,     "dvid",     0, 8,   "Davis transmitter ID (0-8)");
+        liveInt(gCfg.davisModel,    "dvmodel",  0, 1,   "Davis station");
+        liveInt(gCfg.davisBucket,   "dvbucket", 0, 1,   "Davis rain collector");
+        liveInt(gCfg.davisScanKhz,  "dvscan",   0, 60,  "Davis offset scan (0-60 kHz)");
+        liveInt(gCfg.davisWindowMs, "dvwin",    5, 500, "Davis RX window (5-500 ms)");
+        liveInt(gCfg.davisGuardMs,  "dvguard",  5, 500, "Davis guard (5-500 ms)");
+        liveInt(gCfg.davisTable,    "dvtable",  0, 1,   "Davis channel table");
+        liveInt(gCfg.davisRawCh,    "dvrawch",  0, 4,   "Davis raw capture channel (0-4)");
+        if (present("dvbw")) {
+            int bw = formArg("dvbw").toInt();
+            if (davisRxBwValid(bw)) gCfg.davisRxBw = bw; else addRejected(rejected, "Davis receiver bandwidth");
+        }
+        if (present("dvoff")) {
+            String t = formArg("dvoff");
+            char* end = nullptr;
+            float khz = strtof(t.c_str(), &end);
+            if (t.length() && *end == '\0' && isfinite(khz) && khz >= -100.0f && khz <= 100.0f) gCfg.davisOffsetHz = (int)lroundf(khz * 1000.0f);
+            else addRejected(rejected, "Davis frequency offset (-100 to 100 kHz)");
+        }
+        if (present("dvafc"))   gCfg.davisAfc = (int)checked("dvafc");
+        if (present("dvsniff")) gCfg.davisSniffer = (int)checked("dvsniff");
+        if (present("dvraw"))   gCfg.davisRaw = (int)checked("dvraw");
+    }
     {   // Loxone: live, read by the main loop under the same lock
         int loxPort = gCfg.loxPort;
         storeInt(loxPort, "loxport", 1, 65535, "Loxone UDP port (1-65535)", rejected, ignored);
@@ -1793,6 +2117,9 @@ void webApiSetup()
     server.collectHeaders(headerKeys, 2);
     server.on("/api/log/raw",   HTTP_GET,  handleLogRaw);
     server.on("/api/log/clear", HTTP_POST, handleLogClear);
+    server.on("/api/davis/log", HTTP_GET,  handleDavisLog);
+    server.on("/api/rf/trace",  HTTP_GET,  handleRfTraceGet);
+    server.on("/api/rf/trace",  HTTP_POST, handleRfTracePost);
     server.on("/api/history",        HTTP_GET,  handleApiHistory);
     server.on("/help",         HTTP_GET,  handleHelp);
     server.on("/help.md",      HTTP_GET,  handleHelpMd);

@@ -211,6 +211,13 @@ class WeatherSensor {
         \brief Use the application's transceiver (fork: no own radio object).
         */
         static void setRadio(SX1262* r) { WeatherSensorReceiver::radio = r; }
+        // universal-weather-node fork: called by getMessage() for every frame
+        // read from the radio (also undecodable ones), after decoding:
+        // data = the MSG_BUF_SIZE bytes read (data[0] should be 0xD4, the last
+        // sync byte), res = the decode result (DECODE_INVALID without decoding).
+        typedef void (*RawHook)(const uint8_t* data, size_t len, float rssi, DecodeStatus res);
+        static void setRawHook(RawHook h) { rawHook = h; }
+        static RawHook rawHook;
 
         /*!
         \brief Slot written by the last successful decode (fork; -1 = none yet).

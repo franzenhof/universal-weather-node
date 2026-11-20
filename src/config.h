@@ -42,8 +42,16 @@ constexpr int RF_PROTO_BRESSER = 1, RF_PROTO_ITPLUS17 = 2, RF_PROTO_ITPLUS9 = 4,
 // until the first valid packet (from a listed ID, if an ID list is set),
 // then stores the matching type (1, 10 or 4) in place of this value.
 constexpr int RF_PROTO_AUTO = 16;
-// Valid stored / parameter-50 values: a bit mask 1..15 or RF_PROTO_AUTO.
-inline bool rfProtoValid(int v) { return (v >= 1 && v <= RF_PROTO_ALL) || v == RF_PROTO_AUTO; }
+// "Davis (exclusive)": not a bit mask either - the radio follows the hop
+// sequence of one Davis Vantage Pro2 / Vue transmitter continuously
+// (davis_rx.cpp): no other wireless protocols, LoRaWAN paused. Only when
+// selected; Auto (search) never picks it.
+constexpr int RF_PROTO_DAVIS = 17;
+// Valid stored / parameter-50 values: a bit mask 1..15, RF_PROTO_AUTO or RF_PROTO_DAVIS.
+inline bool rfProtoValid(int v) { return (v >= 1 && v <= RF_PROTO_ALL) || v == RF_PROTO_AUTO || v == RF_PROTO_DAVIS; }
+inline bool rfDavisMode(int rfEn, int rfProto) { return rfEn == RF_RADIO_SX1262 && rfProto == RF_PROTO_DAVIS; }
+// Davis receiver bandwidths offered (SX1262 FSK steps, kHz x 10)
+inline bool davisRxBwValid(int v) { return v == 586 || v == 782 || v == 938 || v == 1173 || v == 1562 || v == 2343; }
 
 struct Config {
     // Set once the config portal has been completed the first time. Used
@@ -127,8 +135,26 @@ struct Config {
     char     mqttTopic[65]     = "";  // optional topic prefix override; falls back to deviceName
     int      mqttTlsMode       = 0;   // MqttTlsMode (see above)
     char     mqttCaCert[2048]  = "";  // PEM root CA, only used when mqttTlsMode == MQTT_TLS_VERIFY
+    // Davis (exclusive) receiver, web settings "Davis (diagnostics)", all live (davis_rx.cpp)
+    volatile int davisTxId     = 0;      // transmitter ID 1-8 (DIP switch); 0 = the first one heard
+    volatile int davisOffsetHz = 0;      // frequency correction, -100000..100000 Hz
+    volatile int davisWindowMs = 25;     // a packet may arrive this late (5-500 ms) ...
+    volatile int davisGuardMs  = 40;     // ... or this early (5-500 ms) relative to the prediction
+    volatile int davisBucket   = 0;      // rain collector: 0 = 0.2 mm (EU), 1 = 0.01 in (US)
+    volatile int davisModel    = 0;      // wind vane: 0 = Vantage Pro2 (potentiometer), 1 = Vantage Vue (Hall)
+    volatile int davisSniffer  = 0;      // 1 = every packet to the web log
+    volatile int davisRaw      = 0;      // 1 = raw capture: park on davisRawCh, no hopping
+    volatile int davisRawCh    = 0;      // 0-4 (hop-sequence index)
+    volatile int davisScanKhz  = 30;     // acquisition offset scan +-0..60 kHz (0 = off)
+    volatile int davisAfc      = 0;      // 1 = AFC by shoulder probing while tracking
+    volatile int davisTable    = 0;      // channel table: 0 = measured (2026), 1 = classic DavisRFM69
+    volatile int davisRxBw     = 938;    // receiver bandwidth, kHz x 10 (davisRxBwValid())
     uint8_t  srcSel[5]         = { 0, 0, 0, 0, 0 };   // value sources (sources.h): air, wind, rain, UV, light; 0 = auto
-    char     rfIds[48]         = "";  // wireless sensor IDs to accept (hex, comma-separated, max 4); empty = any
+    // Wireless sensor IDs to accept (hex, comma-separated, max RF_MAX_SENSORS = 32;
+    // 32 x 8 hex digits + 31 ", " separators = 318 characters); empty = any.
+    // Stored as the NVS string "rfids": a list saved by an older firmware
+    // (buffer 48) loads unchanged into the larger buffer, no migration needed.
+    char     rfIds[320]        = "";
     char     webAdminPass[33]  = "";  // gates write access to the web settings page
 
     // Loxone UDP output (loxone.h): one datagram "name=value" per value.

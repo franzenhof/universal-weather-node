@@ -7,6 +7,7 @@
 #include "rf_sensors.h"
 #include <cassert>
 #include <cstdio>
+#include <cstring>
 
 // Receive scheduler as rfSensorsLoop() runs it (loop every 50 ms).
 struct Sched {
@@ -56,12 +57,24 @@ int main()
     assert(l.loraEn == 1 && l.wifiEn == 0 && l.webApiEn == 0 && l.rfEn == RF_RADIO_OFF && l.rfProto == RF_PROTO_BRESSER);
     assert(l.windEn == 1 && l.rainEn == 1);
 
-    // ---- valid sensor types: bit masks 1..15 and 16 = Auto ----
+    // ---- valid sensor types: bit masks 1..15, 16 = Auto, 17 = Davis (exclusive) ----
     for (int v = 1; v <= 15; v++) assert(rfProtoValid(v));
     assert(rfProtoValid(RF_PROTO_AUTO) && RF_PROTO_AUTO == 16);
-    assert(!rfProtoValid(0) && !rfProtoValid(17) && !rfProtoValid(32) && !rfProtoValid(128) && !rfProtoValid(-1));
+    assert(rfProtoValid(RF_PROTO_DAVIS) && RF_PROTO_DAVIS == 17);
+    assert(!rfProtoValid(0) && !rfProtoValid(18) && !rfProtoValid(32) && !rfProtoValid(128) && !rfProtoValid(-1));
+    assert(applyParam(PARAM_RF_PROTO, 17) && gCfg.rfProto == RF_PROTO_DAVIS);
     assert(applyParam(PARAM_RF_PROTO, 16) && gCfg.rfProto == RF_PROTO_AUTO);
-    assert(!applyParam(PARAM_RF_PROTO, 17) && !applyParam(PARAM_RF_PROTO, 0) && gCfg.rfProto == RF_PROTO_AUTO);
+    assert(!applyParam(PARAM_RF_PROTO, 18) && !applyParam(PARAM_RF_PROTO, 0) && gCfg.rfProto == RF_PROTO_AUTO);
+    // Davis: only when selected and the wireless receiver is on; never part of Auto
+    assert(rfDavisMode(RF_RADIO_SX1262, RF_PROTO_DAVIS) && !rfDavisMode(RF_RADIO_OFF, RF_PROTO_DAVIS));
+    assert(!rfDavisMode(RF_RADIO_SX1262, RF_PROTO_AUTO) && !rfDavisMode(RF_RADIO_SX1262, RF_PROTO_ALL));
+    assert(rfProtoSetFor(RF_PROTO_DAVIS) == 0 && !strcmp(rfProtoName(RF_PROTO_DAVIS), "Davis"));
+    assert(rfAutoDetectedProto(RF_PROTO_DAVIS) == 0);
+    {   // defaults and sanitising of the Davis settings
+        const Config d;
+        assert(d.davisTxId == 0 && d.davisOffsetHz == 0 && d.davisWindowMs == 25 && d.davisGuardMs == 40 &&
+               d.davisScanKhz == 30 && d.davisRxBw == 938 && davisRxBwValid(d.davisRxBw) && !davisRxBwValid(1000));
+    }
     assert(applyParam(PARAM_RF_PROTO, 10) && gCfg.rfProto == 10);
     // parameter 51: rain week/month/year in flash
     assert(PARAM_RAIN_PERSIST == 51);

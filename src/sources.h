@@ -5,9 +5,12 @@
 // Per group the setting (gCfg.srcSel[]) is
 //   Auto      board sensor first, then wireless sensors 1-4 (like a PC boot
 //             order): the first one that currently delivers the value is used
+//             (temperature / humidity: indoor sensors excluded, rfIsIndoor())
 //   Board     only the board's own sensor (BME280, anemometer, rain gauge, UV input)
-//   Wireless n  only wireless sensor n: the n-th ID in "Wireless sensor IDs",
-//             or - with an empty list - the n-th sensor received since start
+//   Wireless n  only wireless sensor n (1-4): the n-th ID in "Wireless sensor
+//             IDs", or - with an empty list - the n-th sensor received since
+//             start. Up to RF_MAX_SENSORS (32) sensors are received and shown,
+//             only the first RF_SOURCE_SLOTS (4) slots are value sources.
 //   Off       not reported at all
 // A wireless sensor counts while its last packet carrying the value is at most
 // SRC_RF_FRESH_MS old (Bresser sensors send every 12-16 s).
@@ -21,6 +24,9 @@
 
 enum SrcGroup : uint8_t { SG_AIR = 0, SG_WIND, SG_RAIN, SG_UV, SG_LIGHT, SG_COUNT };
 enum SrcSel   : uint8_t { SRC_AUTO = 0, SRC_BOARD = 1, SRC_RF1 = 2, SRC_RF4 = 5, SRC_OFF = 6 };
+// Wireless slots selectable as value sources (Wireless 1-4 = slots 1-4;
+// stored settings and parameters 45-49 keep this meaning).
+constexpr int RF_SOURCE_SLOTS = SRC_RF4 - SRC_RF1 + 1;
 
 constexpr int SRC_NONE     = -2;   // srcResolve(): value not available
 constexpr int SRC_IS_BOARD = -1;   // srcResolve(): board sensor; >= 0: gRfSensors[] index
@@ -34,8 +40,12 @@ inline bool srcIsRadio(SrcGroup g) { return srcResolve(g) >= 0; }
 // gRfSensors[idx] was last received more than SRC_RF_FRESH_MS ago (stale).
 bool srcRfValueFresh(int idx, const char* value);
 
-// gRfSensors[] index of wireless sensor slot 0..3 (see above), -1 = none
+// gRfSensors[] index of wireless sensor slot 0..RF_MAX_SENSORS-1 (0-based:
+// slot 0 = "Wireless 1", see above), -1 = none
 int rfSensorIndexForSlot(int slot);
+// The other way round: 0-based slot of gRfSensors[idx] (its position in the
+// ID list, else idx), -1 = unused entry / not in the list.
+int rfSlotOfIndex(int idx);
 
 // "board", "radio:39582376" or "none" (JSON); short labels for the web pages
 const char* srcGroupKey(SrcGroup g);   // JSON key: tempHum, wind, rain, uv, light

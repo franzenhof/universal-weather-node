@@ -24,11 +24,23 @@ library (same pattern as `TfaWeatherSensorReceiver` next to it). MIT license.
 | `0x20` | WN20 rain gauge | rain |
 | `0x51` | WH51 soil moisture (Froggit DP100) | soil moisture % |
 | `0x57` | WH57 lightning (Ambient WH31L, Froggit DP60) | strike count, storm distance |
+| `0x41`, `0x42` | WH41; WH0290 / Ambient Weather PM25 / Misol PM25 | PM2.5, PM10 (estimated by the sensor) |
+| `0x43` | WH43 | PM2.5, PM10 (estimated) |
+| `0x45`, `0x46` | WH45 / WH0295 / Froggit DP250 / Ambient AQIN; WH46 | temperature, humidity, PM2.5, PM10, CO2; WH46 also PM1, PM4 |
+| `0x55` | WH55 leak (Froggit DP70) | leak alarm, sensitivity, raw value, channel 1–4 |
+| `0x35` | WN35 leaf wetness (Froggit DP10) | leaf wetness %, battery voltage |
+| `0xA2` | WH52 soil sensor | temperature, soil moisture %, EC (µS/cm); battery not decoded |
+| (type `0xE`) | WH25, WH32B, WN32B, WN32P indoor | temperature, humidity, pressure |
+| (type `0xD`) | WH32, WN32, WN32EP outdoor | temperature, humidity |
+
+The families added last (air quality, WH55, WN35, WH52, WH25 / WH32) are decoded from published frames
+only and **not yet tested with real sensors**.
 
 Only the 868 MHz (EU, "A") versions can be received; 433 / 915 MHz versions use the same format on
-another band. Not supported: WH25 / WH32 / WN32 (different checksum scheme), WH0290 / WH41 / WH43 /
-WH45 / WH46 (air quality), WH55 (leak), WH52 (soil EC), the older WH1080 / WH1050 (different frame),
-and the OOK sensors (WH2, WH5, WH0530, WH53 — the SX1262 has no OOK receiver).
+another band. Not supported: the older WH1080 / WH1050 (different frame), the LDS01 laser distance
+sensor (other data rate, format not settled), and the OOK sensors (WH2, WH5, WH0530, WH53 — the SX1262
+has no OOK receiver). The WN30 probe thermometer sends the WH31 frame (a humidity of 0 is treated as
+"none").
 
 ## Usage
 
@@ -72,7 +84,7 @@ SS  sum of all bytes before it (incl. CC), mod 256
 ```
 
 The frame length follows from the family code (`foFrameLength()`: 7 bytes for WH31 up to 32 for
-WS90); the receiver therefore reads a fixed `FO_MAX_FRAME_LEN` = 32 bytes (about 15 ms) and the
+WS90; WH55: 10 checked bytes plus 2 of unknown meaning); the receiver therefore reads a fixed `FO_MAX_FRAME_LEN` = 32 bytes (about 15 ms) and the
 decoder checks only the family's own length. Field layouts and scalings are documented in
 `FineOffsetDecoder.cpp`; notable points:
 
@@ -92,6 +104,25 @@ decoder checks only the family's own length. Field layouts and scalings are docu
 - **Battery:** WH65 / WH31: low-battery bit. Voltage-based (assumed thresholds): WS80 / WS90 / WS85
   > 2.4 V, WH40 ≥ 1.0 V, WH51 ≥ 1.3 V, WN34 > 1.2 V, WN20 > 1.8 V, WH57 level ≥ 1 of 0–2, WS68 raw
   > 0x20.
+- **Air quality (WH41 / WH0290 / WH43 / WH45 / WH46):** PM2.5 and PM10 as 14-bit values in 0.1 µg/m³;
+  the battery level 0–5 is split over the top bits of both (6 = USB power), ≤ 1 = low. WH41 / WH0290 /
+  WH43 use a Honeywell sensor whose PM10 is derived from PM2.5 (`pm10Estimated`). WH45 / WH46: 11-bit
+  temperature (°C + 40) × 10, humidity, CO2 in ppm (16 bit); WH46 adds PM1 and PM4 (0.1 µg/m³).
+- **WH55 leak:** byte 1 holds two flag bits and the channel (0–3 → CH1–4), the 20-bit ID as the
+  Ecowitt app shows it includes these bits; battery level 1–5 (a frame with a level above 6 is
+  rejected — an extra guard against WH1050 / TFA 30.3151 frames that also start with 0x55 and carry a
+  CRC-8 at byte 8); raw value (lower = wetter); byte 7 bit 7 = high sensitivity, bit 6 = alarm (water
+  detected). Byte 9 is the usual sum (found while checking the published frames).
+- **WN35:** 24-bit raw A/D, leaf wetness %, battery 20 mV steps.
+- **WH52:** temperature 13 bit (°C + 40) × 10 (bits 7–5 of byte 4: a transmission boost counter),
+  moisture %, EC = 20-bit value / 25.6 µS/cm (empirical); the battery byte / scaling are still
+  disputed upstream and are not decoded.
+- **WH25 / WH32 family:** no family byte — `TI IT TT HH PP PP SS XX`: type nibble (0xE with pressure,
+  0xD outdoor), 8-bit ID, low-battery and invalid flags, 10-bit temperature (°C + 40) × 10, humidity,
+  pressure in 0.1 hPa (0xFFFF = none), SS = 8-bit sum of the first 6 bytes, XX = their XOR with the
+  nibbles swapped (WH25 only; missing on WH32B / WN32B, so not required). With only an 8-bit sum,
+  frames with implausible values (temperature above 60 °C, humidity above 100 %, pressure outside
+  300–1100 hPa) are rejected; `FoFrame::family` is `0x25` / `0x32` (not on the air).
 - **IDs:** WH65 and WH31 use an 8-bit ID that changes with every battery change (the WH31 also
   sends its channel); the others use 16–24-bit IDs.
 
@@ -107,7 +138,13 @@ the cost of about 1.2 dB sensitivity.
 Independent implementation from the published protocol descriptions: the device documentation in
 the comments of the [rtl_433](https://github.com/merbanan/rtl_433) decoders `fineoffset.c`,
 `fineoffset_ws80.c`, `fineoffset_ws85.c`, `fineoffset_ws90.c`, `fineoffset_wh31l.c`,
-`fineoffset_wn34.c` and `ambientweather_wh31e.c`, whose example frames are used as test vectors.
+`fineoffset_wn34.c`, `ambientweather_wh31e.c`, `fineoffset_wh45.c`, `fineoffset_wh46.c`,
+`fineoffset_wh43.c`, `fineoffset_wh55.c`, `fineoffset_wh52.c` and the WH0290 / WH25 sections of
+`fineoffset.c`, the readme of `rtl_433_tests/tests/fineoffset/fineoffset_wh0290`, the issues
+[#2756](https://github.com/merbanan/rtl_433/issues/2756) (WH55), [#3614](https://github.com/merbanan/rtl_433/issues/3614)
+(WH52), [#3665](https://github.com/merbanan/rtl_433/issues/3665) and pull request
+[#3679](https://github.com/merbanan/rtl_433/pull/3679) (WN35), whose example frames are used as test
+vectors (each one re-checked: CRC + sum).
 rtl_433 is GPL-2.0; **no rtl_433 code is included or translated** — the frame layouts were taken
 from its documentation and implemented from scratch. Thanks to the rtl_433 contributors who
 analysed these devices.

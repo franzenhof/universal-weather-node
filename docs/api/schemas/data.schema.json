@@ -400,9 +400,63 @@
 
     "rfSensors": {
       "type": "array",
-      "description": "Every wireless sensor received since the start (at most 4), in reception order. Values in the configured units: temperatures in /api/info units.temp, wind in windUnit/units.wind, rain in rainUnit/units.rain.",
+      "maxItems": 32,
+      "description": "Every wireless sensor received since the start (at most 32; with an ID list only the listed IDs), in reception order — slot gives its number. Values in the configured units: temperatures in /api/info units.temp, wind in windUnit/units.wind, rain in rainUnit/units.rain. The same object is published per sensor on the MQTT topic <prefix>/rf/<id>.",
       "x-present": "wireless sensors enabled (setting rfEn); may be empty",
       "items": { "$ref": "#/$defs/rfSensor" }
+    },
+
+    "davis": {
+      "type": "object",
+      "description": "Davis (exclusive) receiver diagnostics — experimental, for tuning the reception on site; fields may change. Values of the transmitter itself are in rfSensors (ID DA0000ii).",
+      "x-present": "wireless sensor type Davis selected and wireless sensors on",
+      "required": ["running", "state", "model", "channelTable", "channel", "offsetKhz", "offsetLearnedKhz", "packets", "crcErrors", "otherPackets", "misses", "resyncs", "sniffer", "rawCapture", "messages"],
+      "additionalProperties": false,
+      "properties": {
+        "running": { "type": "boolean", "description": "Receive task active (owns the radio; LoRaWAN paused).", "x-present": "always" },
+        "state": { "type": "string", "enum": ["acquire", "track", "lost", "raw"], "description": "acquire: parked on one channel waiting for the transmitter; track: following the hop sequence; lost: too many misses, searching again; raw: raw capture on one channel.", "x-present": "always" },
+        "txId": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Transmitter ID tracked (set, or the first heard).", "x-present": "an ID is set or was heard" },
+        "model": { "type": "string", "enum": ["vp2", "vue"], "description": "Station setting (wind direction formula).", "x-present": "always" },
+        "channelTable": { "type": "string", "enum": ["measured", "classic"], "description": "EU channel table in use.", "x-present": "always" },
+        "channel": { "type": "integer", "minimum": 0, "maximum": 4, "description": "Hop channel listened to now.", "x-present": "always" },
+        "freqMHz": { "type": "number", "description": "Frequency listened to now, offset included.", "x-unit": "MHz", "x-present": "the receiver has started" },
+        "periodMs": { "type": "number", "minimum": 0, "description": "Packet period: nominal (40 + ID) / 16 s, refined by the tracking.", "x-unit": "ms", "x-present": "the transmitter ID is known" },
+        "offsetKhz": { "type": "number", "description": "Frequency offset set.", "x-unit": "kHz", "x-present": "always" },
+        "offsetLearnedKhz": { "type": "number", "description": "Offset that received the transmitter (search scan / AFC), relative to the channel table.", "x-unit": "kHz", "x-present": "always" },
+        "syncPct": { "type": "number", "minimum": 0, "maximum": 100, "description": "Share of the tracked packet slots with a valid packet.", "x-unit": "%", "x-present": "at least one slot tracked" },
+        "packets": { "type": "integer", "minimum": 0, "description": "Valid packets of the tracked transmitter since Davis mode started.", "x-present": "always" },
+        "crcErrors": { "type": "integer", "minimum": 0, "description": "Packets that passed the sync word with a wrong CRC.", "x-present": "always" },
+        "otherPackets": { "type": "integer", "minimum": 0, "description": "Valid packets ignored: other transmitter ID, via a repeater, bad trailer or far off the predicted time.", "x-present": "always" },
+        "misses": { "type": "integer", "minimum": 0, "description": "Tracked slots without a packet.", "x-present": "always" },
+        "resyncs": { "type": "integer", "minimum": 0, "description": "Times the transmitter was found again after it was lost.", "x-present": "always" },
+        "lastPacketAgeSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last valid packet.", "x-unit": "s", "x-present": "a valid packet was received" },
+        "lastRssi": { "type": "integer", "maximum": 0, "description": "Signal strength of the last valid packet.", "x-unit": "dBm", "x-present": "a valid packet was received" },
+        "lastTimingErrMs": { "type": "number", "description": "Arrival of the last tracked packet minus its prediction.", "x-unit": "ms", "x-present": "a packet was received while tracking" },
+        "rainRate": { "type": "number", "minimum": 0, "description": "Rain rate reported by the ISS (from its time between bucket tips; diagnostics — the top-level rainRate is the node's own).", "x-unit-field": "rainRateUnit", "x-present": "a rain-rate message was received" },
+        "gust10Min": { "type": "number", "minimum": 0, "description": "The ISS's own 10-minute high wind speed (message 9).", "x-unit-field": "windUnit", "x-present": "a gust message was received" },
+        "sniffer": { "type": "boolean", "description": "Sniffer setting: every packet to the log.", "x-present": "always" },
+        "rawCapture": { "type": "boolean", "description": "Raw capture setting (parked on one channel, no hopping).", "x-present": "always" },
+        "radioError": { "type": "integer", "description": "Last RadioLib error code of the receiver.", "x-present": "the radio reported an error" },
+        "messages": {
+          "type": "array",
+          "description": "Last valid packet per message type, ascending by type.",
+          "x-present": "always; may be empty",
+          "items": {
+            "type": "object",
+            "description": "One message type.",
+            "required": ["type", "name", "count", "ageSec", "bytes", "text"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "type": "integer", "minimum": 0, "maximum": 15, "description": "Message type (upper nibble of byte 0): 2 supercap, 3 unknown, 4 UV, 5 rain rate, 6 solar, 7 solar cell, 8 temperature, 9 gust, 10 humidity, 12 unknown, 14 rain counter.", "x-present": "always" },
+              "name": { "type": "string", "description": "Short name of the type.", "x-present": "always" },
+              "count": { "type": "integer", "minimum": 1, "description": "Valid packets of this type.", "x-present": "always" },
+              "ageSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last one.", "x-unit": "s", "x-present": "always" },
+              "bytes": { "type": "string", "pattern": "^[0-9A-F]{12}$", "description": "Its bytes 0–5 in firmware order (as the console shows them), hex.", "x-present": "always" },
+              "text": { "type": "string", "description": "Decoded value as text (diagnostics; the format may change).", "x-present": "always" }
+            }
+          }
+        }
+      }
     },
 
     "cycle": {
@@ -431,11 +485,11 @@
       "additionalProperties": true,
       "properties": {
         "id": { "type": "string", "pattern": "^[0-9A-F]{8}$", "description": "Sensor ID, 8 upper-case hex digits (Bresser IDs change with a battery change).", "x-present": "always" },
-        "slot": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Wireless sensor number 1–4 used by the value-source setting (ID-list order, else reception order).", "x-present": "the sensor occupies a source slot" },
-        "type": { "type": "integer", "minimum": 0, "maximum": 15, "description": "Bresser sensor type number: 0/1/12/13 weather station, 2 thermo-hygro, 3 pool thermometer, 4 soil, 5 leakage, 8 air quality PM, 9 rain gauge or lightning, 10 CO2, 11 HCHO/VOC. Fine Offset and IT+ sensors are mapped to the same numbers.", "x-present": "always" },
-        "protocol": { "type": "string", "enum": ["Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset"], "description": "Radio protocol it was received with.", "x-present": "always" },
-        "model": { "type": "string", "description": "Fine Offset model, e.g. WS90, WS85, WS80, WS69, WH65, WH24, WH31, WH31B, WH40, WN20, WN34, WN38, WH51, WH57, WS68.", "x-present": "Fine Offset sensors" },
-        "channel": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Channel switch of a WH31.", "x-present": "WH31" },
+        "slot": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Wireless sensor number 1–32: position in the Wireless sensor IDs list, else reception order (= table position). Slots 1–4 are the Wireless 1–4 choices of the value-source settings; Loxone names rf<slot>_….", "x-present": "always, except a Davis transmitter whose ID is not in a set ID list" },
+        "type": { "type": "integer", "minimum": 0, "maximum": 15, "description": "Bresser sensor type number: 0/1/12/13 weather station, 2 thermo-hygro, 3 pool thermometer, 4 soil, 5 leakage, 8 air quality PM, 9 rain gauge or lightning, 10 CO2, 11 HCHO/VOC. Fine Offset and IT+ sensors are mapped to the same numbers; the Fine Offset temperature probes WN34 and WN38 (black globe) also use 3, the WN35 leaf wetness sensor 4 (like the WH51/WH52 soil sensors) — tell them apart by model.", "x-present": "always" },
+        "protocol": { "type": "string", "enum": ["Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset", "Davis"], "description": "Radio protocol it was received with.", "x-present": "always" },
+        "model": { "type": "string", "description": "Fine Offset model, e.g. WS90, WS85, WS80, WS69, WH65, WH24, WH31, WH31B, WH40, WN20, WN34, WN38, WH51, WH57, WS68, WN32 (WH32 outdoor family), WN32P (WH25 / WH32B indoor family), WN35, WH41, WH0290, WH43, WH45, WH46, WH52, WH55; Davis: \"Vantage Pro2\" or \"Vantage Vue\" (the station setting, not detected).", "x-present": "Fine Offset and Davis sensors" },
+        "channel": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Channel switch of a WH31 (1–8) or WH55 (1–4); Davis: transmitter ID 1–8.", "x-present": "WH31, WH55, Davis" },
         "rssi": { "type": "integer", "maximum": 0, "description": "Signal strength of the last packet.", "x-unit": "dBm", "x-present": "always" },
         "ageSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last packet of this sensor.", "x-unit": "s", "x-present": "always" },
         "batteryOk": { "type": "boolean", "description": "Battery state reported by the sensor (false = low).", "x-present": "always" },
@@ -447,10 +501,24 @@
         "rainTotal": { "type": "number", "minimum": 0, "description": "The sensor's own rain counter (resets with a battery change) — use the top-level rain values for display.", "x-unit-field": "rainUnit / /api/info units.rain", "x-present": "the sensor sends rain" },
         "uvIndex": { "type": "number", "minimum": 0, "description": "UV index.", "x-unit": "index", "x-present": "the sensor sends UV" },
         "lightLux": { "type": "integer", "minimum": 0, "description": "Illuminance.", "x-unit": "lx", "x-present": "the sensor sends light" },
-        "soilMoisturePct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Soil moisture (Fine Offset WH51).", "x-unit": "%", "x-present": "WH51" },
-        "supercapV": { "type": "number", "minimum": 0, "description": "Super-capacitor voltage, rounded to 0.1 (WS85/WS90).", "x-unit": "V", "x-present": "WS85, WS90" },
+        "soilMoisturePct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Soil moisture (Fine Offset WH51, WH52).", "x-unit": "%", "x-present": "WH51, WH52" },
+        "solarWm2": { "type": "integer", "minimum": 0, "description": "Solar radiation (Davis solar radiation sensor); lightLux carries it converted with 126.7 lx per W/m² (an approximation).", "x-unit": "W/m²", "x-present": "Davis with solar radiation sensor" },
+        "supercapV": { "type": "number", "minimum": 0, "description": "Super-capacitor voltage, rounded to 0.1 (WS85/WS90; Davis Vue: raw/300, scaling not verified).", "x-unit": "V", "x-present": "WS85, WS90, Davis transmitters that send it (Vue)" },
         "lightningCount": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Strikes counted by the sensor (8 bit, wraps; difference it yourself).", "x-present": "lightning sensor (WH57)" },
         "lightningDistKm": { "type": "integer", "minimum": 1, "description": "Distance to the storm front.", "x-unit": "km", "x-present": "lightning sensor with a detected storm" },
+        "pressure": { "type": "number", "minimum": 0, "description": "Station pressure measured by the sensor (not reduced to sea level), latest packet; rounded to 0.1 hPa / 0.01 inHg. Per sensor only (the node's pressureQnh/pressureAbs always come from the BME280).", "x-unit-field": "/api/info units.pressure (hPa or inHg)", "x-present": "Fine Offset WN32P / WH25 / WH32B indoor sensor, WS69 with pressure module" },
+        "pm25": { "type": "number", "minimum": 0, "description": "PM2.5 particulate matter, 0.1 resolution.", "x-unit": "µg/m³", "x-present": "Fine Offset air quality sensor (WH41, WH0290, WH43, WH45, WH46)" },
+        "pm10": { "type": "number", "minimum": 0, "description": "PM10 particulate matter, 0.1 resolution (see pm10Estimated).", "x-unit": "µg/m³", "x-present": "Fine Offset air quality sensor (WH41, WH0290, WH43, WH45, WH46)" },
+        "pm10Estimated": { "type": "boolean", "const": true, "description": "true: pm10 is not measured but derived from PM2.5 by the sensor's particle counter (Honeywell HPM; the Ecowitt consoles do not show it).", "x-present": "WH41, WH0290, WH43" },
+        "pm1": { "type": "number", "minimum": 0, "description": "PM1 particulate matter, 0.1 resolution.", "x-unit": "µg/m³", "x-present": "WH46" },
+        "pm4": { "type": "number", "minimum": 0, "description": "PM4 particulate matter, 0.1 resolution.", "x-unit": "µg/m³", "x-present": "WH46" },
+        "co2Ppm": { "type": "integer", "minimum": 0, "description": "CO2 concentration.", "x-unit": "ppm", "x-present": "WH45, WH46" },
+        "externalPower": { "type": "boolean", "const": true, "description": "The air quality sensor reports USB power (battery level 6).", "x-present": "air quality sensor powered via USB" },
+        "leak": { "type": "boolean", "description": "Water leak alarm of the sensor (true = water detected).", "x-present": "Fine Offset WH55 leak sensor" },
+        "leakHighSensitivity": { "type": "boolean", "description": "Sensitivity switch of the leak sensor (true = high).", "x-present": "WH55" },
+        "leakRaw": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Raw measurement of the leak sensor (lower = wetter; about 650-730 dry in the published captures).", "x-present": "WH55" },
+        "leafWetnessPct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Leaf wetness.", "x-unit": "%", "x-present": "Fine Offset WN35 leaf wetness sensor" },
+        "conductivityUsCm": { "type": "integer", "minimum": 0, "description": "Soil electrical conductivity (EC); empirical scaling from the published analysis (within about 1 %).", "x-unit": "µS/cm", "x-present": "Fine Offset WH52 soil sensor" },
         "stale": {
           "type": "array",
           "items": { "type": "string", "enum": ["temp", "humidity", "wind", "rain", "uv", "light"], "description": "Value group." },

@@ -30,6 +30,7 @@
 #include "json_payload.h"
 #include "board_io.h"
 #include "rf_sensors.h"
+#include "davis_diag.h"
 #include "sources.h"
 #include "sensors.h"
 #include <DallasTemperature.h>
@@ -200,7 +201,9 @@ void fixtureBresser()
     syncedDay(0.0f, 24.6f, 498.2f, 205, 312);
 }
 
-// Ecowitt / Froggit: WS90 array, WH31 (not heard for 7 min), WH51, WH57; no BME280.
+// Ecowitt / Froggit: WS90 array, WH31 (not heard for 7 min), WH51, WH57, WN34
+// temperature probe and a second WH31 (wireless 5 and 6), WH46, WH55, WN32P,
+// WH52, WN35 and WH41 (wireless 7-12); no BME280.
 void fixtureEcowitt()
 {
     common("Ecowitt Hub");
@@ -216,13 +219,40 @@ void fixtureEcowitt()
     wh51.hasMoisture = true;
     RfSensorReading& wh57 = rfAdd(3, 0x0000E21A, 9, RF_PROTO_FINEOFFSET, "WH57");
     wh57.hasLightning = true;
+    // sensors 5 and 6 (up to 32 are received): shown everywhere, not value sources
+    RfSensorReading& wn34 = rfAdd(4, 0x3400A1B2, 3, RF_PROTO_FINEOFFSET, "WN34");
+    wn34.hasTemp = true;
+    RfSensorReading& wh31b = rfAdd(5, 0x300003C4, 2, RF_PROTO_FINEOFFSET, "WH31");
+    wh31b.channel = 3; wh31b.hasTemp = wh31b.hasHumidity = true;
     run(30, 0.5f, [&](const Wx& w) {
         radioWeather(ws, w, true); boardWind(w);
         ws.supercapV = 3.86f;
         wh31.tempC = round1(w.tC + 8.5f); wh31.humidity = 48; rfHeard(wh31, 20000);
         wh51.moisturePct = 41; rfHeard(wh51, 40000);
         wh57.lightningCount = 12; wh57.lightningKm = 8; rfHeard(wh57, 30000);
+        wn34.tempC = round1(w.tC * 0.4f + 9.0f); rfHeard(wn34, 25000);
+        wh31b.tempC = round1(w.tC + 1.1f); wh31b.humidity = 63; rfHeard(wh31b, 45000);
     });
+    // air quality (USB powered), leak, indoor T/H/P, soil EC and leaf wetness sensors (wireless 7-12)
+    RfSensorReading& wh45 = rfAdd(6, 0x460027F1, 8, RF_PROTO_FINEOFFSET, "WH46");
+    wh45.hasTemp = wh45.hasHumidity = wh45.hasPm25 = wh45.hasPm10 = wh45.hasCo2 = wh45.hasPm1 = wh45.hasPm4 = true;
+    wh45.tempC = 29.3f; wh45.humidity = 51; wh45.pm25 = 5.0f; wh45.pm10 = 5.7f; wh45.co2Ppm = 779; wh45.extPower = true;
+    wh45.pm1 = 4.2f; wh45.pm4 = 5.4f;
+    RfSensorReading& wh55 = rfAdd(7, 0x5530CF55, 5, RF_PROTO_FINEOFFSET, "WH55");
+    wh55.channel = 4; wh55.hasLeak = true; wh55.leakHighSensitivity = true; wh55.leakRaw = 649;
+    RfSensorReading& wn32p = rfAdd(8, 0x25000050, 2, RF_PROTO_FINEOFFSET, "WN32P");
+    wn32p.hasTemp = wn32p.hasHumidity = wn32p.hasPressure = true;
+    wn32p.tempC = 22.6f; wn32p.humidity = 40; wn32p.pressureHpa = 1001.7f;
+    RfSensorReading& wh52 = rfAdd(9, 0xA2005D8D, 4, RF_PROTO_FINEOFFSET, "WH52");
+    wh52.hasTemp = wh52.hasMoisture = wh52.hasConductivity = true;
+    wh52.tempC = 22.3f; wh52.moisturePct = 91; wh52.conductivityUsCm = 643.4f;
+    RfSensorReading& wn35 = rfAdd(10, 0x3500305E, 4, RF_PROTO_FINEOFFSET, "WN35");
+    wn35.hasLeafWetness = true; wn35.leafWetnessPct = 7;
+    RfSensorReading& wh41 = rfAdd(11, 0x410000C7, 8, RF_PROTO_FINEOFFSET, "WH41");
+    wh41.hasPm25 = wh41.hasPm10 = wh41.pm10Estimated = true; wh41.pm25 = 43.0f; wh41.pm10 = 45.0f;
+    rfHeard(wh45, 120000); rfHeard(wh55, 50000); rfHeard(wn32p, 30000); rfHeard(wh52, 60000);
+    rfHeard(wn35, 70000); rfHeard(wh41, 240000);
+    wn34.rssi = -79.0f; wh31b.rssi = -84.0f;
     rfHeard(wh31, 420000);   // WH31 lost: values stale, no longer a source
     wh31.rssi = -88.0f; wh51.batteryOk = false; wh51.rssi = -81.0f; wh57.rssi = -69.0f;
     srcUpdateCycle();
@@ -317,6 +347,52 @@ void fixtureV4()
     srcUpdateCycle();
 }
 
+// Davis Vantage Pro2 ISS (exclusive mode, transmitter ID 1) tracked for 6 h,
+// BME280 for pressure; LoRaWAN configured but paused by the Davis mode.
+void fixtureDavis()
+{
+    common("Davis Garden");
+    gCfg.rfProto = RF_PROTO_DAVIS;
+    gCfg.loraEn = 1;
+    gCfg.davisOffsetHz = -3000;
+    gCfg.davisSniffer = 1;
+    bme280Present = true;
+    RfSensorReading& r = rfAdd(0, 0xDA000001, 1, RF_PROTO_DAVIS, "Vantage Pro2");
+    r.channel = 1;
+    run(6, 0.5f, [&](const Wx& w) {
+        boardAir(w); radioWeather(r, w, true); boardWind(w);
+        r.hasSolar = true; r.solarWm2 = roundf(w.lux / RF_DAVIS_LUX_PER_WM2);
+        r.lightLux = r.solarWm2 * RF_DAVIS_LUX_PER_WM2;
+        rfHeard(r, 1500);
+    });
+    r.rssi = -83.0f;
+    DavisDiag& d = gDavisDiag;
+    d = DavisDiag();
+    d.running = true; d.state = DAVIS_DIAG_TRACK; d.txId = 1; d.channel = 3; d.freqMHz = 868.1762f;
+    d.periodMs = 2562.53f; d.offsetHz = -3000; d.learnedOffsetHz = -3000;
+    d.packets = 8391; d.crcErrors = 37; d.otherPackets = 4; d.misses = 41; d.trackSlots = 8430; d.resyncs = 1;
+    d.havePacket = true; d.lastPacketMs = millis() - 1500; d.lastRssi = -83.0f;
+    d.haveTiming = true; d.lastTimingErrUs = 1200;
+    d.hasRainRate = true; d.rainRateMmH = 1.2f; d.hasGust = true; d.gust10MinMs = 6.7f;
+    struct { uint8_t t; uint8_t b[6]; const char* text; uint32_t n; unsigned long ago; } m[] = {
+        { 0x4, { 0x40, 0x03, 0x88, 0x12, 0x45, 0x00 }, "UV index 1.5", 420, 31000 },
+        { 0x5, { 0x50, 0x03, 0x88, 0xFF, 0x75, 0x00 }, "no rain", 2100, 6500 },
+        { 0x6, { 0x60, 0x03, 0x88, 0x89, 0x05, 0x00 }, "965 W/m2", 420, 18000 },
+        { 0x8, { 0x80, 0x03, 0x88, 0x03, 0x18, 0x00 }, "61.7 F / 16.5 C", 2100, 1500 },
+        { 0x9, { 0x90, 0x03, 0x88, 0x0F, 0x05, 0x30 }, "10-min gust 15 mph (index 3)", 420, 44000 },
+        { 0xA, { 0xA0, 0x03, 0x88, 0x6E, 0x28, 0x00 }, "62.2 %", 840, 11500 },
+        { 0xE, { 0xE0, 0x03, 0x88, 0x2B, 0x05, 0x00 }, "tip counter 43", 2100, 4000 },
+    };
+    for (auto& x : m) {
+        DavisTypeDiag& t = d.types[x.t];
+        t.count = x.n; t.lastMs = millis() - x.ago;
+        memcpy(t.bytes, x.b, 6);
+        snprintf(t.text, sizeof(t.text), "%s", x.text);
+    }
+    srcUpdateCycle();
+    syncedDay(0.0f, 18.2f, 402.6f, 240, 188);
+}
+
 void print(const char* name, JsonDocument& doc)
 {
     std::string s;
@@ -363,6 +439,7 @@ int main(int argc, char** argv)
     else if (f == "pcb-v2-full")                    fixturePcbFull();
     else if (f == "pcb-v2-imperial")                fixtureImperial();
     else if (f == "heltec-v4-wireless")             fixtureV4();
+    else if (f == "davis-vantage-pro2")             fixtureDavis();
     else { fprintf(stderr, "unknown fixture %s\n", f.c_str()); return 2; }
 
     JsonDocument doc;

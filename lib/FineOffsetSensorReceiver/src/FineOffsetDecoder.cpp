@@ -35,6 +35,14 @@ const Family FAMILIES[] = {
     { FO_FAMILY_WS80,  18, "WS80" },
     { FO_FAMILY_WS85,  28, "WS85" },
     { FO_FAMILY_WS90,  32, "WS90" },
+    { FO_FAMILY_WN35,  11, "WN35" },
+    { FO_FAMILY_WH41,   8, "WH41" },
+    { FO_FAMILY_WH0290, 8, "WH0290" },
+    { FO_FAMILY_WH43,  10, "WH43" },
+    { FO_FAMILY_WH45,  15, "WH45" },
+    { FO_FAMILY_WH46,  21, "WH46" },
+    { FO_FAMILY_WH55,  10, "WH55" },   // followed by 2 bytes of unknown meaning (not checked)
+    { FO_FAMILY_WH52,  24, "WH52" },
 };
 
 const Family* findFamily(uint8_t code)
@@ -145,6 +153,63 @@ void decodeWs80(const uint8_t* b, FoFrame& o)   // WS80 and WS90 (same first 14 
     if (b[13] != 0xFF) { o.hasUv = true; o.uvIndex = b[13] * 0.1f; }
 }
 
+// Air quality sensors: 4 bytes "Bp pp bA AA" - PM2.5 and PM10 as 14-bit
+// values in 0.1 ug/m3, the battery level 0-5 split over the top bits
+// (B: its bit 2, b: bits 1-0); 6 = powered via USB.
+void setAirQuality(FoFrame& o, const uint8_t* p, bool pm10Estimated)
+{
+    int level = (p[0] & 0x40) >> 4 | (p[2] & 0xC0) >> 6;
+    o.batteryOk     = level > 1;   // 1 of 5 bars = low
+    o.extPower      = level == 6;
+    o.hasPm25       = true;
+    o.pm25          = ((p[0] & 0x3F) << 8 | p[1]) * 0.1f;
+    o.hasPm10       = true;
+    o.pm10          = ((p[2] & 0x3F) << 8 | p[3]) * 0.1f;
+    o.pm10Estimated = pm10Estimated;
+}
+
+// 11-bit temperature (degC + 40) * 10 of WH45 / WH46
+void setTemp11(FoFrame& o, const uint8_t* p)
+{
+    int raw = (p[0] & 0x07) << 8 | p[1];
+    if (raw <= 1000) setTemp400(o, raw);   // -40..60 degC; above = no reading
+}
+
+// WH25 / WH32 / WH32B / WN32B / WN32P: no family byte, 8-bit sum only
+//   TI IT TT HH PP PP SS XX
+//   T: type nibble (0xE with pressure, 0xD outdoor), I: 8-bit ID,
+//   flags (low battery, invalid), T: 10-bit temperature (degC + 40) * 10,
+//   H: humidity, P: pressure 0.1 hPa (0xFFFF = none), S: sum of the 6 bytes
+//   before it, X: XOR of those bytes with the nibbles swapped (WH25 only;
+//   missing on WH32B / WN32B, so it is not required).
+// The 8-bit sum is the only check: implausible values reject the frame.
+bool decodeWh25(const uint8_t* b, size_t len, FoFrame& out)
+{
+    if (len < FO_WH25_FRAME_LEN || foSum8(b, 6) != b[6]) return false;
+    uint8_t type = b[0] >> 4;
+    if (type != 0xE && type != 0xD) return false;
+    bool invalid = b[1] & 0x04;
+    int temp     = (b[1] & 0x03) << 8 | b[2];
+    uint8_t hum  = b[3];
+    uint32_t p   = be16(b + 4);
+    if (!invalid && temp > 1000) return false;                   // > 60 degC
+    if (hum > 100 && hum != 0xFF) return false;
+    if (p != 0xFFFF && (p < 3000 || p > 11000)) return false;    // 300..1100 hPa
+    FoFrame o;
+    o.family    = type == 0xE ? FO_FAMILY_WH25 : FO_FAMILY_WH32;
+    o.model     = type == 0xE ? "WN32P" : "WN32";
+    o.id        = (uint32_t)(b[0] & 0x0F) << 4 | b[1] >> 4;
+    o.batteryOk = !(b[1] & 0x08);
+    if (!invalid) {
+        setTemp400(o, temp);
+        if (hum) setHumidity(o, hum);
+    }
+    if (p != 0xFFFF) { o.hasPressure = true; o.pressureHpa = p * 0.1f; }
+    if (!o.hasTemp && !o.hasHumidity && !o.hasPressure) return false;
+    out = o;
+    return true;
+}
+
 } // namespace
 
 size_t foFrameLength(uint8_t family)
@@ -157,7 +222,8 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
 {
     if (!b || len < 1) return false;
     const Family* f = findFamily(b[0]);
-    if (!f || len < f->len || !checkFrame(b, f->len)) return false;
+    if (!f) return decodeWh25(b, len, out);   // type nibble 0xD / 0xE (no family code uses them)
+    if (len < f->len || !checkFrame(b, f->len)) return false;
     FoFrame o;
     o.family = f->code;
     o.model  = f->model;
@@ -170,7 +236,9 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             o.channel   = (uint8_t)(((b[2] >> 4) & 0x07) + 1);
             o.batteryOk = !(b[2] & 0x04);
             setTemp400(o, (b[2] & 0x03) << 8 | b[3]);
-            setHumidity(o, b[4]);
+            // 0 % is outside the WH31's range (1-99 %): treated as "no humidity",
+            // e.g. a temperature-only sensor sending the WH31 frame (WN30)
+            if (b[4]) setHumidity(o, b[4]);
             break;
         case FO_FAMILY_WN34: case FO_FAMILY_WN38: {
             o.id = be24(b + 1);
@@ -240,6 +308,56 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             o.rainMm  = be16(b + 15) * 0.1f;
             setSupercap(o, b[17]);
             break;
+        case FO_FAMILY_WH41: case FO_FAMILY_WH0290:   // FF II Bp pp bA AA CC SS
+            o.id = b[1];
+            setAirQuality(o, b + 2, true);
+            break;
+        case FO_FAMILY_WH43:                          // FF II II II Bp pp bA AA CC SS
+            o.id = be24(b + 1);
+            setAirQuality(o, b + 4, true);
+            break;
+        case FO_FAMILY_WH45: case FO_FAMILY_WH46:     // FF II II II 0T TT HH Bp pp bA AA CC CC [q q Q Q ? ?] CC SS
+            o.id = be24(b + 1);
+            setTemp11(o, b + 4);
+            setHumidity(o, b[6]);
+            setAirQuality(o, b + 7, false);
+            o.hasCo2 = true;
+            o.co2Ppm = (uint16_t)be16(b + 11);
+            if (f->code == FO_FAMILY_WH46) {
+                o.hasPm1 = true;  o.pm1 = (be16(b + 13) & 0x3FFF) * 0.1f;
+                o.hasPm4 = true;  o.pm4 = (be16(b + 15) & 0x3FFF) * 0.1f;
+            }
+            break;
+        case FO_FAMILY_WH55:                          // 55 fC II II BB RR RR SA CC SS
+            // f: 2 flag bits (seen 0) and the channel 0-3; the ID as the
+            // Ecowitt app shows it includes the channel bits (e.g. 30CF55 = CH4)
+            // battery level 1-5: an extra check against other frames that start
+            // with 0x55 and carry a CRC-8 at byte 8 (WH1050 / TFA 30.3151 FSK)
+            if (b[4] > 6) return false;
+            o.id        = (uint32_t)(b[1] & 0x3F) << 16 | be16(b + 2);
+            o.channel   = (uint8_t)(((b[1] >> 4) & 0x03) + 1);
+            o.batteryOk = b[4] > 1;
+            o.hasLeak   = true;
+            o.leak      = b[7] & 0x40;
+            o.leakHighSensitivity = b[7] & 0x80;
+            o.leakRaw   = (uint16_t)be16(b + 5);
+            break;
+        case FO_FAMILY_WN35:                          // 35 II II II RR RR RR WW VV CC SS
+            o.id        = be24(b + 1);
+            o.batteryMv = (uint16_t)(b[8] * 20);
+            o.batteryOk = o.batteryMv > 1200;
+            if (b[7] <= 100) { o.hasLeafWetness = true; o.leafWetnessPct = b[7]; }
+            break;
+        case FO_FAMILY_WH52: {                        // A2 II II II Bt tt MM .. mE EE EE .. (calibration) .. CC SS
+            o.id = be24(b + 1);
+            int temp = (b[4] & 0x1F) << 8 | b[5];     // bits 7-5 of b[4]: transmission boost counter
+            if (temp <= 1000) setTemp400(o, temp);
+            if (b[6] <= 100) { o.hasMoisture = true; o.moisture = b[6]; }
+            o.hasConductivity  = true;                // 20 bit / 25.6 (empirical calibration)
+            o.conductivityUsCm = (float)((uint32_t)(b[8] & 0x0F) << 16 | be16(b + 9)) / 25.6f;
+            // battery: not decoded (the published byte / scaling are not settled)
+            break;
+        }
         default:
             return false;
     }

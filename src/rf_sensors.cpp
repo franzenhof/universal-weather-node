@@ -4,6 +4,8 @@
 #include "serial_log.h"
 #include "sources.h"
 #include "rf_fsk17.h"
+#include "davis_rx.h"
+#include "rf_trace.h"
 #include <TfaWeatherSensor.h>
 #include <FineOffsetSensor.h>
 
@@ -88,13 +90,14 @@ bool idAccepted(uint32_t id)
     return idFilter.empty() || std::find(idFilter.begin(), idFilter.end(), id) != idFilter.end();
 }
 
-void storeItPlus(const ItPlusFrame& f, float rssi)
+// Returns how the frame was taken (radio trace): OK, or IGNORED (ID list, table full).
+RfTraceResult storeItPlus(const ItPlusFrame& f, float rssi)
 {
     uint32_t id = (phase == RF_PROTO_ITPLUS17 ? RF_ID_ITPLUS17 : RF_ID_ITPLUS9) | f.sensorId;
     if (!idAccepted(id)) {
         if (f.newBattery)
             dbgSerial.printf("RF sensor 0x%08lX (IT+, new battery) not in the sensor ID list - ignored.\n", (unsigned long)id);
-        return;
+        return RF_TR_IGNORED;
     }
     // A sensor with a new battery sends a new random ID: it may take over
     // the slot of an IT+ sensor of the same rate not heard for a minute
@@ -103,7 +106,7 @@ void storeItPlus(const ItPlusFrame& f, float rssi)
     unsigned long now = millis();
     int idx = rfSlotFor(id, now, f.newBattery ? NEW_BATTERY_TAKEOVER_MS : SRC_RF_FRESH_MS,
                         f.newBattery ? phase : 0);
-    if (idx < 0) return;
+    if (idx < 0) return RF_TR_IGNORED;
     RfSensorReading& r = gRfSensors[idx];
     r.used      = true;
     r.id        = id;
@@ -124,6 +127,7 @@ void storeItPlus(const ItPlusFrame& f, float rssi)
                      f.hasHumidity ? (String(", ") + f.humidity + " %").c_str() : "", rssi,
                      f.weakBattery ? ", battery low" : "", f.newBattery ? ", new battery" : "");
     autoLock(r.proto);
+    return RF_TR_OK;
 }
 
 // Bresser sensor type numbers (r.type) for the Fine Offset families
@@ -135,19 +139,24 @@ uint8_t fineOffsetType(uint8_t family)
         case FO_FAMILY_WH51:                       return SENSOR_TYPE_SOIL;
         case FO_FAMILY_WH57:                       return SENSOR_TYPE_LIGHTNING;
         case FO_FAMILY_WH40: case FO_FAMILY_WN20:  return SENSOR_TYPE_RAIN;
+        case FO_FAMILY_WH25: case FO_FAMILY_WH32:  return SENSOR_TYPE_THERMO_HYGRO;
+        case FO_FAMILY_WH52: case FO_FAMILY_WN35:  return SENSOR_TYPE_SOIL;   // WN35 leaf wetness: told apart by model
+        case FO_FAMILY_WH55:                       return SENSOR_TYPE_LEAKAGE;
+        case FO_FAMILY_WH41: case FO_FAMILY_WH0290: case FO_FAMILY_WH43:
+        case FO_FAMILY_WH45: case FO_FAMILY_WH46:  return SENSOR_TYPE_AIR_PM;
         default:                                   return SENSOR_TYPE_WEATHER1;
     }
 }
 
-void storeFineOffset(const FoFrame& f, float rssi)
+RfTraceResult storeFineOffset(const FoFrame& f, float rssi)
 {
     uint32_t id = rfFineOffsetId(f);
-    if (!idAccepted(id)) return;
+    if (!idAccepted(id)) return RF_TR_IGNORED;
     // The ID changes with a battery change (WH65, WH31, ...): the new one
     // takes a free slot or that of a sensor not heard for SRC_RF_FRESH_MS.
     unsigned long now = millis();
     int idx = rfSlotFor(id, now);
-    if (idx < 0) return;
+    if (idx < 0) return RF_TR_IGNORED;
     RfSensorReading& r = gRfSensors[idx];
     r.used      = true;
     r.id        = id;
@@ -165,6 +174,7 @@ void storeFineOffset(const FoFrame& f, float rssi)
         r.lightningCount = f.lightningCount;
         r.lightningKm    = f.stormDistanceKm == FO_LIGHTNING_NO_DISTANCE ? 0 : f.stormDistanceKm;
     }
+    rfFineOffsetExtras(r, f);
     r.packets++;
     packetsTotal++;
     RfValues v = rfFineOffsetValues(f);
@@ -174,15 +184,42 @@ void storeFineOffset(const FoFrame& f, float rssi)
     dbgSerial.printf("RF sensor 0x%08lX (Fine Offset %s): RSSI %.0f dBm%s\n", (unsigned long)id, f.model, rssi,
                      f.batteryOk ? "" : ", battery low");
     autoLock(RF_PROTO_FINEOFFSET);
+    return RF_TR_OK;
 }
 
-// The 17.241 / 9.579 kbit/s phases
+uint8_t tracePhase()
+{
+    if (phase == RF_PROTO_BRESSER) return RF_TP_BRESSER;
+    if (fineOffsetPhase())         return RF_TP_FSK17;
+    return phase == RF_PROTO_ITPLUS9 ? RF_TP_ITPLUS9 : RF_TP_ITPLUS17;
+}
+
+const char* ignoredText(RfTraceResult r) { return r == RF_TR_IGNORED ? "not in the ID list or table full" : "ok"; }
+
+// The 17.241 / 9.579 kbit/s phases. Every frame goes to the radio trace
+// (while one runs) - also those no decoder accepts.
 void readFsk()
 {
     float rssi;
+    char check[96] = "", vals[160] = "";
+    RfTracePacket tp;
+    tp.phase = tracePhase();
     if (!fineOffsetPhase()) {
+        uint8_t b[ITPLUS_FRAME_LEN];
+        if (!tfa.getRaw(b, rssi)) return;
         ItPlusFrame f;
-        if (tfa.getMessage(f, rssi)) storeItPlus(f, rssi);
+        tp.rssi = rssi; tp.raw = b; tp.rawLen = sizeof(b);
+        if (itPlusDecode(b, f)) {
+            tp.result = storeItPlus(f, rssi);
+            if (!rfTraceRunning()) return;
+            tp.protocol = "IT+"; tp.check = tp.result == RF_TR_OK ? "CRC ok" : ignoredText(tp.result);
+            tp.hasId = true; tp.id = (phase == RF_PROTO_ITPLUS17 ? RF_ID_ITPLUS17 : RF_ID_ITPLUS9) | f.sensorId;
+            rfTraceItPlusValues(f, vals, sizeof(vals)); tp.values = vals;
+        } else {
+            if (!rfTraceRunning()) return;
+            rfTraceClassifyItPlus(b, tp, check, sizeof(check));
+        }
+        rfTracePacket(tp);
         return;
     }
     uint8_t b[FO_MAX_FRAME_LEN];
@@ -190,11 +227,33 @@ void readFsk()
     if (!fo.getRaw(b, sizeof(b), len, rssi)) return;
     FoFrame f;
     ItPlusFrame it;
+    tp.rssi = rssi; tp.raw = b; tp.rawLen = len;
     switch (rfFsk17Decode(b, len, true, protoSet & RF_PROTO_ITPLUS17, f, it)) {
-        case RF_FSK_FINEOFFSET: storeFineOffset(f, rssi); break;
-        case RF_FSK_ITPLUS:     storeItPlus(it, rssi);    break;
-        default:                break;
+        case RF_FSK_FINEOFFSET: {
+            tp.result = storeFineOffset(f, rssi);
+            if (!rfTraceRunning()) return;
+            size_t fl = f.family == FO_FAMILY_WH25 || f.family == FO_FAMILY_WH32 ? FO_WH25_FRAME_LEN : foFrameLength(f.family);
+            if (fl && fl < len) tp.rawLen = fl;   // the frame; the rest of the fixed-length read is noise
+            tp.protocol = "Fine Offset"; tp.model = f.model;
+            tp.check = tp.result == RF_TR_OK ? "CRC ok, sum ok" : ignoredText(tp.result);
+            tp.hasId = true; tp.id = rfFineOffsetId(f);
+            rfTraceFoValues(f, vals, sizeof(vals)); tp.values = vals;
+            break;
+        }
+        case RF_FSK_ITPLUS:
+            tp.result = storeItPlus(it, rssi);
+            if (!rfTraceRunning()) return;
+            tp.rawLen = ITPLUS_FRAME_LEN;
+            tp.protocol = "IT+"; tp.check = tp.result == RF_TR_OK ? "CRC ok" : ignoredText(tp.result);
+            tp.hasId = true; tp.id = RF_ID_ITPLUS17 | it.sensorId;
+            rfTraceItPlusValues(it, vals, sizeof(vals)); tp.values = vals;
+            break;
+        default:
+            if (!rfTraceRunning()) return;
+            rfTraceClassifyFsk17(b, len, true, protoSet & RF_PROTO_ITPLUS17, tp, check, sizeof(check));
+            break;
     }
+    rfTracePacket(tp);
 }
 
 // Setting switched on or off at run time.
@@ -216,13 +275,14 @@ static_assert(RF_VAL_TEMP == MSG_OK_TEMP && RF_VAL_HUM == MSG_OK_HUMIDITY && RF_
               RF_VAL_RAIN == MSG_OK_RAIN && RF_VAL_UV == MSG_OK_UV && RF_VAL_LIGHT == MSG_OK_LIGHT,
               "RF_VAL_* must match the library's MSG_OK_*");
 
-void copySlot(int slot)
+// false = not taken (node table full).
+bool copySlot(int slot)
 {
     const WeatherSensor::sensor_t& s = ws.sensor[slot];
     // Keep our table keyed by sensor ID (the library slots are reused the same way).
     unsigned long now = millis();
     int idx = rfSlotFor(s.sensor_id, now);
-    if (idx < 0) return;
+    if (idx < 0) return false;
 
     RfSensorReading& r = gRfSensors[idx];
     r.used      = true;
@@ -244,7 +304,7 @@ void copySlot(int slot)
     bool weather = s.s_type == SENSOR_TYPE_WEATHER0 || s.s_type == SENSOR_TYPE_WEATHER1 ||
                    s.s_type == SENSOR_TYPE_WEATHER3 || s.s_type == SENSOR_TYPE_WEATHER8 ||
                    s.s_type == SENSOR_TYPE_THERMO_HYGRO;
-    if (!weather) return;
+    if (!weather) return true;
     const auto& w = s.w;
     // Only the values of *this* message (msg_ok, fork): a 6-in-1 sends two
     // alternating messages and its w.*_ok flags accumulate, which would
@@ -266,6 +326,88 @@ void copySlot(int slot)
 
     dbgSerial.printf("RF sensor 0x%08lX type %u: RSSI %.0f dBm%s%s\n", (unsigned long)r.id, (unsigned)r.type, r.rssi,
                      r.batteryOk ? "" : ", battery low", s.startup ? ", startup" : "");
+    return true;
+}
+
+// Radio trace of the Bresser phase: the library hands every frame it read
+// to bresserRaw() (during ws.getMessage()), traceBresser() writes it after
+// the frame was decoded and taken.
+uint8_t      bRaw[MSG_BUF_SIZE];
+float        bRssi = 0.0f;
+DecodeStatus bRes = DECODE_INVALID;
+bool         bHave = false;
+
+void bresserRaw(const uint8_t* data, size_t len, float rssi, DecodeStatus res)
+{
+    if (!rfTraceRunning()) return;
+    size_t n = len < sizeof(bRaw) ? len : sizeof(bRaw);
+    memcpy(bRaw, data, n);
+    bRssi = rssi; bRes = res; bHave = true;
+}
+
+const char* bresserDecoderName(uint8_t d)
+{
+    switch (d) {
+        case DECODER_5IN1:      return "Bresser 5-in-1";
+        case DECODER_6IN1:      return "Bresser 6-in-1";
+        case DECODER_7IN1:      return "Bresser 7-in-1";
+        case DECODER_LIGHTNING: return "Bresser lightning";
+        case DECODER_LEAKAGE:   return "Bresser leakage";
+        default:                return "Bresser";
+    }
+}
+
+const char* bresserResText(DecodeStatus r)
+{
+    switch (r) {
+        case DECODE_PAR_ERR: return "parity fail";
+        case DECODE_CHK_ERR: return "checksum fail";
+        case DECODE_DIG_ERR: return "digest fail";
+        case DECODE_SKIP:    return "ID not in the list";
+        case DECODE_FULL:    return "library slots full";
+        default:             return "no decoder matched";
+    }
+}
+
+void traceBresser(DecodeStatus res, int slot, bool taken)
+{
+    char check[96], vals[160] = "";
+    RfTracePacket tp;
+    tp.phase = RF_TP_BRESSER;
+    tp.rssi = bRssi;
+    const bool sync = bRaw[0] == 0xD4;
+    tp.raw = sync ? bRaw + 1 : bRaw;          // the bytes after the sync word
+    tp.rawLen = sync ? sizeof(bRaw) - 1 : sizeof(bRaw);
+    tp.protocol = "Bresser";
+    tp.check = check;
+    if (!sync) {
+        tp.result = RF_TR_UNKNOWN;
+        snprintf(check, sizeof(check), "last sync byte 0x%02X instead of D4", bRaw[0]);
+    } else if (res == DECODE_OK && slot >= 0 && slot < (int)ws.sensor.size()) {
+        const WeatherSensor::sensor_t& s = ws.sensor[slot];
+        tp.result = taken ? RF_TR_OK : RF_TR_IGNORED;
+        tp.protocol = bresserDecoderName(s.decoder);
+        tp.hasId = true; tp.id = s.sensor_id;
+        snprintf(check, sizeof(check), taken ? "digest ok" : "digest ok, node table full");
+        const auto& w = s.w;
+        size_t n = (size_t)snprintf(vals, sizeof(vals), "type %u ch%u", (unsigned)s.s_type, (unsigned)s.chan);
+        if ((s.msg_ok & MSG_OK_TEMP) && n < sizeof(vals))     n += snprintf(vals + n, sizeof(vals) - n, " T %.1fC", w.temp_c);
+        if ((s.msg_ok & MSG_OK_HUMIDITY) && n < sizeof(vals)) n += snprintf(vals + n, sizeof(vals) - n, " H %u%%", (unsigned)w.humidity);
+        if ((s.msg_ok & MSG_OK_WIND) && n < sizeof(vals))
+            n += snprintf(vals + n, sizeof(vals) - n, " W %.1f/%.1f m/s %.0f deg", w.wind_avg_meter_sec, w.wind_gust_meter_sec, w.wind_direction_deg);
+        if ((s.msg_ok & MSG_OK_RAIN) && n < sizeof(vals))     n += snprintf(vals + n, sizeof(vals) - n, " R %.1fmm", w.rain_mm);
+        if ((s.msg_ok & MSG_OK_UV) && n < sizeof(vals))       n += snprintf(vals + n, sizeof(vals) - n, " UV %.1f", w.uv);
+        if ((s.msg_ok & MSG_OK_LIGHT) && n < sizeof(vals))    n += snprintf(vals + n, sizeof(vals) - n, " L %.0flx", w.light_lux);
+        if (n < sizeof(vals)) snprintf(vals + n, sizeof(vals) - n, "%s%s", s.battery_ok ? " bat ok" : " BAT LOW", s.startup ? " startup" : "");
+        tp.values = vals;
+    } else if (res == DECODE_SKIP || res == DECODE_FULL) {
+        tp.result = RF_TR_IGNORED;
+        snprintf(check, sizeof(check), "%s", bresserResText(res));
+    } else {
+        tp.result = RF_TR_FAILED;
+        snprintf(check, sizeof(check), "sync ok, no decoder accepted it (last: %s)", bresserResText(res));
+    }
+    rfTracePacket(tp);
 }
 
 // Frees library slots whose sensor is gone from our table or not heard for
@@ -287,11 +429,23 @@ void freeStaleLibrarySlots()
 void rfSensorsLoop()
 {
     rfExpireValues(millis());
+    rfTracePoll();
     int mode = gCfg.rfEn;
     if (mode != activeMode) selectRadio(mode);
+    // Davis (exclusive): its own receive task owns the radio (davis_rx.cpp).
+    if (rfDavisMode(mode, gCfg.rfProto)) { davisRxLoop(); return; }
+    if (davisRadioOwned()) {   // Davis mode just left: the radio needs a full set-up again
+        davisRxStop();
+        receiving = false;
+        lastStartMs = 0;
+        lastError = 0;
+        protoSet = 0;
+        appliedIds[0] = '\x01';
+    }
     if (mode == RF_RADIO_OFF) return;
     if (!initialized) {
         gLoraRadioTakenHook = onLoraRadioTaken;
+        WeatherSensor::setRawHook(bresserRaw);
         lastError = ws.begin(RF_MAX_SENSORS, false);   // slots + first start; filters below
         receiving = lastError == RADIOLIB_ERR_NONE;
         lastStartMs = millis() | 1;
@@ -345,8 +499,11 @@ void rfSensorsLoop()
     if (phase != RF_PROTO_BRESSER) { readFsk(); return; }
     freeStaleLibrarySlots();
     ws.lastSlot = -1;
-    if (ws.getMessage() == DECODE_OK && ws.lastSlot >= 0)
-        copySlot(ws.lastSlot);
+    bHave = false;
+    DecodeStatus res = ws.getMessage();
+    bool taken = false;
+    if (res == DECODE_OK && ws.lastSlot >= 0) taken = copySlot(ws.lastSlot);
+    if (bHave) { bHave = false; traceBresser(res, ws.lastSlot, taken); }
 }
 
 int rfSensorsDetectedProto() { return detectedProto && gCfg.rfProto == detectedProto ? detectedProto : 0; }

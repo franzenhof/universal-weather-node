@@ -89,6 +89,11 @@ paths:
         Values of the last completed measurement cycle — the same JSON the
         node publishes on the MQTT topic `<prefix>/data` (MQTT may use a
         different wind window, see `/api/info` measurement.mqttWindAggregation).
+        Each `rfSensors[]` item (up to 32 wireless sensors) is also published
+        on its own MQTT topic `<prefix>/rf/<id>` (the object alone, same
+        schema `#/$defs/rfSensor` in data.schema.json). Fine Offset air
+        quality, leak, leaf wetness, soil EC and indoor sensors add
+        per-sensor values there (`pm25`, `co2Ppm`, `leak`, `pressure`, …).
         Does not trigger a measurement. New values exist every
         `measurement.cycleSec`; poll again `nextCycleInSec` + 2 s later.
         The response is sent with chunked transfer encoding.
@@ -284,6 +289,87 @@ paths:
               schema: { type: string }
         "401": { $ref: "#/components/responses/DigestChallenge" }
         "403": { $ref: "#/components/responses/NoAdminPassword" }
+  /api/davis/log:
+    get:
+      tags: [admin]
+      operationId: getDavisCapture
+      summary: Davis sniffer capture = the radio trace as plain text (inline)
+      description: >-
+        Kept for compatibility: the Davis sniffer lines now go into the radio trace (Davis mode starts an
+        open-ended trace unless one is running). Returns the same text as `GET /api/rf/trace`, without the
+        download header. Experimental, the line format may change.
+      security: [{ digest: [] }]
+      responses:
+        "200":
+          description: The diagnostic file (header only, with a hint, if no capture is in memory).
+          content:
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+  /api/rf/trace:
+    get:
+      tags: [admin]
+      operationId: getRadioTrace
+      summary: Radio trace — download the diagnostic file, or its progress with ?status
+      description: >-
+        Without parameters: the diagnostic text file `uwn-rftrace-<hostname>-<YYYYMMDD-HHMM>.txt`
+        (`Content-Disposition: attachment`; `…-up<seconds>s.txt` without a synced clock), streamed in chunks.
+        Header: firmware, board, receive settings, ID list, sensor table, statistics per phase and per ID —
+        never Wi-Fi, MQTT, admin, LoRaWAN or weather-network credentials. Then one line per recorded packet:
+        uptime, local time (clock synced), phase (BRESSER, IT+17, IT+9, FSK17, DAVIS), RSSI, result (OK,
+        IGNORED, FAILED, UNKNOWN, EVENT), protocol, model, ID, check, decoded values, byte count and hex bytes.
+        The file contains the IDs and values of all sensors in range, including neighbours'.
+        With `?status`: progress as JSON. Not CORS-enabled.
+      security: [{ digest: [] }]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Present = return the progress JSON instead of the file.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The diagnostic file, or (with ?status) the progress.
+          content:
+            text/plain:
+              schema: { type: string }
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioTraceStatus" }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+    post:
+      tags: [admin]
+      operationId: controlRadioTrace
+      summary: Start, stop or discard a radio trace (same-origin only)
+      description: >-
+        Form or query parameters. `action=start` with `minutes` (1–120; the status page offers 5, 15, 60),
+        `filter` (`all`, `problems` = only frames that failed a check or match no known format, `id` = only the
+        sensor `id`, 8 hex digits). Allocates about 26 KB only while a capture is in memory; refused when the free
+        heap is too low. A new start discards the previous capture. `action=stop` ends it (kept for download),
+        `action=clear` frees the memory. With `redirect=1` (the status page form) the answer is a 303 to
+        `/status#rftrace`, otherwise the progress JSON (409 when the action failed, with `error`).
+      security: [{ digest: [] }]
+      parameters:
+        - { name: action, in: query, required: true, schema: { type: string, enum: [start, stop, clear] }, description: What to do. }
+        - { name: minutes, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 120, default: 15 }, description: Capture duration (start). }
+        - { name: filter, in: query, required: false, schema: { type: string, enum: [all, problems, id], default: all }, description: Which packets to record (start). }
+        - { name: id, in: query, required: false, schema: { type: string, pattern: "^[0-9A-Fa-f]{1,8}$" }, description: Sensor ID for filter=id. }
+        - { name: redirect, in: query, required: false, schema: { type: string }, description: Present = answer with a redirect to the status page. }
+      responses:
+        "200":
+          description: Done; the progress afterwards.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioTraceStatus" }
+        "303": { description: "Redirect to /status#rftrace (redirect=1)." }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { description: "No admin password configured, or a cross-site request." }
+        "409":
+          description: Not done (e.g. not enough free memory, wireless sensors off, invalid parameters).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioTraceStatus" }
   /api/log/clear:
     post:
       tags: [admin]
@@ -351,3 +437,25 @@ components:
         Access-Control-Allow-Headers: { schema: { type: string, const: "*" } }
         Access-Control-Allow-Private-Network: { schema: { type: string, const: "true" } }
         Access-Control-Max-Age: { schema: { type: string, const: "86400" } }
+  schemas:
+    RadioTraceStatus:
+      type: object
+      description: Progress of the radio trace (GET /api/rf/trace?status, answer of POST).
+      required: [ok, allocated, running, filter, autoStarted, durationSec, elapsedSec, leftSec, packets, lines, bufferBytes, bufferSize, overwrittenBytes]
+      properties:
+        ok: { type: boolean, description: "The requested action succeeded (always true for GET)." }
+        error: { type: string, description: "Why the action failed (409)." }
+        allocated: { type: boolean, description: "A capture (running or finished) is in memory and can be downloaded." }
+        running: { type: boolean, description: "Recording now." }
+        filter: { type: string, enum: [all, problems, id], description: "Which packets are recorded." }
+        id: { type: string, pattern: "^[0-9A-F]{8}$", description: "Sensor ID of filter id." }
+        autoStarted: { type: boolean, description: "Started by the Davis mode (open-ended)." }
+        durationSec: { type: integer, minimum: 0, description: "Planned duration; 0 = until stopped." }
+        elapsedSec: { type: integer, minimum: 0, description: "Recording time so far (or in total once finished)." }
+        leftSec: { type: integer, minimum: 0, description: "Time left while running with a duration." }
+        packets: { type: integer, minimum: 0, description: "Frames received during the capture (before the filter)." }
+        lines: { type: integer, minimum: 0, description: "Lines recorded." }
+        bufferBytes: { type: integer, minimum: 0, description: "Bytes in the ring buffer." }
+        bufferSize: { type: integer, description: "Ring buffer size (24576)." }
+        overwrittenBytes: { type: integer, minimum: 0, description: "Oldest bytes overwritten because the ring was full." }
+        stopReason: { type: string, description: "Why a finished capture ended (time is up, stopped by the user, Davis mode left)." }

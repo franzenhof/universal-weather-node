@@ -1,6 +1,7 @@
 // Loxone UDP lines from the telemetry JsonDocument (see loxone.h). Pure: no
 // Arduino/network dependency, host-tested (test/firmware_loxone.cpp).
 #include "loxone.h"
+#include "rf_sensors.h"   // RF_MAX_SENSORS
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -122,10 +123,11 @@ const char* staleGroup(const char* key)
 
 // One wireless sensor: rf<slot>_temp, rf<slot>_humidity, rf<slot>_battery,
 // rf<slot>_rssi, rf<slot>_age, and its other numeric values under their keys.
+// slot = rfSensors[].slot, 1..RF_MAX_SENSORS (32).
 void emitRfSensor(Walk& w, JsonObjectConst o)
 {
     long slot = o["slot"] | 0L;
-    if (slot < 1 || slot > 9) return;   // not one of the value-source slots 1..4
+    if (slot < 1 || slot > RF_MAX_SENSORS) return;   // no slot: not sent
     JsonArrayConst stale = o["stale"];
     for (JsonPairConst kv : o) {
         const char* key = kv.key().c_str();

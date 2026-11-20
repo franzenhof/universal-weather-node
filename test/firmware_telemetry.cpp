@@ -106,6 +106,33 @@ int main()
         gRfSensors[1].lightningKm=12;buildJsonPayload(doc);
         assert(doc["rfSensors"][1]["lightningDistKm"].as<int>()==12);
     }
+    // Fine Offset air quality / leak / leaf wetness / EC / pressure: keys only when sent
+    {
+        JsonObject fo=doc["rfSensors"][1];
+        assert(fo["pm25"].isNull() && fo["co2Ppm"].isNull() && fo["leak"].isNull() && fo["pressure"].isNull() &&
+               fo["leafWetnessPct"].isNull() && fo["conductivityUsCm"].isNull() && fo["externalPower"].isNull());
+        RfSensorReading& r=gRfSensors[1];
+        r.hasPm25=r.hasPm10=r.hasPm1=r.hasPm4=r.hasCo2=true;r.pm25=5.04f;r.pm10=5.66f;r.pm1=4.2f;r.pm4=5.4f;r.co2Ppm=779;
+        r.hasLeak=true;r.leak=true;r.leakHighSensitivity=false;r.leakRaw=267;
+        r.hasLeafWetness=true;r.leafWetnessPct=39;r.hasConductivity=true;r.conductivityUsCm=643.4f;
+        r.hasPressure=true;r.pressureHpa=1001.74f;
+        int units=gCfg.unitSystem;gCfg.unitSystem=0;
+        buildJsonPayload(doc);
+        fo=doc["rfSensors"][1];
+        assert(fabs(fo["pm25"].as<float>()-5.0f)<0.001f && fabs(fo["pm10"].as<float>()-5.7f)<0.001f && fo["pm10Estimated"].isNull());
+        assert(fabs(fo["pm1"].as<float>()-4.2f)<0.001f && fabs(fo["pm4"].as<float>()-5.4f)<0.001f && fo["co2Ppm"].as<int>()==779);
+        assert(fo["leak"].as<bool>()==true && fo["leakHighSensitivity"].as<bool>()==false && fo["leakRaw"].as<int>()==267);
+        assert(fo["leafWetnessPct"].as<int>()==39 && fo["conductivityUsCm"].as<long>()==643 && fo["externalPower"].isNull());
+        assert(fabs(fo["pressure"].as<float>()-1001.7f)<0.001f);
+        r.pm10Estimated=true;r.extPower=true;gCfg.unitSystem=1;
+        buildJsonPayload(doc);
+        fo=doc["rfSensors"][1];
+        assert(fo["pm10Estimated"].as<bool>() && fo["externalPower"].as<bool>());
+        assert(fabs(fo["pressure"].as<float>()-29.58f)<0.001f);                       // inHg, like the node's pressure
+        gCfg.unitSystem=units;
+        r.hasPm25=r.hasPm10=r.hasPm1=r.hasPm4=r.hasCo2=r.hasLeak=r.hasLeafWetness=r.hasConductivity=r.hasPressure=false;
+        r.pm10Estimated=r.extPower=false;
+    }
     // per-value freshness: the station keeps sending wind, the temperature/
     // humidity part fails -> after 5 min only temperature/humidity drop out
     gCfg.srcSel[SG_AIR]=SRC_RF1;gCfg.srcSel[SG_WIND]=SRC_RF1;gCfg.windEn=0;

@@ -9,6 +9,7 @@
 #include "generated_version.h"
 #include "serial_log.h"
 #include "api_info.h"
+#include "ha_rf.h"
 
 #include <WiFi.h>
 #include <esp_wifi.h>
@@ -54,7 +55,6 @@ constexpr uint32_t MQTT_CONNECT_TIMEOUT_S   = 3;
 constexpr uint32_t MQTT_HANDSHAKE_TIMEOUT_S = 5;
 constexpr uint16_t MQTT_SOCKET_TIMEOUT_S    = 4;
 
-constexpr const char* HA_DISCOVERY_PREFIX = "homeassistant";
 constexpr const char* AVAIL_ONLINE        = "online";
 constexpr const char* AVAIL_OFFLINE       = "offline";
 
@@ -376,6 +376,59 @@ void publishHomeAssistantDiscovery()
     publishDiscoveryEntity("send_fail_count", "Send Fail Count", nullptr, nullptr,
                             "{{ value_json.status.sendFailCount | default(None) }}");
 }
+
+// Payload writer for beginPublish(): collects ArduinoJson's many small
+// writes into 512-byte chunks before they go to the TCP/TLS client.
+class MqttChunkedPrint : public Print
+{
+public:
+    explicit MqttChunkedPrint(PubSubClient& c) : client_(c) {}
+    size_t write(uint8_t b) override { return write(&b, 1); }
+    size_t write(const uint8_t* data, size_t len) override
+    {
+        for (size_t left = len; left;) {
+            size_t n = left < sizeof(buf_) - fill_ ? left : sizeof(buf_) - fill_;
+            memcpy(buf_ + fill_, data, n);
+            fill_ += n; data += n; left -= n;
+            if (fill_ == sizeof(buf_)) flush();
+        }
+        return len;
+    }
+    void flush() override
+    {
+        if (fill_) { written_ += client_.write((const uint8_t*)buf_, fill_); fill_ = 0; }
+    }
+    size_t written() const { return written_; }
+
+private:
+    PubSubClient& client_;
+    char          buf_[512];
+    size_t        fill_ = 0, written_ = 0;
+};
+
+// ---- Home Assistant devices per wireless sensor (ha_rf.h) ----
+bool haRfPublish(const char* topic, const char* payload, size_t len, bool retain, void*)
+{
+    size_t packetSize = MQTT_MAX_HEADER_SIZE + 2 + strlen(topic) + len;
+    if (packetSize > UINT16_MAX ||
+        (packetSize > mqttClient.getBufferSize() && !mqttClient.setBufferSize((uint16_t)packetSize))) {
+        dbgSerial.printf("MQTT '%s': packet too large (%u bytes), skipped\n", topic, (unsigned)packetSize);
+        return false;
+    }
+    return mqttClient.publish(topic, (const uint8_t*)payload, len, retain);
+}
+
+HaRfOut haRfOut()
+{
+    return HaRfOut{ mqttClientId(), topicPrefix(), topicAvail, haRfPublish, nullptr };
+}
+
+// Configs of the listed wireless sensors (and removals) a few at a time, so
+// 32 sensors x up to 16 entities (512 configs, about 2 min at 4/s) never
+// block loop() in one go; typical sensors have 4-12 entities.
+constexpr unsigned long HA_RF_POLL_MS = 1000;
+constexpr int           HA_RF_CONFIGS_PER_POLL = 4;
+unsigned long           lastHaRfPollMs = 0;
 
 // Parses a command received on the MQTT command topic and dispatches it
 // into the same transport-agnostic actions the LoRaWAN downlink uses
@@ -706,6 +759,10 @@ void pollMqtt(unsigned long now)
 
     if (mqttClient.connected()) {
         mqttClient.loop();
+        if (now - lastHaRfPollMs >= HA_RF_POLL_MS) {
+            lastHaRfPollMs = now;
+            haRfPoll(haRfOut(), HA_RF_CONFIGS_PER_POLL);
+        }
         return;
     }
 
@@ -749,6 +806,8 @@ void pollMqtt(unsigned long now)
         mqttClient.publish(topicAvail, AVAIL_ONLINE, /*retain=*/true);
         if (gCfg.mqttCtrlEn) mqttClient.subscribe(topicCmd);
         publishHomeAssistantDiscovery();
+        haRfConnected();          // per-sensor devices: announced again by haRfPoll()
+        lastHaRfPollMs = now;
     } else {
         mqttRetryMs = mqttRetryMs ? min(mqttRetryMs * 2, MQTT_RETRY_MAX_MS) : MQTT_RETRY_MIN_MS;
         dbgSerial.printf("MQTT connect failed, rc=%d (retry in %lus)\n",
@@ -820,18 +879,26 @@ void mqttPublishTelemetry(const PathValues* pv)
 
     JsonDocument doc;
     buildJsonPayload(doc, pv);
+    if (doc.overflowed()) {
+        dbgSerial.println("MQTT telemetry: JSON allocation failed; not published.");
+        return;
+    }
+    // Streamed straight into the connection (beginPublish + 512-byte
+    // chunks): with 32 wireless sensors the document is ~5 KB, and neither a
+    // serialized copy nor a PubSubClient buffer of that size is needed.
     size_t n = measureJson(doc);
-    size_t packetSize = MQTT_MAX_HEADER_SIZE + 2 + strlen(topicData) + n;
-    if (doc.overflowed() || packetSize > UINT16_MAX ||
-        (packetSize > mqttClient.getBufferSize() && !mqttClient.setBufferSize((uint16_t)packetSize))) {
-        dbgSerial.println("MQTT telemetry: JSON/packet allocation failed or packet too large; not published.");
-        return;
+    bool ok = n + strlen(topicData) + 2 <= UINT16_MAX && mqttClient.beginPublish(topicData, (unsigned)n, false);
+    if (ok) {
+        MqttChunkedPrint out(mqttClient);
+        serializeJson(doc, out);
+        out.flush();
+        ok = out.written() == n && mqttClient.endPublish();
+        if (!ok) mqttClient.disconnect();   // a cut-off packet: the stream is out of step, reconnect
     }
-    std::unique_ptr<char[]> buf(new (std::nothrow) char[n + 1]);
-    if (!buf || serializeJson(doc, buf.get(), n + 1) != n) {
-        dbgSerial.println("MQTT telemetry: serialization/allocation failed; not published.");
-        return;
-    }
-    bool ok = mqttClient.publish(topicData, (const uint8_t*)buf.get(), n, false);
-    dbgSerial.printf("MQTT publish to '%s': %s\n", topicData, ok ? "OK" : "FAILED");
+    dbgSerial.printf("MQTT publish to '%s' (%u bytes): %s\n", topicData, (unsigned)n, ok ? "OK" : "FAILED");
+    doc.clear();   // free before the per-sensor documents
+    if (!ok) return;
+    // one topic per received wireless sensor: <prefix>/rf/<ID> (Home Assistant
+    // devices of the listed sensors read from it, ha_rf.h)
+    if (gCfg.rfEn) haRfPublishStates(haRfOut());
 }

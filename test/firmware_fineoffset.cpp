@@ -20,6 +20,30 @@ static void seal(uint8_t* b, size_t n)
     b[n - 1] = foSum8(b, n - 1);
 }
 
+// Hex string ("42cc40 5a..", spaces ignored) -> bytes; returns the count
+static size_t hex(const char* h, uint8_t* out)
+{
+    size_t n = 0;   // nibbles
+    for (; *h; h++) {
+        if (*h == ' ') continue;
+        int v = *h <= '9' ? *h - '0' : (*h | 0x20) - 'a' + 10;
+        if (n % 2 == 0) out[n / 2] = (uint8_t)(v << 4); else out[n / 2] |= (uint8_t)v;
+        n++;
+    }
+    return n / 2;
+}
+
+// Decodes a published frame (hex) as the receiver delivers it (32 bytes,
+// noise after the frame)
+static bool dec(const char* h, FoFrame& f)
+{
+    uint8_t fr[FO_MAX_FRAME_LEN], buf[FO_MAX_FRAME_LEN];
+    size_t n = hex(h, fr);
+    for (size_t i = 0; i < FO_MAX_FRAME_LEN; i++) buf[i] = (uint8_t)(0x5A ^ (i * 37));
+    memcpy(buf, fr, n);
+    return foDecode(buf, FO_MAX_FRAME_LEN, f);
+}
+
 // A received frame: always FO_MAX_FRAME_LEN bytes, noise after the real frame
 static size_t rx(uint8_t* buf, const uint8_t* frame, size_t n)
 {
@@ -177,6 +201,176 @@ int main()
     const uint8_t ws68w[] = {0x68, 0x00, 0x00, 0xc5, 0x00, 0x00, 0x4b, 0x0f, 0xff, 0xff, 0x7e, 0xe0, 0x94, 0x00, 0x75, 0xec};
     assert(foDecode(ws68w, sizeof(ws68w), f) && near(f.windAvgMs, 12.6f) && f.windDirDeg == 224 && near(f.windGustMs, 14.8f));
 
+    // ==== Families added from the published frames (hex vectors: rtl_433
+    // decoder documentation, rtl_433_tests readme, rtl_433 issues #2756 / #3614
+    // / #3665 and PR #3679; every one re-checked: CRC-8 + sum) ====
+
+    // ---- 0x42 WH0290 / Ambient PM25, 0x41 WH41: PM2.5 (+ PM10 estimate) ----
+    struct { const char* h; float pm25, pm10; } wh0290[] = {
+        { "42cc405a40641561",  9.0f, 10.0f }, { "42cc4064406ee444", 10.0f, 11.0f }, { "42cc406e4078df53", 11.0f, 12.0f },
+        { "42cc40784082870f", 12.0f, 13.0f }, { "42cc408c4096d383", 14.0f, 15.0f }, { "42cc419a41aec199", 41.0f, 43.0f } };
+    for (auto& t : wh0290) {
+        assert(dec(t.h, f) && f.family == FO_FAMILY_WH0290 && !strcmp(f.model, "WH0290") && f.id == 0xcc);
+        assert(f.hasPm25 && near(f.pm25, t.pm25) && f.hasPm10 && near(f.pm10, t.pm10) && f.pm10Estimated);
+        assert(f.batteryOk && !f.extPower && !f.hasTemp && !f.hasCo2 && !f.hasPm1);   // 5 bars
+        assert(rfFineOffsetId(f) == 0x420000CCUL);
+        assert(rfFineOffsetValues(f).ok == 0);   // no value-source group
+    }
+    assert(dec("41c741ae01c2f9b3", f) && !strcmp(f.model, "WH41") && f.id == 0xc7);
+    assert(near(f.pm25, 43.0f) && near(f.pm10, 45.0f) && f.batteryOk);                         // 4 bars
+    {
+        uint8_t a[8];
+        hex("41c741ae01c2f9b3", a);
+        a[2] = 0x01; a[4] = 0x41; seal(a, 8);            // level 1 (low): bit 2 clear, bits 1-0 = 01
+        assert(foDecode(a, 8, f) && !f.batteryOk && !f.extPower && near(f.pm25, 0.1f * 0x01ae));
+        a[2] = 0x41; a[4] = 0x81; seal(a, 8);            // level 6 = USB power
+        assert(foDecode(a, 8, f) && f.batteryOk && f.extPower);
+        a[3] ^= 0x01;                                    // CRC
+        assert(!foDecode(a, 8, f));
+    }
+    assert(!dec("42cc405a40641562", f) && !dec("42cc405a40641461", f));                          // sum, CRC
+
+    // ---- 0x43 WH43 (no real frame published: built from the documented layout) ----
+    {
+        uint8_t a[10] = {0x43, 0x00, 0x12, 0x34, 0x40, 0x5a, 0x40, 0x64, 0, 0};
+        seal(a, sizeof(a));
+        assert(foDecode(a, sizeof(a), f) && !strcmp(f.model, "WH43") && f.id == 0x1234);
+        assert(near(f.pm25, 9.0f) && near(f.pm10, 10.0f) && f.pm10Estimated && f.batteryOk);
+        assert(foFrameLength(FO_FAMILY_WH43) == 10);
+    }
+
+    // ---- 0x45 WH45 / DP250: T, H, PM2.5, PM10, CO2 ----
+    assert(dec("45003660027e3640230029022907 4f", f) && !strcmp(f.model, "WH45") && f.id == 0x003660);
+    assert(f.hasTemp && near(f.tempC, 23.8f) && f.hasHumidity && f.humidity == 54);
+    assert(near(f.pm25, 3.5f) && near(f.pm10, 4.1f) && !f.pm10Estimated && f.hasCo2 && f.co2Ppm == 553);
+    assert(f.batteryOk && !f.extPower && !f.hasPm1 && !f.hasPm4 && rfFineOffsetId(f) == 0x45003660UL);
+    assert(rfFineOffsetValues(f).ok == (RF_VAL_TEMP | RF_VAL_HUM));
+    assert(!dec("45003660027e3640230029022907 4e", f) && !dec("45003660027e3640230029022906 4f", f));
+
+    // ---- 0x46 WH46: as WH45 plus PM1 and PM4 ----
+    assert(dec("460027f102b533403240390 30b002a00360190e416", f) && !strcmp(f.model, "WH46") && f.id == 0x0027f1);
+    assert(near(f.tempC, 29.3f) && f.humidity == 51 && near(f.pm25, 5.0f) && near(f.pm10, 5.7f) && f.co2Ppm == 779);
+    assert(f.hasPm1 && near(f.pm1, 4.2f) && f.hasPm4 && near(f.pm4, 5.4f) && f.batteryOk);
+    assert(!dec("460027f102b533403240390 30b002a00360191e416", f));
+
+    // ---- 0x55 WH55 leak: channel, 20-bit ID (with the channel bits, as Ecowitt shows it), alarm ----
+    struct { const char* h; uint8_t ch; uint32_t id; uint8_t bat; uint16_t raw; bool high, leak; } wh55[] = {
+        { "5530cf55040289beaea42010", 4, 0x30cf55, 4, 0x0289, true,  false },   // + 2 trailing bytes (ignored)
+        { "5510cf55030292be674590",   2, 0x10cf55, 3, 0x0292, true,  false },
+        { "5510cf5503010bfe1eb418",   2, 0x10cf55, 3, 0x010b, true,  true  },
+        { "5510cf5503029abe503610",   2, 0x10cf55, 3, 0x029a, true,  false },
+        { "5510cf550302933ee94810",   2, 0x10cf55, 3, 0x0293, false, false },
+        { "5510cf5503010b7e647a10",   2, 0x10cf55, 3, 0x010b, false, true  },
+        { "5500cf55030299bef2c7",     1, 0x00cf55, 3, 0x0299, true,  false },
+        { "5520cf55030295be695a",     3, 0x20cf55, 3, 0x0295, true,  false },
+        { "5530cf55030299be5257",     4, 0x30cf55, 3, 0x0299, true,  false },
+        { "5500cf550302983e7cd0",     1, 0x00cf55, 3, 0x0298, false, false },
+        { "5500cf5503017bfeaaa0",     1, 0x00cf55, 3, 0x017b, true,  true  } };
+    for (auto& t : wh55) {
+        assert(dec(t.h, f) && f.family == FO_FAMILY_WH55 && !strcmp(f.model, "WH55"));
+        assert(f.channel == t.ch && f.id == t.id && f.batteryOk && f.hasLeak && f.leak == t.leak);
+        assert(f.leakHighSensitivity == t.high && f.leakRaw == t.raw);
+        assert(rfFineOffsetId(f) == (0x55000000UL | t.id));   // not the WH31 channel form
+    }
+    {
+        uint8_t a[12];
+        hex("5530cf55040289beaea42010", a);
+        a[10] = 0x00; a[11] = 0xff;                      // trailing bytes: not part of the check
+        assert(foDecode(a, sizeof(a), f) && f.leakRaw == 0x0289);
+        a[9] ^= 0x01;                                    // sum
+        assert(!foDecode(a, sizeof(a), f));
+        hex("5530cf55040289beaea42010", a);
+        a[4] = 0x01; seal(a, 10);                        // 1 bar = low
+        assert(foDecode(a, sizeof(a), f) && !f.batteryOk);
+        a[4] = 0x07; seal(a, 10);                        // no battery level: rejected
+        assert(!foDecode(a, sizeof(a), f));
+    }
+
+    // ---- 0x35 WN35 leaf wetness ----
+    struct { const char* h; uint32_t id; uint8_t pct; uint16_t mv; } wn35[] = {
+        { "3500305e010655075570eb", 0x00305e, 7, 1700 },  { "3500305e01061c00540943", 0x00305e, 0, 1680 },
+        { "3500305e01061d00544f8a", 0x00305e, 0, 1680 },  { "35004139010588005661f4", 0x004139, 0, 1720 },
+        { "3500413901074c0e56056c", 0x004139, 14, 1720 }, { "350041390109682356dc76", 0x004139, 35, 1720 },
+        { "350041390109d62756a0ac", 0x004139, 39, 1720 } };
+    for (auto& t : wn35) {
+        assert(dec(t.h, f) && !strcmp(f.model, "WN35") && f.id == t.id);
+        assert(f.hasLeafWetness && f.leafWetnessPct == t.pct && f.batteryMv == t.mv && f.batteryOk && !f.hasTemp);
+    }
+    assert(!dec("3500305e010655075570ea", f) && !dec("3500305e010655075571eb", f));
+
+    // ---- 0xA2 WH52 soil moisture / temperature / EC (battery not decoded) ----
+    assert(dec("a2005d8d026f5b166040562668459358805e7b2941088471", f) && !strcmp(f.model, "WH52") && f.id == 0x005d8d);
+    assert(near(f.tempC, 22.3f) && f.hasMoisture && f.moisture == 91 && f.hasConductivity && near(f.conductivityUsCm, 643.4f, 0.1f));
+    assert(f.batteryOk && f.batteryMv == 0 && !f.hasHumidity && rfFineOffsetValues(f).ok == RF_VAL_TEMP);
+    assert(dec("a2005d8d026e4a625344989668459358805e7b2941088757", f));
+    assert(near(f.tempC, 22.2f) && f.moisture == 74 && near(f.conductivityUsCm, 8365.9f, 0.1f));
+    assert(!dec("a2005d8d026e4a625344989668459358805e7b2941088758", f));
+    assert(!dec("a2005d8d028000462000821668459358805e7b2942080f70", f));   // a published frame with a typo
+
+    // ---- WH25 / WH32 family: type nibble, sum + plausibility (no CRC) ----
+    assert(dec("e50272282721c9bb", f) && f.family == FO_FAMILY_WH25 && !strcmp(f.model, "WN32P") && f.id == 0x50);
+    assert(f.batteryOk && near(f.tempC, 22.6f) && f.humidity == 40 && f.hasPressure && near(f.pressureHpa, 1001.7f, 0.01f));
+    assert(rfFineOffsetId(f) == 0x25000050UL && rfFineOffsetValues(f).ok == (RF_VAL_TEMP | RF_VAL_HUM));
+    assert(dec("e50272282721c900", f));                    // XOR missing (WH32B / WN32B): accepted
+    assert(!dec("e50272282721c8bb", f));                   // sum
+    {
+        // outdoor WH32 / WN32: type 0xD, no pressure (FFFF) - the values of rtl_433_tests fineoffset_wh32
+        uint8_t a[8] = {0xdf, 0x82, 0x68, 54, 0xff, 0xff, 0, 0};   // ID 0xF8, 21.6 C
+        a[6] = foSum8(a, 6);
+        assert(foDecode(a, 8, f) && f.family == FO_FAMILY_WH32 && !strcmp(f.model, "WN32") && f.id == 0xf8);
+        assert(near(f.tempC, 21.6f) && f.humidity == 54 && !f.hasPressure && f.batteryOk);
+        assert(rfFineOffsetId(f) == 0x320000F8UL);
+        a[1] |= 0x08; a[6] = foSum8(a, 6);                 // low battery
+        assert(foDecode(a, 8, f) && !f.batteryOk);
+        uint8_t c[8];
+        memcpy(c, a, 8); c[0] = 0xcf; c[6] = foSum8(c, 6); // type nibble C: not this family
+        assert(!foDecode(c, 8, f));
+        memcpy(c, a, 8); c[3] = 150; c[6] = foSum8(c, 6);  // humidity 150 %
+        assert(!foDecode(c, 8, f));
+        memcpy(c, a, 8); c[1] = 0x83; c[2] = 0xf2; c[6] = foSum8(c, 6);   // 1010 = 61 degC
+        assert(!foDecode(c, 8, f));
+        memcpy(c, a, 8); c[4] = 0x07; c[5] = 0xd0; c[6] = foSum8(c, 6);   // 200 hPa
+        assert(!foDecode(c, 8, f));
+        memcpy(c, a, 8); c[4] = 0x27; c[5] = 0x21; c[6] = foSum8(c, 6);   // 1001.7 hPa: plausible
+        assert(foDecode(c, 8, f) && f.hasPressure);
+        memcpy(c, a, 8); c[1] |= 0x04; c[6] = foSum8(c, 6);               // invalid flag, no pressure: nothing left
+        assert(!foDecode(c, 8, f));
+        memcpy(c, a, 8); c[3] = 0; c[6] = foSum8(c, 6);                   // humidity 0: none
+        assert(foDecode(c, 8, f) && f.hasTemp && !f.hasHumidity);
+        assert(!foDecode(a, 7, f));                                       // too short
+    }
+    // the D/E type nibble is no IT+ frame (model nibble 9) and no family code
+    {
+        ItPlusFrame it2;
+        uint8_t b2[FO_MAX_FRAME_LEN];
+        hex("e50272282721c9bb", b2);
+        assert(rfFsk17Decode(b2, 8, true, true, f, it2) == RF_FSK_FINEOFFSET && f.hasPressure);
+        assert(foFrameLength(0xe5) == 0 && foFrameLength(FO_FAMILY_WH25) == 0);
+    }
+
+    // ---- WH31 frame with 0 % humidity (temperature-only WN30): no humidity ----
+    {
+        uint8_t a[7];
+        memcpy(a, wh31, sizeof(a)); a[4] = 0; seal(a, sizeof(a));
+        assert(foDecode(a, sizeof(a), f) && f.hasTemp && !f.hasHumidity);
+        assert(rfFineOffsetValues(f).ok == RF_VAL_TEMP);
+    }
+
+    // ---- table entry: the per-sensor values ----
+    {
+        RfSensorReading e;
+        assert(dec("460027f102b533403240390 30b002a00360190e416", f));
+        rfFineOffsetExtras(e, f);
+        assert(e.hasPm25 && near(e.pm25, 5.0f) && e.hasPm1 && e.hasPm4 && e.hasCo2 && e.co2Ppm == 779 && !e.pm10Estimated);
+        assert(!e.hasLeak && !e.hasPressure && !e.extPower);
+        assert(dec("5510cf5503010bfe1eb418", f));
+        rfFineOffsetExtras(e, f);
+        assert(e.hasLeak && e.leak && e.leakHighSensitivity && e.leakRaw == 0x010b);
+        assert(dec("e50272282721c9bb", f));
+        rfFineOffsetExtras(e, f);
+        assert(e.hasPressure && near(e.pressureHpa, 1001.7f, 0.01f));
+    }
+
     // ---- rejections ----
     uint8_t bad[sizeof(ws80)];
     memcpy(bad, ws80, sizeof(bad)); bad[16] ^= 0x01;    // CRC
@@ -185,9 +379,9 @@ int main()
     assert(!foDecode(bad, sizeof(bad), f));
     memcpy(bad, ws80, sizeof(bad)); bad[9] ^= 0x01;     // payload
     assert(!foDecode(bad, sizeof(bad), f));
-    uint8_t unk[9] = {0x41, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0, 0};   // WH0290 / WH41: not supported
+    uint8_t unk[9] = {0x4F, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0, 0};   // unknown family code
     seal(unk, sizeof(unk));
-    assert(!foDecode(unk, sizeof(unk), f) && foFrameLength(0x41) == 0);
+    assert(!foDecode(unk, sizeof(unk), f) && foFrameLength(0x4F) == 0);
     assert(!foDecode(wh31, 6, f) && !foDecode(wh31, 0, f));
 
     // ---- shared 17.241 kbit/s phase: IT+ and Fine Offset from the same frame buffer ----

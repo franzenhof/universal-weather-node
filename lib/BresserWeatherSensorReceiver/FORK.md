@@ -31,4 +31,7 @@ Not included: `RainGauge`, `Lightning`, `RollingCounter`, `InitBoard`, examples,
    `clearSlots()`, so the application could not tell which values a packet actually contained (per-value freshness).
    The cumulative `w.*_ok` behaviour is unchanged.
 
+9. **`setRawHook()`**: optional callback with every frame read in `getMessage()` (raw bytes, RSSI, decode result),
+   also for frames that fail their digest/checksum or match no decoder - for the firmware's radio trace.
+
 Decoders (`WeatherSensorDecoders.cpp`) are otherwise unchanged.

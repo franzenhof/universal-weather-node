@@ -1,0 +1,83 @@
+{
+  "apiVersion": 1,
+  "device": {
+    "name": "Davis Garden",
+    "hostname": "davis-garden",
+    "uptimeSec": 21664
+  },
+  "firmware": {
+    "version": "2.0.0"
+  },
+  "hardware": {
+    "board": "V3",
+    "pcbRev": 13
+  },
+  "units": {
+    "system": "metric",
+    "temp": "C",
+    "pressure": "hPa",
+    "wind": "m/s",
+    "rain": "mm",
+    "rainRate": "mm/h",
+    "cloudBase": "m",
+    "tempTrend": "K"
+  },
+  "measurement": {
+    "cycleSec": 300,
+    "windSampleSec": 1,
+    "mqttWindAggregation": "interval",
+    "altitudeM": 560,
+    "clockSynced": true,
+    "timeZone": "CET-1CEST,M3.5.0,M10.5.0/3"
+  },
+  "history": {
+    "ranges": [
+      {
+        "range": "24h",
+        "bucketSec": 300,
+        "maxPoints": 288
+      },
+      {
+        "range": "7d",
+        "bucketSec": 3600,
+        "maxPoints": 168
+      }
+    ]
+  },
+  "outputs": {
+    "wifi": true,
+    "webApi": true,
+    "mqtt": false,
+    "mqttCommands": false,
+    "lorawan": true,
+    "loxone": false,
+    "updateCheck": false,
+    "weatherNetworks": []
+  },
+  "available": {
+    "temp": true,
+    "humidity": true,
+    "pressure": true,
+    "wind": true,
+    "rain": true,
+    "uvIndex": true,
+    "light": true,
+    "ds18b20Probes": 0,
+    "battery": false,
+    "wirelessSensors": true,
+    "uvSensorVolts": false,
+    "wind2": false,
+    "auxAnalog": false,
+    "auxPulses": false,
+    "heater": false,
+    "fan": false,
+    "victron": false
+  },
+  "sources": {
+    "tempHum": "board",
+    "wind": "radio:DA000001",
+    "rain": "radio:DA000001",
+    "uv": "radio:DA000001",
+    "light": "radio:DA000001"
+  }
+}

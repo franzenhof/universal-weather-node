@@ -242,12 +242,12 @@ Config runConfigPortal(const Config& cur)
     WiFiManagerParameter p_mqttsec ("mqttsec", "MQTT interval in s: 0 = like the LoRaWAN interval, else 2-3600", b_mqttsec, 7);
     WiFiManagerParameter p_mqttwagg("mqttwagg","MQTT wind values: 0 = interval since the last publish, 1 = 10-min (WMO)", b_mqttwagg, 2);
     WiFiManagerParameter p_rfen    ("rfen",    "Wireless sensors (868 MHz): 1 = receive with the LoRa chip (between uplinks), 0 = off", b_rfen, 2);
-    WiFiManagerParameter p_rfproto ("rfproto", "Wireless sensor type: 16 = Auto (search: stores the type of the first sensor received), 1 = Bresser, 6 = TFA/LaCrosse IT+ (both rates), 2 = IT+ 17.241 kbit/s only, 4 = IT+ 9.579 kbit/s only, 8 = Fine Offset / Ecowitt / Froggit, 10 = IT+ 17.241 kbit/s + Fine Offset (same data rate), 14 = IT+ both rates + Fine Offset, 7 = Bresser + IT+ / 9 = Bresser + Fine Offset alternating (misses packets, not recommended)", b_rfproto, 2);
+    WiFiManagerParameter p_rfproto ("rfproto", "Wireless sensor type: 16 = Auto (search: stores the type of the first sensor received), 1 = Bresser, 6 = TFA/LaCrosse IT+ (both rates), 2 = IT+ 17.241 kbit/s only, 4 = IT+ 9.579 kbit/s only, 8 = Fine Offset / Ecowitt / Froggit, 10 = IT+ 17.241 kbit/s + Fine Offset (same data rate), 14 = IT+ both rates + Fine Offset, 7 = Bresser + IT+ / 9 = Bresser + Fine Offset alternating (misses packets, not recommended), 17 = Davis Vantage Pro2 / Vue (exclusive: LoRaWAN paused, no other sensors; experimental)", b_rfproto, 2);
     // Free-text fields: shown HTML-escaped (htmlAttr), so the field length is
     // at least the escaped length; Config's own buffer limits the saved text.
     auto shownLen = [](int maxLen, const String& shown) { return max(maxLen, (int)shown.length()); };
     const String e_rfids = htmlAttr(cur.rfIds);
-    WiFiManagerParameter p_rfids   ("rfids",   "Wireless sensor IDs (hex, comma-separated, max 4; empty = any)", e_rfids.c_str(), shownLen(sizeof(cur.rfIds) - 1, e_rfids));
+    WiFiManagerParameter p_rfids   ("rfids",   "Wireless sensor IDs (hex, comma-separated, max 32, order = wireless 1-32; empty = any)", e_rfids.c_str(), shownLen(sizeof(cur.rfIds) - 1, e_rfids));
     WiFiManagerParameter p_srcs    ("srcs",    "Value sources temp/hum, wind, rain, UV, light (0 auto, 1 board, 2-5 wireless 1-4, 6 off)", b_srcs, 15);
     WiFiManagerParameter p_windoff("windoff",  "Wind direction offset in degrees (-180 to +180)", b_windoff, 5);
 
