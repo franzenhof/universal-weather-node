@@ -5,6 +5,7 @@
 #include "globals.h"
 #include "sensors.h"
 #include "board_io.h"
+#include "sources.h"
 #include "generated_version.h"
 #include "decoder_js.h"
 #include "readme_md.h"
@@ -241,7 +242,7 @@ Config runConfigPortal(const Config& cur)
     itoa(cur.rfProto,          b_rfproto, 10);
     // value sources as one field: "air,wind,rain,uv,light,pressure" (0 auto, 1 board, 2-5 wireless 1-4, 6 off;
     // a value left out keeps its setting, so the old 5-value form still works)
-    char b_srcs[16];
+    char b_srcs[24];   // six values up to 34
     snprintf(b_srcs, sizeof(b_srcs), "%u,%u,%u,%u,%u,%u", cur.srcSel[0], cur.srcSel[1], cur.srcSel[2], cur.srcSel[3], cur.srcSel[4], cur.srcSel[5]);
     itoa(cur.windDirOffsetDeg, b_windoff, 10);
     itoa(cur.windUnitMs,       b_windunit, 10);
@@ -362,7 +363,7 @@ Config runConfigPortal(const Config& cur)
     char b_rfonly[4];
     itoa(cur.rfOnlyMine, b_rfonly, 10);
     WiFiManagerParameter p_rfonly  ("rfonly",  T(T_pt_only_my_sensors_1_accept), b_rfonly, 1);
-    WiFiManagerParameter p_srcs    ("srcs",    T(T_pt_value_sources_temp_hum_wind), b_srcs, 15);
+    WiFiManagerParameter p_srcs    ("srcs",    T(T_pt_value_sources_temp_hum_wind), b_srcs, 23);
     WiFiManagerParameter p_windoff("windoff",  T(T_pt_wind_direction_offset_in_degrees), b_windoff, 5);
 
     // Units (in "Basic setup"): one master switch (Metric/Imperial) plus the
@@ -669,7 +670,7 @@ Config runConfigPortal(const Config& cur)
             const char* p = p_srcs.getValue();
             for (int i = 0; i < (int)sizeof(c.srcSel) && *p; i++) {
                 int v = atoi(p);
-                if (v >= 0 && v <= 6) c.srcSel[i] = (uint8_t)v;
+                if (srcSelValid(v)) c.srcSel[i] = (uint8_t)v;
                 while (*p && *p != ',') p++;
                 if (*p == ',') p++;
             }

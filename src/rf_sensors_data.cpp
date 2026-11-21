@@ -1,6 +1,7 @@
 // Latest wireless-sensor values (filled by rf_sensors.cpp). Kept in its own
 // file without RadioLib so the JSON/telemetry host tests can link it.
 #include "rf_sensors.h"
+#include "rf_schedule.h"
 #include "config.h"
 #include "globals.h"
 #include "calibration.h"
@@ -50,6 +51,8 @@ float rfStoreValues(RfSensorReading& r, const RfValues& v, unsigned long now, un
 {
     const uint8_t wasStale = r.staleMask;
     r.lastMs = now;
+    if (r.schedMs) r.periodMs = rfLearnPeriod(r.periodMs, rfNominalIntervalMs(r), now - r.schedMs);
+    r.schedMs = now;
     r.staleMask &= (uint8_t)~(v.ok | RF_VAL_ANY);
     // Values not in this packet are kept (a 6-in-1 sends two alternating messages).
     // per-sensor offsets / gains (calibration.h): every output of this sensor sees the corrected value

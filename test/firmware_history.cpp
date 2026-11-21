@@ -165,5 +165,50 @@ int main()
         }
         assert(nulls <= 1);
     }
+    // Persistence: export with wall-clock ends, "restart" (uptime from 0,
+    // 10 min off), import after the clock sync -> saved windows, gaps for
+    // the downtime, then this run's entries; evenly spaced, rain kept.
+    resetHistory(7000);
+    hostSynced = true;
+    hostEpochAtZero = 1781000000;
+    runFor(30 * 3600, 300, 0.1f);
+    {
+        assert(historyExport(false, nullptr, 0) == 0);   // too small
+        static uint8_t fineBlob[HISTORY_BLOB_HEADER + HISTORY_FINE_CAPACITY * sizeof(HistorySample)];
+        static uint8_t coarseBlob[HISTORY_BLOB_HEADER + HISTORY_COARSE_CAPACITY * sizeof(HistorySample)];
+        size_t nf = historyExport(false, fineBlob, sizeof(fineBlob));
+        size_t nc = historyExport(true, coarseBlob, sizeof(coarseBlob));
+        assert(nf == sizeof(fineBlob) && nc > HISTORY_BLOB_HEADER);
+        int64_t savedEpoch;
+        assert(epochNow(savedEpoch));
+
+        resetHistory(1000);                                   // restart
+        assert(historyImport(false, fineBlob, nf) == -1);     // no clock yet
+        hostSynced = true;
+        hostEpochAtZero = savedEpoch + 600 - 1;               // 10 min later
+        fineBlob[3] = 99; assert(historyImport(false, fineBlob, nf) == -1); fineBlob[3] = 1;   // version
+        assert(historyImport(false, fineBlob, nf - 1) == -1);                                  // size
+        int rf = historyImport(false, fineBlob, nf);
+        int rc = historyImport(true, coarseBlob, nc);
+        assert(rf > 250 && rc > 20);
+        runFor(3600, 300, 0.1f);
+        JsonDocument doc;
+        buildHistoryJson(doc, false);
+        JsonArray age = doc["ageSec"], rain = doc["rainMm"];
+        size_t n = age.size(), nulls = 0;
+        assert(n == HISTORY_FINE_CAPACITY + 1);
+        for (size_t i = 0; i + 2 < n; i++) {
+            assert(age[i].as<long>() - age[i + 1].as<long>() == 300);
+            if (rain[i].isNull()) nulls++;
+            else assert(near(rain[i].as<float>(), 0.1f));
+        }
+        assert(nulls >= 1 && nulls <= 3);                     // the 10 min off
+        assert(age[0].as<long>() >= 24 * 3600 - 300 && age[0].as<long>() <= 24 * 3600 + 300);
+        // a blob older than the ring restores nothing
+        resetHistory(1000);
+        hostSynced = true;
+        hostEpochAtZero = savedEpoch + 3 * 86400;
+        assert(historyImport(false, fineBlob, nf) == 0);
+    }
     return 0;
 }

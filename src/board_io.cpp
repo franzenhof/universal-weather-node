@@ -415,6 +415,7 @@ void ioPoll()
     if (auxPulseRunning) {
         uint32_t d = readPcnt(PCNT_UNIT_AUX_PULSE, auxPulseLast) + sleepPulsesAux;
         sleepPulsesAux = 0;
+        if (pulseSettling()) d = 0;   // inputs settling after the start (sensors.h)
         if (gCfg.wind2Mode) {
             wind2Pulses += d;
         } else {

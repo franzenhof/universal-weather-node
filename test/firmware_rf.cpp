@@ -94,10 +94,12 @@ int main()
     for (int k = 0; k < 400; k++) { delay(12000); w.rainMs = millis(); srcRfPacket(0, false, 0.0f, false); }
     assert(near(rainMMSinceStart - before, 6.2f));         // nothing lost, nothing extra
     // ---- 32 sensors: slot mapping with and without an ID list; only
-    // slots 1-4 are value sources (SRC_RF1..SRC_RF4 keep their meaning) ----
+    // slots 1-4 are value sources (SRC_RF1..(SRC_RF1 + 3) keep their meaning) ----
     static_assert(RF_MAX_SENSORS == 32 && RF_SOURCE_SLOTS == 4, "32 received, 4 source slots");
-    static_assert(SRC_AUTO == 0 && SRC_BOARD == 1 && SRC_RF1 == 2 && SRC_RF4 == 5 && SRC_OFF == 6,
-                  "stored settings / parameters 45-49 must keep their values");
+    static_assert(SRC_AUTO == 0 && SRC_BOARD == 1 && SRC_RF1 == 2 && SRC_OFF == 34,
+                  "parameters 45-49 / 54: Wireless n = n + 1, Off = 34");
+    assert(srcSelSlot(SRC_RF1) == 0 && srcSelSlot(SRC_RF1 + 31) == 31 && srcSelSlot(SRC_OFF) == -1 && srcSelSlot(SRC_BOARD) == -1);
+    assert(srcSelValid(SRC_OFF) && !srcSelValid(SRC_OFF + 1) && !srcSelValid(-1));
     rfSensorsClear();
     gCfg.rfIds[0] = '\0';
     for (int k = 0; k < SG_COUNT; k++) gCfg.srcSel[k] = SRC_AUTO;
@@ -118,7 +120,7 @@ int main()
     assert(srcResolve(SG_LIGHT) == SRC_NONE);
     gRfSensors[3].hasLight = true; gRfSensors[3].lightMs = millis();
     assert(srcResolve(SG_LIGHT) == 3);                           // wireless 4 = table index 3
-    gCfg.srcSel[SG_LIGHT] = SRC_RF4;
+    gCfg.srcSel[SG_LIGHT] = (SRC_RF1 + 3);
     assert(srcResolve(SG_LIGHT) == 3);
     gCfg.srcSel[SG_LIGHT] = SRC_RF1;
     assert(srcResolve(SG_LIGHT) == SRC_NONE);                    // wireless 1 has no light
@@ -145,7 +147,7 @@ int main()
     gCfg.srcSel[SG_LIGHT] = SRC_AUTO;
     assert(srcResolve(SG_LIGHT) == 31);
     gRfSensors[31].hasLight = false;
-    assert(srcResolve(SG_LIGHT) == SRC_NONE);                    // sensors 4 and 6 (list slots 29, 27) never a source
+    assert(srcResolve(SG_LIGHT) == 5);                           // ★ sensors: Auto walks all of them in their order - sensor 6 (★ 27) before sensor 4 (★ 29)
     // a 33rd ID is ignored; a listed sensor not received has no table entry
     assert(rfParseIds((list + ", 3000AAAA").c_str()).size() == RF_MAX_SENSORS);
     snprintf(gCfg.rfIds, sizeof(gCfg.rfIds), "3000BBBB, 30000002");
@@ -253,8 +255,8 @@ int main()
     assert((RF_VAL_PRESS & (RF_VAL_TEMP | RF_VAL_HUM | RF_VAL_WIND | RF_VAL_RAIN | RF_VAL_UV | RF_VAL_LIGHT)) == 0);
     // parameter 54 (downlink / MQTT / web), range 0..6
     assert(applyParam(PARAM_SRC_PRESSURE, SRC_BOARD) && gCfg.srcSel[SG_PRESS] == SRC_BOARD);
-    assert(!applyParam(PARAM_SRC_PRESSURE, 7) && gCfg.srcSel[SG_PRESS] == SRC_BOARD);
-    assert(applyParam(PARAM_SRC_LIGHT, SRC_RF4) && gCfg.srcSel[SG_LIGHT] == SRC_RF4 && gCfg.srcSel[SG_PRESS] == SRC_BOARD);
+    assert(!applyParam(PARAM_SRC_PRESSURE, 35) && gCfg.srcSel[SG_PRESS] == SRC_BOARD);
+    assert(applyParam(PARAM_SRC_LIGHT, (SRC_RF1 + 3)) && gCfg.srcSel[SG_LIGHT] == (SRC_RF1 + 3) && gCfg.srcSel[SG_PRESS] == SRC_BOARD);
     gCfg.srcSel[SG_LIGHT] = gCfg.srcSel[SG_PRESS] = SRC_AUTO;
     // a config without the new key: Auto (Config default)
     Config fresh;
@@ -302,10 +304,15 @@ int main()
     assert(rfSensorIndexForSlot(3) == 0 && rfSensorIndexForSlot(4) == 2 && rfSensorIndexForSlot(5) == -1);
     // the value sources follow: wireless 1 = D, wireless 4 = A
     gRfSensors[0].hasLight = true; gRfSensors[0].lightMs = millis();
-    gCfg.srcSel[SG_LIGHT] = SRC_RF4;
+    gCfg.srcSel[SG_LIGHT] = (SRC_RF1 + 3);
     assert(srcResolve(SG_LIGHT) == 0);
     gCfg.srcSel[SG_LIGHT] = SRC_AUTO;
-    assert(srcResolve(SG_LIGHT) == 0);
+    assert(srcResolve(SG_LIGHT) == SRC_NONE);                    // Auto with ★ sensors: only those (A is not ★)
+    gRfSensors[1].hasLight = true; gRfSensors[1].lightMs = millis();
+    assert(srcResolve(SG_LIGHT) == 1);                           // B = ★ 2
+    gRfSensors[3].hasLight = true; gRfSensors[3].lightMs = millis();
+    assert(srcResolve(SG_LIGHT) == 3);                           // D = ★ 1 comes first
+    gRfSensors[1].hasLight = gRfSensors[3].hasLight = false;
     // without any Mine ID: slot = table index, as before
     {
         char keep[sizeof(gCfg.rfIds)]; strcpy(keep, gCfg.rfIds);
@@ -425,7 +432,7 @@ int main()
         s.id = 0x30000201; assert(srcHierarchyRank(s, SG_AIR) == 9);   // WH31: by number
         s.proto = RF_PROTO_BRESSER; s.id = 0x90000000; assert(srcHierarchyRank(s, SG_WIND) == 9);   // only Fine Offset families
 
-        // resolve: wireless 1 = WH65, wireless 2 = WS90 -> wind and air from the WS90, rain from a WH40 on 3
+        // resolve: WH65, WS90, WH40 (as ★ 1-3, then without ★)
         snprintf(gCfg.rfIds, sizeof(gCfg.rfIds), "24000001, 90000002, 40000003");
         for (int k = 0; k < 3; k++) {
             RfSensorReading& x = gRfSensors[k];
@@ -441,10 +448,14 @@ int main()
         const bool bme = bme280Present;
         const int we = gCfg.windEn, re = gCfg.rainEn;
         bme280Present = false; gCfg.windEn = gCfg.rainEn = 0;   // no board sensors (they would come first)
-        assert(srcResolve(SG_WIND) == 1 && srcResolve(SG_AIR) == 1 && srcResolve(SG_RAIN) == 2);
-        gCfg.srcSel[SG_WIND] = SRC_RF1;   // chosen explicitly: kept
-        assert(srcResolve(SG_WIND) == 0);
+        // ★ sensors: their number decides (WH65 = ★ 1 for everything it sends)
+        assert(srcResolve(SG_WIND) == 0 && srcResolve(SG_AIR) == 0 && srcResolve(SG_RAIN) == 0);
+        gCfg.srcSel[SG_WIND] = SRC_RF1 + 1;   // chosen explicitly: kept
+        assert(srcResolve(SG_WIND) == 1);
         gCfg.srcSel[SG_WIND] = SRC_AUTO;
+        // no ★ sensors: wireless 1-4 in Ecowitt's order - wind and air from the WS90, rain from the WH40
+        gCfg.rfIds[0] = '\0';
+        assert(srcResolve(SG_WIND) == 1 && srcResolve(SG_AIR) == 1 && srcResolve(SG_RAIN) == 2);
         bme280Present = bme; gCfg.windEn = we; gCfg.rainEn = re;
         for (int k = 0; k < 3; k++) gRfSensors[k] = RfSensorReading();
         gCfg.rfIds[0] = '\0';

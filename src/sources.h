@@ -9,10 +9,10 @@
 //             pressure: indoor sensors are fine - station pressure is the
 //             same indoors)
 //   Board     only the board's own sensor (BME280, anemometer, rain gauge, UV input)
-//   Wireless n  only wireless sensor n (1-4): the n-th ID in "Wireless sensor
-//             IDs", or - with an empty list - the n-th sensor received since
-//             start. Up to RF_MAX_SENSORS (32) sensors are received and shown,
-//             only the first RF_SOURCE_SLOTS (4) slots are value sources.
+//   Wireless n  only wireless sensor n (1-32): the n-th ★ sensor, then the
+//             others in the order they were received (rfSensorIndexForSlot()).
+//             Auto only looks at the first RF_SOURCE_SLOTS (4) of them, so a
+//             neighbour's sensor further down never becomes a source by itself.
 //   Off       not reported at all
 // A wireless sensor counts while its last packet carrying the value is at most
 // SRC_RF_FRESH_MS old (Bresser sensors send every 12-16 s).
@@ -27,10 +27,16 @@
 // SG_PRESS (station pressure) came last so the stored settings src0..src4,
 // parameters 45-49 and the LoRaWAN source bits 0-9 keep their meaning.
 enum SrcGroup : uint8_t { SG_AIR = 0, SG_WIND, SG_RAIN, SG_UV, SG_LIGHT, SG_PRESS, SG_COUNT };
-enum SrcSel   : uint8_t { SRC_AUTO = 0, SRC_BOARD = 1, SRC_RF1 = 2, SRC_RF4 = 5, SRC_OFF = 6 };
-// Wireless slots selectable as value sources (Wireless 1-4 = slots 1-4;
-// stored settings and parameters 45-49 keep this meaning).
-constexpr int RF_SOURCE_SLOTS = SRC_RF4 - SRC_RF1 + 1;
+// Wireless n (1-32) = n + 1, Off = 34. Up to rc.5 Off was 6 (only Wireless
+// 1-4 existed): a source set to Off has to be set again once (CHANGELOG rc.6).
+constexpr int SRC_RF_SLOTS_MAX = 32;                                // Wireless 1..32
+enum SrcSel   : uint8_t { SRC_AUTO = 0, SRC_BOARD = 1, SRC_RF1 = 2, SRC_OFF = SRC_RF1 + SRC_RF_SLOTS_MAX };
+// Wireless slots Auto looks at (Wireless 1-4).
+constexpr int RF_SOURCE_SLOTS = 4;
+// 0-based wireless slot of a setting, -1 = not a wireless one
+inline int  srcSelSlot(int sel)     { return sel >= SRC_RF1 && sel < SRC_OFF ? sel - SRC_RF1 : -1; }
+inline int  srcSelForSlot(int slot) { return SRC_RF1 + slot; }
+inline bool srcSelValid(long v)     { return v >= 0 && v <= SRC_OFF; }
 
 constexpr int SRC_NONE     = -2;   // srcResolve(): value not available
 constexpr int SRC_IS_BOARD = -1;   // srcResolve(): board sensor; >= 0: gRfSensors[] index

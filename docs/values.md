@@ -6,7 +6,9 @@ How the node measures and aggregates each value, what it derives from them, whic
 
 ## Measurement Principles
 
-**Wind speed:** the anemometer's reed switch closes once per revolution; the ESP32's hardware pulse counter counts without CPU load. Davis: 1 revolution/s = 2.25 mph = 3.62 km/h. The **gust** is the highest **3-second mean** (WMO) — see [Measurement and Aggregation](#measurement-and-aggregation).
+**Wind speed:** the anemometer's reed switch closes once per revolution; the ESP32's hardware pulse counter counts without CPU load. Davis: 1 revolution/s = 2.25 mph = 3.62 km/h. The **gust** is the highest **3-second mean** (WMO) — see [Measurement and Aggregation](#measurement-and-aggregation). A sub-sample above 78 m/s (281 km/h, the Davis anemometer's rated maximum) is dropped as implausible.
+
+**Start-up:** for **10 s after the start** the board's pulse inputs (wind, rain, AUX pulses / 2nd anemometer) are read but not counted, while lines and outputs settle — a burst on the wind line right after an update once showed as a 226-km/h gust.
 
 **Wind direction:** the Davis vane is a 20 kΩ potentiometer; the voltage (0–3.3 V) maps linearly to 0–359°, plus the north offset. A 10 kΩ / 1 µF filter (τ on the order of 15 ms including the vane resistance) reduces noise; component references differ between PCB revisions. The cycle value is a **vector average** (sin/cos), so 350° and 10° average to 0°, not 180°.
 
@@ -18,8 +20,10 @@ raw (0–4095) → map to 0–359° → + offset → mod 360
 
 ```
 Rain [mm]        = pulses × rainMmPerTip
-Rain rate [mm/h] = rain [mm] / (cycle length [ms] / 3,600,000)
+Rain rate [mm/h] = rain [mm] / (window length [ms] / 3,600,000)
 ```
+
+The window is the cycle (or the output's own send interval), but **at least 5 minutes**: with a shorter cycle (e.g. MQTT every 10 s) the rate is taken over the last 5–5.5 minutes instead, so a single 0.2-mm tip reads 2.4 mm/h, not 72 mm/h. Right after the start the rain so far is spread over 5 minutes. The amounts (rain per cycle, rain today …) are not affected.
 
 "Rain since start" survives restarts, watchdog resets and OTA updates; only a power cut or downlink `0x01` resets it.
 
@@ -86,7 +90,7 @@ Computed on the node from the measured values — the same numbers in JSON/MQTT,
 | Vapour pressure deficit (VPD) | saturation minus actual vapour pressure (Magnus), kPa — for plants / greenhouses | temperature + humidity |
 | Warnings | *frost* (T ≤ 0 °C), *fog/dew* (spread ≤ 1 K and RH ≥ 95 %), *sultry* (dew point ≥ 16 °C) | temperature (+ humidity) |
 
-Which sensor feeds each value group is set with the [value sources](wireless-sensors.md#value-sources); with *Auto* the board sensor comes first, then wireless 1–4 in Ecowitt's sensor order (e.g. wind WS90 > WS80 > WS85 > WS69 > WS68, rain WH40 > WN20 > WS69 > the piezo arrays) and otherwise by number.
+Which sensor feeds each value group is set with the [value sources](wireless-sensors.md#value-sources); with *Auto* the board sensor comes first, then your ★ sensors in their order (the arrows on the settings page); without ★ sensors wireless 1–4 in Ecowitt's sensor order (e.g. wind WS90 > WS80 > WS85 > WS69 > WS68, rain WH40 > WN20 > WS69 > the piezo arrays) and otherwise by number.
 
 All values above use the **calibrated** main values (offsets / factors after the value source, see [Calibration](settings.md#calibration)).
 
@@ -94,7 +98,7 @@ Longer statistics (summer/frost days, multi-year series) are a job for your data
 
 ### Records
 
-Minimum and maximum **with their time** of temperature, humidity, pressure (QNH), the maximum gust and rain rate, plus the largest **daily rain** — for **today, yesterday, this month, this year and all time** (the daily rain: month, year, all time). Fed every measurement cycle from the selected (calibrated) values; the gust is the cycle gust of the wind source, the rain rate the cycle value. Days, months and years roll over at local midnight (time zone setting), so the records need the clock (NTP); before the first sync nothing is recorded. "Yesterday" is the last day the node saw.
+Minimum and maximum **with their time** of temperature, humidity, pressure (QNH), the maximum gust and rain rate, plus the largest **daily rain** — for **today, yesterday, this month, this year and all time** (the daily rain: month, year, all time). Fed every measurement cycle from the selected (calibrated) values; the gust is the cycle gust of the wind source, the rain rate the cycle value (over at least 5 minutes, see above). Days, months and years roll over at local midnight (time zone setting), so the records need the clock (NTP); before the first sync nothing is recorded. "Yesterday" is the last day the node saw.
 
 Kept in one small flash record (namespace `records`, ~430 bytes): written at most once per hour, at the day change and before every planned restart or update — a power cut loses at most the last hour. Reset in *Settings → System → Records* (today … this year, or everything including all time; parameter 64).
 

@@ -90,6 +90,51 @@ private:
     size_t   head = 0, n = 0;
 };
 
+// Spike guard for the board anemometer: a sub-sample above
+// WIND_SPIKE_MIN_MS that is more than WIND_SPIKE_FACTOR times the strongest
+// accepted sample of the last ~60 s is held until the next sample confirms it
+// (at least half as fast) - a real gust front lasts several seconds, a burst
+// on the pulse line (EMI, contact bounce) does not. Confirmed: both count
+// (the gust appears one sample later); not confirmed: the held one is dropped.
+// Off for now (WIND_SPIKE_GUARD_ON): could become a setting later.
+constexpr bool     WIND_SPIKE_GUARD_ON = false;
+constexpr float    WIND_SPIKE_MIN_MS = 20.0f;   // 72 km/h
+constexpr float    WIND_SPIKE_FACTOR = 4.0f;
+enum SpikeVerdict : uint8_t { SPIKE_TAKE, SPIKE_HOLD, SPIKE_TAKE_WITH_HELD };
+struct WindSpikeGuard {
+    SpikeVerdict check(float speedMs, uint32_t nowMs) {
+        roll(nowMs);
+        if (held) {
+            held = false;
+            if (speedMs >= heldMs * 0.5f) { note(heldMs); note(speedMs); return SPIKE_TAKE_WITH_HELD; }
+        }
+        if (speedMs > WIND_SPIKE_MIN_MS && speedMs > WIND_SPIKE_FACTOR * recentMax()) {
+            held = true; heldMs = speedMs;
+            return SPIKE_HOLD;
+        }
+        note(speedMs);
+        return SPIKE_TAKE;
+    }
+private:
+    static constexpr int      B = 4;
+    static constexpr uint32_t BUCKET_MS = 15000;   // 4 x 15 s = the last minute
+    float    mx[B] = {};
+    uint32_t start = 0;
+    bool     started = false, held = false;
+    float    heldMs = 0.0f;
+    void roll(uint32_t now) {
+        if (!started) { started = true; start = now; return; }
+        while (now - start >= BUCKET_MS) {
+            for (int i = B - 1; i > 0; i--) mx[i] = mx[i - 1];
+            mx[0] = 0.0f;
+            start += BUCKET_MS;
+            if (now - start > BUCKET_MS * B) { for (float& m : mx) m = 0.0f; start = now; }
+        }
+    }
+    void  note(float s) { if (s > mx[0]) mx[0] = s; }
+    float recentMax() const { float m = 0.0f; for (float v : mx) if (v > m) m = v; return m; }
+};
+
 // Rain of one path: difference of the running total since the path's last
 // send. The total passed in must never go backwards - main.cpp uses
 // rainWindowTotalMm() (sensors.h), which a reset of rainMMSinceStart
@@ -104,6 +149,40 @@ struct RainWindow {
         uint32_t dt = nowMs - startMs;
         return dt >= 1000 ? amount(totalMm) / ((float)dt / 3600000.0f) : 0.0f;
     }
+};
+
+// Rain rate over at least RAIN_RATE_MIN_MS, independent of how short the
+// send windows are: with a 10-s cycle (fast MQTT) one 0.2-mm tip would
+// otherwise read 72 mm/h. Keeps the running total every >= 30 s (16 entries,
+// >= 8 min); the rate is the increase since the newest entry that is at
+// least 5 min old. Shortly after the start (no entry old enough) the increase
+// since the oldest entry is spread over 5 min - a low start, no spike.
+constexpr uint32_t RAIN_RATE_MIN_MS = 300000;
+struct RainRateRing {
+    void push(float totalMm, uint32_t nowMs) {
+        if (n && nowMs - ms[(head + N - 1) % N] < STEP_MS) return;
+        tot[head] = totalMm; ms[head] = nowMs;
+        head = (head + 1) % N;
+        if (n < N) n++;
+    }
+    float rateMmH(float totalMm, uint32_t nowMs) const {
+        if (!n) return 0.0f;
+        size_t pick = (head + N - n) % N;              // oldest
+        for (size_t k = 0; k < n; k++) {               // newest first
+            size_t i = (head + N - 1 - k) % N;
+            if (nowMs - ms[i] >= RAIN_RATE_MIN_MS) { pick = i; break; }
+        }
+        uint32_t dt = nowMs - ms[pick];
+        if (dt < RAIN_RATE_MIN_MS) dt = RAIN_RATE_MIN_MS;
+        float d = totalMm >= tot[pick] ? totalMm - tot[pick] : 0.0f;
+        return d / ((float)dt / 3600000.0f);
+    }
+private:
+    static constexpr size_t   N = 16;
+    static constexpr uint32_t STEP_MS = 30000;
+    float    tot[N] = {};
+    uint32_t ms[N]  = {};
+    size_t   head = 0, n = 0;
 };
 
 // The wind/rain values one path transmits (all in metric base units).

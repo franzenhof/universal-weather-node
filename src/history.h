@@ -3,11 +3,10 @@
 #include <ArduinoJson.h>
 
 // Two-tier in-RAM ring buffer of bucketed measurement values, feeding the
-// /chart web page and /api/history endpoint. RAM-only, not persisted across
-// a restart: a *timestamped* buffer keyed on uptime would become
-// discontinuous once the uptime resets to 0 on reboot. Long-term history
-// remains Grafana's job via MQTT/ChirpStack; this is a short local window
-// for the device's own web UI.
+// /chart web page and /api/history endpoint. Kept across restarts by
+// history_store.cpp (NVS, with wall-clock timestamps; restored once the
+// clock is synced). Long-term history remains Grafana's job via
+// MQTT/ChirpStack; this is a short local window for the device's own web UI.
 //
 // Classic RRDtool-style tiering rather than one long flat buffer: a "fine"
 // tier keeps short buckets for a detailed recent view, a "coarse" tier keeps
@@ -50,3 +49,25 @@ bool historyTempAgo(uint32_t ageSec, float& tempC);        // selected temperatu
 // miss up to one 5-min bucket at the old end, but never covers more. mm;
 // since start if the node runs shorter.
 float historyRainSum(uint32_t windowSec);
+
+// Persistence: one tier as a blob with wall-clock (epoch) bucket ends.
+constexpr size_t HISTORY_BLOB_HEADER = 12;
+size_t historyBlobMaxSize(bool coarse);
+// Bytes written to out; 0 = clock not synced yet, tier empty or cap too small.
+size_t historyExport(bool coarse, uint8_t* out, size_t cap);
+// Puts saved windows in front of this run's entries (gaps in between); needs
+// the synced clock. Returns the number of restored entries, -1 = invalid blob
+// or no clock.
+int historyImport(bool coarse, const uint8_t* in, size_t n);
+
+// history_store.cpp (device): historyStoreCycle() once per cycle before
+// pushHistorySample() - restores after the clock sync, saves the 7-day tier
+// every 24 h; historyStoreFlush() before a planned restart (both tiers; the
+// 24-h tier only as a hand-over, removed after the restore).
+void historyStoreCycle();
+void historyStoreFlush();
+// Settings -> System: delete the chart history (both ranges, RAM and flash).
+// Only a request (web task); done by the next historyStoreCycle() in the loop.
+void historyClearRequest();
+// Empties both rings (history.cpp; called from the loop).
+void historyClear();

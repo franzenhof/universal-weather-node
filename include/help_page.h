@@ -25,15 +25,20 @@ const char HELP_PAGE_HTML[] PROGMEM = R"HELPPAGE(
 <meta name="theme-color" content="#12161b" media="(prefers-color-scheme: dark)"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="WeatherNode">
 <title>WeatherNode Help</title>
+<script>try{var t=localStorage.getItem('wnTheme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
 <style>
-  body{font-family:sans-serif;max-width:800px;margin:1rem auto;padding:0 1rem;line-height:1.5;}
+  :root{--bg:#fff;--text:#1a2028;--dim:#555;--line:#ccc;--code:#f4f4f4;--accent:#0b7f78;color-scheme:light;}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#12161b;--text:#e7ecf1;--dim:#a3afbb;--line:#2a323c;--code:#1f262f;--accent:#3fd0c9;color-scheme:dark;}}
+  :root[data-theme="dark"]{--bg:#12161b;--text:#e7ecf1;--dim:#a3afbb;--line:#2a323c;--code:#1f262f;--accent:#3fd0c9;color-scheme:dark;}
+  body{font-family:sans-serif;max-width:800px;margin:1rem auto;padding:0 1rem;line-height:1.5;background:var(--bg);color:var(--text);}
+  a,a:visited{color:var(--accent);}
   table{border-collapse:collapse;margin:1rem 0;width:100%;}
-  th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;}
-  pre{background:#f4f4f4;padding:0.5rem;overflow-x:auto;}
-  code{background:#f4f4f4;padding:0 3px;}
+  th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;}
+  pre{background:var(--code);padding:0.5rem;overflow-x:auto;}
+  code{background:var(--code);padding:0 3px;}
   pre code{background:none;padding:0;}
-  blockquote{border-left:3px solid #ccc;margin:0.5rem 0;padding:0.2rem 1rem;color:#555;}
-  h1,h2,h3{border-bottom:1px solid #eee;padding-bottom:0.2rem;}
+  blockquote{border-left:3px solid var(--line);margin:0.5rem 0;padding:0.2rem 1rem;color:var(--dim);}
+  h1,h2,h3{border-bottom:1px solid var(--line);padding-bottom:0.2rem;}
 </style>
 </head>
 <body>

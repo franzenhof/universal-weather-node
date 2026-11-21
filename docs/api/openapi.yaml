@@ -522,6 +522,50 @@ paths:
         "401": { $ref: "#/components/responses/DigestChallenge" }
         "403": { description: "No admin password configured, or a cross-site request.", content: { text/plain: { schema: { type: string } } } }
 
+  /api/settings/reset:
+    post:
+      tags: [admin]
+      operationId: postSettingsReset
+      summary: Reset records, rain / sunshine statistics, the AUX pulse total, or delete the chart history
+      description: |
+        The buttons under Settings -> System -> *Records and chart history*.
+        `records` resets today ... this year, `recordsall` also the
+        all-time records (like parameter 64), `history` deletes both chart
+        ranges (24 h and 7 days) in RAM and flash, `rain` sets the rain
+        statistics (today ... year, last rain, rain since start) to 0,
+        `sunshine` the sunshine duration (today, yesterday), `aux` the AUX
+        pulse total (PCB v2.0, like the downlink command). Done within one
+        measurement cycle; redirects back to the settings page.
+      security: [{ digest: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [what]
+              properties:
+                what: { type: string, enum: [records, recordsall, history, rain, sunshine, aux] }
+      responses:
+        "303": { description: Done; back to /api/settings#system. }
+        "400": { description: Unknown `what`. }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+  /api/settings/rfsensors:
+    get:
+      tags: [admin]
+      operationId: getSettingsRfSensors
+      summary: Wireless sensor table of the settings page (HTML fragment)
+      description: |
+        The *Wireless sensors* section of the settings page alone (state,
+        ID, name field, type, signal, values). The settings page loads it
+        every 5 s to append newly received sensors and refresh signal and
+        values without touching fields being edited.
+      security: [{ digest: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
   /api/settings/backup:
     get:
       tags: [admin]

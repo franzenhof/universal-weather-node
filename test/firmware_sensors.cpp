@@ -52,8 +52,23 @@ int main()
     startOneWireConversion();
     assert(pollOneWireConversion() && bus1Temps[0]==10.5f);
 
+    // ---- settling after the start: wind and rain pulses ignored for PULSE_SETTLE_MS ----
+    gCfg.windEn=1;gCfg.rainEn=1;
+    assert(pulseSettling());                  // before the end of setup()
+    pulseSettleStart();
+    hostCounts[PCNT_UNIT_WINDSPEED]=0;hostCounts[PCNT_UNIT_RAIN]=0;readPulseCounters();
+    hostCounts[PCNT_UNIT_WINDSPEED]=63;hostCounts[PCNT_UNIT_RAIN]=5;hostNow+=1000;   // the burst: 63 pulses in 1 s = 226 km/h
+    {
+        const float before=rainMMSinceStart;
+        PulseSample s0=readPulseCounters();
+        assert(!s0.windValid && s0.rainMm==0.0f && rainMMSinceStart==before);
+    }
+    hostNow+=PULSE_SETTLE_MS;
+    assert(!pulseSettling());
+    sensorsInit(getPins(20));                 // counters back to 0 for the wrap tests below
+
     // ---- PCNT: any number of counter wraps between two reads ----
-    gCfg.windEn=1;gCfg.windMsPerPps=0.001f;   // high-pulse anemometer
+    gCfg.windMsPerPps=0.001f;   // high-pulse anemometer
     hostCounts[PCNT_UNIT_WINDSPEED]=0;readPulseCounters();
     hostPcntIsr[PCNT_UNIT_WINDSPEED](hostPcntArg[PCNT_UNIT_WINDSPEED]);
     hostPcntIsr[PCNT_UNIT_WINDSPEED](hostPcntArg[PCNT_UNIT_WINDSPEED]);

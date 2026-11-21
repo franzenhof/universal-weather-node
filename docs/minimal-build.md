@@ -15,7 +15,7 @@ For a wireless station (Bresser 5/6/7-in-1, TFA / LaCrosse IT+ or Ecowitt / Frog
 
 <!-- help:skip -->
 <p align="center">
-  <img src="../pictures/minimal-wireless-build.png" alt="Minimal wireless build: Heltec V3 powered over USB-C, BME280 on four jumper wires (3V3, GND, 41 SDA, 42 SCL), Bresser, TFA IT+ or Ecowitt / Froggit sensors over 868 MHz" width="100%">
+  <img src="../pictures/minimal-wireless-build.png" alt="Minimal wireless build: Heltec V4 or V3 powered over USB-C, BME280 on four jumper wires (3V3, GND, 41 SDA, 42 SCL), Bresser, TFA IT+ or Ecowitt / Froggit sensors over 868 MHz" width="100%">
 </p>
 <!-- /help:skip -->
 

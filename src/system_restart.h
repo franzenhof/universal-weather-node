@@ -10,3 +10,7 @@ void systemRestart(const char* reason);
 // changed since the last copy - at most once per change. No-op with
 // gCfg.rainPersist off or before wxUploadSetup(). Safe from any task.
 void rainStatsFlush();
+// Settings -> System: rain statistics and "rain since start" back to 0 (wx_upload.cpp).
+void rainStatsReset();
+// Settings -> System: sunshine duration today / yesterday back to 0.
+void sunshineStatsReset();

@@ -9,6 +9,7 @@
 #include "derived.h"
 #include "history.h"
 #include "board_io.h"
+#include "sensors.h"
 #include "rain_stats.h"
 #include "system_restart.h"
 #include "awekas.h"
@@ -1075,6 +1076,40 @@ void wxUploadPushCycle(const WindStats& w10)
     xSemaphoreGive(rainNvsMutex);
 }
 
+// Settings -> System: one part of the rain / sunshine record back to 0, the
+// flash copy updated right away (rain_stats.h). The rain reset also sets
+// "rain since start" to 0; each keeps the other's values.
+static void rainRecordReset(bool rain)
+{
+    xSemaphoreTake(rainNvsMutex, portMAX_DELAY);
+    xSemaphoreTake(wxMutex, portMAX_DELAY);
+    RainRecord r = rainRecordNow();
+    if (rain) {
+        r.d.mm = r.d.prevMm = 0.0f;
+        r.d.lastRainEpoch = 0;
+        r.p.weekMm = r.p.monthMm = r.p.yearMm = 0.0f;
+        r.pendingMm = 0.0f;
+    } else {
+        r.d.sunSec = r.d.prevSunSec = 0.0f;
+        r.pendingSunSec = 0.0f;
+    }
+    rainRecordStore(r);
+    rollDailyRain();
+    const RainRecord cur = rainRecordNow();
+    xSemaphoreGive(wxMutex);
+    if (rainReady && gCfg.rainPersist && writeRainNvs(cur)) {
+        rainSave.saved = true;
+        rainSave.last = cur;
+        rainSave.lastSaveSec = uptimeSec();
+    }
+    xSemaphoreGive(rainNvsMutex);
+    if (rain) resetRainAccumulator();   // "rain since start"; the per-path windows keep counting
+    dbgSerial.printf("WX: %s statistics reset (settings).\n", rain ? "rain" : "sunshine");
+}
+
+void rainStatsReset()     { rainRecordReset(true); }
+void sunshineStatsReset() { rainRecordReset(false); }
+
 void rainStatsFlush()
 {
     xSemaphoreTake(rainNvsMutex, portMAX_DELAY);
@@ -1100,6 +1135,7 @@ void systemRestart(const char* reason)
     dbgSerial.printf("Restart: %s\n", reason ? reason : "");
     rainStatsFlush();
     recordsFlush();
+    historyStoreFlush();
     delay(100);   // let the log line out
     ESP.restart();
 }

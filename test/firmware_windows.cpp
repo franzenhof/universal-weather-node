@@ -87,6 +87,35 @@ int main()
     assert(lr.rateMmH(total, 500) == 0.0f);   // < 1 s: no rate
     assert(near(lr.amount(0.4f), 0.4f));      // safety net: a total below the mark counts from zero
 
+    // ---- rain rate over >= 5 min (short MQTT cycle must not turn a tip into a cloudburst) ----
+    RainRateRing rr;
+    rr.push(5.0f, 0);
+    assert(near(rr.rateMmH(5.2f, 10000), 2.4f));          // 1 tip 10 s after start: spread over 5 min
+    for (uint32_t t = 10000; t <= 600000; t += 10000) rr.push(5.2f, t);   // 10-s cycles, no rain
+    assert(rr.rateMmH(5.2f, 600000) == 0.0f);
+    assert(near(rr.rateMmH(5.4f, 610000), 2.4f * 300000.0f / 310000.0f));   // newest entry >= 5 min old: 310 s
+    for (uint32_t t = 610000; t <= 1200000; t += 10000) rr.push(5.4f + (t - 610000) / 600000.0f * 6.0f, t);   // 6 mm in ~10 min
+    { float r = rr.rateMmH(5.4f + 5.9f, 1200000); assert(r > 35.0f && r < 37.0f); }   // 36 mm/h, not 72 per tip
+    assert(rr.rateMmH(1.0f, 1210000) == 0.0f);            // total below the entry: no negative rate
+
+    // ---- spike guard: a lone burst far above the last minute is held and dropped ----
+    {
+        WindSpikeGuard sg;
+        uint32_t t = 0;
+        for (int i = 0; i < 30; i++, t += 1000) assert(sg.check(2.0f, t) == SPIKE_TAKE);   // calm
+        assert(sg.check(63.0f, t) == SPIKE_HOLD);  t += 1000;    // 226 km/h out of nowhere
+        assert(sg.check(2.5f, t) == SPIKE_TAKE);   t += 1000;    // not confirmed: dropped by the caller
+        assert(sg.check(25.0f, t) == SPIKE_HOLD);  t += 1000;    // a real gust front ...
+        assert(sg.check(22.0f, t) == SPIKE_TAKE_WITH_HELD); t += 1000;   // ... confirmed: both count
+        assert(sg.check(24.0f, t) == SPIKE_TAKE);  t += 1000;    // now within 4 x the last minute
+        assert(sg.check(15.0f, t) == SPIKE_TAKE);                // below 20 m/s: never held
+        WindSpikeGuard fresh;                                    // right after the start (no history)
+        assert(fresh.check(30.0f, 0) == SPIKE_HOLD && fresh.check(1.0f, 1000) == SPIKE_TAKE);
+        WindSpikeGuard storm;                                    // stormy minute: high gusts pass at once
+        for (uint32_t s = 0; s < 60000; s += 1000) storm.check(15.0f, s);
+        assert(storm.check(45.0f, 60000) == SPIKE_TAKE);
+    }
+
     // ---- more than 65535 pulses in one sample (high-pulse anemometer) ----
     WindRing rb;
     g = rb.push(100000, 3000, 0, false, 0.001f);

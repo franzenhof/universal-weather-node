@@ -4,7 +4,7 @@
 
 <!-- help:skip -->
 <p align="center">
-  <img src="pictures/minimal-wireless-build.png" alt="Minimal wireless build: Heltec V3 powered over USB-C, optional BME280 on four jumper wires, Bresser, TFA IT+ or Ecowitt / Froggit sensors over 868 MHz" width="100%">
+  <img src="pictures/minimal-wireless-build.png" alt="Minimal wireless build: Heltec V4 or V3 powered over USB-C, optional BME280 on four jumper wires, Bresser, TFA IT+ or Ecowitt / Froggit sensors over 868 MHz" width="100%">
 </p>
 <!-- /help:skip -->
 
@@ -40,7 +40,8 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 - 📻 **Up to 32 wireless sensors received directly** — Bresser 5/6/7-in-1 and other Bresser sensors, Ecowitt / Froggit (Fine Offset) outdoor arrays, thermo-hygro, soil, rain, lightning, air quality (PM2.5, CO₂), leak and leaf-wetness sensors, TFA / LaCrosse IT+, and Davis Vantage Pro2 / Vue (experimental); type detected automatically. Every sensor with all its values in the dashboard, REST API and MQTT; per value you choose the source for the main readings (board or wireless, automatic fallback). *(First Ecowitt sensors confirmed by a tester; most of the newer types and IT+ not yet tested with real sensors.)*
 - 🌐 **Built-in web dashboard** with live values, warnings, rain totals (hour … year), wind rose and trend charts — works without internet; plus a REST API
 - 🏠 **MQTT + Home Assistant** auto-discovery (TLS-capable) — every value, derived value and warning as an entity, plus one HA device per listed wireless sensor; **Loxone** via UDP push or HTTP
-- ☁️ **Direct uploads to weather networks** — AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap
+- ☁️ **Direct uploads to weather networks** — AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap, Met Office WOW, CWOP — plus your own HTTP uploads with placeholders
+- 🔔 **Alarms and push notifications** — rules such as gust, frost, leak, lightning or "sensor silent" to ntfy, Pushover, Telegram, MQTT or a webhook
 - 🧮 **Computed on the node:** dew point, feels-like, cloud base, VPD, 3-h pressure tendency with a weather trend, temperature trend, rain last hour / 24 h / today / yesterday / week / month / year, sunshine duration, frost / fog / sultry warnings, WMO wind (3-s gusts, 10-min values)
 - 🧩 **Everything runs on the ESP32** — no PC, Raspberry Pi, script or cloud service; sensors are read directly, Wi-Fi is output only
 - 🔧 **Set up from your phone** — browser installation, config portal, web settings, firmware updates over Wi-Fi; a built-in **radio trace** (diagnostic file) helps us add new sensors; install the dashboard as an **app on the phone's home screen** (offline over HTTPS)
@@ -55,7 +56,7 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 </p>
 <!-- /help:skip -->
 
-**Current status:** [2.0.0-rc.5](firmware/universal-weather-node-2.0.0-rc.5.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.5-factory.bin) for the first installation) is the release candidate for 2.0.0.
+**Current status:** [2.0.0-rc.6](firmware/universal-weather-node-2.0.0-rc.6.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.6-factory.bin) for the first installation) is the release candidate for 2.0.0.
 
 ## Documentation
 
@@ -85,20 +86,22 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 The node reads every sensor **directly** — 868 MHz radio decoded by its own LoRa chip, or wired inputs, I²C / 1-Wire on the PCB — processes the values itself and only **sends** them out. It never fetches or receives sensor data over Wi-Fi.
 
 ```
- Bresser / Ecowitt / TFA ~ 868 MHz ~┐
- BME280 (I²C, recommended) ─────────┤                      ┌─► Wi-Fi ──► Web dashboard / REST API in your LAN
- PCB only:                          ├──► Weather Node ─────┼─► Wi-Fi ──► MQTT broker ──► Home Assistant, ...
-   Davis / generic wind + rain ─────┤  (Heltec V4 / V3)    ├─► Wi-Fi ──► AWEKAS, Weather Underground, Windy, ...
-   DS18B20, UV, AUX, Victron ───────┘                      └─► LoRaWAN (optional) ──► ChirpStack / TTN ──► Grafana, ...
+ Bresser / Ecowitt / TFA / Davis ~ 868 MHz ~┐               ┌─► Wi-Fi ──► Web dashboard / REST API / phone app in your LAN
+   (up to 32 wireless sensors)              │               ├─► Wi-Fi ──► MQTT broker ──► Home Assistant, ...
+ BME280 (I²C, recommended) ─────────────────┤               ├─► Wi-Fi ──► AWEKAS, Weather Underground, Windy, WOW, CWOP, ...
+ PCB only:                                  ├──► Weather ───┼─► Wi-Fi ──► Alarms: ntfy, Pushover, Telegram, MQTT, webhook
+   Davis / generic wind + rain ─────────────┤     Node      ├─► Wi-Fi ──► Loxone (UDP / HTTP), your own HTTP uploads
+   DS18B20, UV, AUX, Victron ───────────────┘  (Heltec V4   ├─► OLED display on the board
+                                                  or V3)    └─► LoRaWAN (optional) ──► ChirpStack / TTN ──► Grafana, ...
 ```
 
-The node runs continuously (no deep sleep). It samples the sensors every few seconds and combines the samples into one measurement per **cycle** (default 300 s), which it then sends out.
+The node runs continuously (no deep sleep). It samples the sensors every few seconds and combines the samples into one measurement per **cycle** (default 300 s), which it then sends out. Alarm rules are checked every 30 s and send their message as soon as a rule fires; MQTT can publish faster than the cycle (down to seconds).
 
 ## The Project in Pictures
 
 <!-- help:skip -->
 <p align="center">
-  <img src="pictures/overview.png" alt="Overview: sensor setups (Bresser, TFA IT+ or Ecowitt / Froggit 868 MHz wireless, Davis, generic wired, plus BME280) feed the Universal Weather Node PCB, which sends to LoRaWAN, MQTT/Home Assistant, the web dashboard/REST API and weather networks" width="100%">
+  <img src="pictures/overview.png" alt="Overview: sensor setups (up to 32 Bresser, Ecowitt / Froggit, TFA IT+ or Davis 868 MHz wireless sensors, Davis and generic wired sensors, plus BME280) feed the Universal Weather Node on a Heltec V4 or V3, which sends to LoRaWAN, MQTT / Home Assistant, the web dashboard / REST API, weather networks, alarms and notifications (ntfy, Pushover, Telegram, MQTT, webhook), Loxone and the OLED" width="100%">
 </p>
 
 <table>
@@ -117,7 +120,15 @@ The node runs continuously (no deep sleep). It samples the sensors every few sec
     </td>
   </tr>
   <tr>
-    <td align="center" colspan="3">
+    <td align="center">
+      <img src="pictures/case-minimal.png" alt="3D-printed enclosure for the minimal wireless build: Heltec chamber on top, ventilated BME280 chamber below" width="100%">
+      <br><strong>Enclosure for the minimal build</strong>
+    </td>
+    <td align="center">
+      <img src="pictures/dashboard-new-phone.png" alt="Web dashboard on a phone: temperature, humidity, pressure, wind, rain, UV, wind rose and rain totals" width="100%">
+      <br><strong>Dashboard on the phone (installable as an app)</strong>
+    </td>
+    <td align="center">
       <img src="pictures/grafana-wind.jpeg" alt="Grafana dashboard for wind data" width="100%">
       <br><strong>Grafana: wind data via LoRaWAN</strong>
     </td>

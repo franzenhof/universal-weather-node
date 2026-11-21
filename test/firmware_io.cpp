@@ -14,6 +14,7 @@ int main()
     gCfg.pcbVersion=20;
     sensorsInit(getPins(20));
     ioInit();
+    pulseSettleStart(); hostNow+=PULSE_SETTLE_MS;   // past the settling time after the start
     gCfg.wind2Mode=1;
     assert(ioAnyEnabled());
     ioPoll();

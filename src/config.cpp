@@ -1,4 +1,5 @@
 #include "config.h"
+#include "sources.h"
 #include "ha_rf.h"
 #include "loxone.h"
 #include "wind_window.h"
@@ -268,7 +269,7 @@ Config loadConfig()
     for (int i = 0; i < (int)sizeof(c.srcSel); i++) {
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
         int v = prefs.getInt(key, c.srcSel[i]);
-        c.srcSel[i] = (uint8_t)((v >= 0 && v <= 6) ? v : 0);
+        c.srcSel[i] = (uint8_t)(srcSelValid(v) ? v : 0);
     }
     c.windDirOffsetDeg = prefs.getInt    ("windoff",  c.windDirOffsetDeg);
     c.windUnitMs       = prefs.getInt    ("windunit", c.windUnitMs);

@@ -58,7 +58,7 @@ bool applyParam(uint8_t paramId, int16_t value)
             return true;
         case PARAM_SRC_TEMP_HUM: case PARAM_SRC_WIND: case PARAM_SRC_RAIN:
         case PARAM_SRC_UV: case PARAM_SRC_LIGHT:
-            if (value < 0 || value > 6) return false;
+            if (!srcSelValid(value)) return false;
             gCfg.srcSel[paramId - PARAM_SRC_TEMP_HUM] = (uint8_t)value;
             return true;
         case PARAM_RF_ONLY_MINE:
@@ -86,7 +86,7 @@ bool applyParam(uint8_t paramId, int16_t value)
             gCfg.rfIgnore[0] = '\0';
             return true;
         case PARAM_SRC_PRESSURE:
-            if (value < 0 || value > 6) return false;
+            if (!srcSelValid(value)) return false;
             gCfg.srcSel[SG_PRESS] = (uint8_t)value;
             return true;
         case PARAM_RF_PROTO:

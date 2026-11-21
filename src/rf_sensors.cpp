@@ -1,5 +1,6 @@
 #include "rf_sensors.h"
 #include "rf_autosearch.h"
+#include "rf_schedule.h"
 #include "calibration.h"
 #include "heltec_board.h"
 #include "globals.h"
@@ -119,6 +120,24 @@ bool idAccepted(uint32_t id, const char* model, float rssi)
     return !onlyMine || std::find(mineIds.begin(), mineIds.end(), id) != mineIds.end();
 }
 bool isMine(uint32_t id) { return std::find(mineIds.begin(), mineIds.end(), id) != mineIds.end(); }
+
+// Receive scheduling (rf_schedule.h): the phase of a known sensor whose packet
+// is due now, 0 = none. With sensors marked "mine" only those are followed -
+// a neighbour's sensor must not take the receiver away from one's own.
+int schedTracked = 0;   // sensors with a learned interval in the phase set (status page)
+int scheduledPhase(int set, unsigned long now)
+{
+    RfSchedEntry e[RF_MAX_SENSORS];
+    int n = 0;
+    for (const RfSensorReading& r : gRfSensors) {
+        if (!r.used || !r.periodMs || r.proto == RF_PROTO_DAVIS) continue;
+        const int ph = rfPhaseSet(r.proto);
+        if (!(set & ph) || (!mineIds.empty() && !isMine(r.id))) continue;
+        e[n++] = { (uint8_t)ph, (uint32_t)r.schedMs, r.periodMs };
+    }
+    schedTracked = n;
+    return rfSchedDuePhase(e, n, (uint32_t)now);
+}
 
 // Returns how the frame was taken (radio trace): OK, or IGNORED (ID list, table full).
 RfTraceResult storeItPlus(const ItPlusFrame& f, float rssi)
@@ -539,11 +558,14 @@ void rfSensorsLoop()
         phase = rfNextPhase(set, RF_PROTO_ITPLUS9);    // first enabled, starting with Bresser
         phaseStartMs = millis();
         receiving = false;
-    } else if ((set & (set - 1)) &&                 // more than one phase
-               millis() - phaseStartMs >= rfPhaseDwellMs(phase, fineOffsetPhase())) {
-        phase = rfNextPhase(set, phase);
-        phaseStartMs = millis();
-        receiving = false;
+    } else if (set & (set - 1)) {                   // more than one phase
+        // a known sensor's packet is due: its phase (rf_schedule.h); otherwise rotate
+        const int due = scheduledPhase(set, millis());
+        if (due ? due != phase : millis() - phaseStartMs >= rfPhaseDwellMs(phase, fineOffsetPhase())) {
+            phase = due ? due : rfNextPhase(set, phase);
+            phaseStartMs = millis();
+            receiving = false;
+        }
     }
     // (Re)start after LoRaWAN used the transceiver, or retry after a failure.
     if (!receiving && (lastStartMs == 0 || lastError == 0 || millis() - lastStartMs >= RESTART_RETRY_MS)) {
@@ -581,4 +603,5 @@ const char* rfSensorsListening()
 
 bool     rfSensorsReceiving()   { return gCfg.rfEn && gCfg.rfEn == activeMode && receiving; }
 int16_t  rfSensorsLastError()   { return lastError; }
+int      rfSensorsScheduled()   { return (rfPhaseSet(protoSet) & (rfPhaseSet(protoSet) - 1)) ? schedTracked : 0; }
 uint32_t rfSensorsPacketsTotal() { return packetsTotal; }

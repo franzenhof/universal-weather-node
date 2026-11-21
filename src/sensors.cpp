@@ -353,6 +353,23 @@ uint16_t readWindDirection()
 // units are not clocked then, so those edges are counted in software.
 volatile uint32_t sleepPulsesWind = 0, sleepPulsesRain = 0;
 
+static unsigned long settleFromMs = 0;
+static bool          settleStarted = false, settled = false;
+void pulseSettleStart() { settleFromMs = millis(); settleStarted = true; }
+bool pulseSettling()
+{
+    if (settled) return false;
+    if (!settleStarted || millis() - settleFromMs < PULSE_SETTLE_MS) return true;
+    settled = true;
+    return false;
+}
+
+// A single sub-sample far above the last minute's wind waits for the next
+// one to confirm it (wind_window.h); its pulses are kept meanwhile.
+static WindSpikeGuard windGuard;
+static uint32_t heldWindPulses = 0;
+static unsigned long heldWindMs = 0;
+
 PulseSample readPulseCounters()
 {
     unsigned long now     = millis();
@@ -369,16 +386,32 @@ PulseSample readPulseCounters()
         // gCfg.windMsPerPps: sensor-specific calibration (Davis default: 1.00584,
         // derived from "2.25 mph per Hz"); configurable for other anemometers.
         float newSpeedMs = pps * gCfg.windMsPerPps;
-        if (newSpeedMs > MAX_PLAUSIBLE_WIND_SPEED_MS || newSpeedMs < 0.0f || elapsed > 65535) {
+        if (pulseSettling()) {
+            if (pulsesWind) dbgSerial.printf("Wind: %ld pulses ignored (inputs settling after the start)\n", (long)pulsesWind);
+        } else if (newSpeedMs > MAX_PLAUSIBLE_WIND_SPEED_MS || newSpeedMs < 0.0f || elapsed > 65535) {
             // Reed-switch contact bounce / EMI burst on the pulse line can
             // produce a short, physically impossible pulse rate on a single
             // sub-sample. Drop the sample entirely so neither the means nor
             // the gust ever see it (see MAX_PLAUSIBLE_WIND_SPEED_MS).
             dbgSerial.printf("Wind: %ld pulses → %.1f m/s REJECTED (implausible)\n", (long)pulsesWind, newSpeedMs);
         } else {
-            out.windValid  = true;
-            out.windPulses = (uint32_t)pulsesWind;
-            dbgSerial.printf("Wind: %ld pulses in %lu ms → %.1f m/s\n", (long)pulsesWind, elapsed, newSpeedMs);
+            const SpikeVerdict v = WIND_SPIKE_GUARD_ON ? windGuard.check(newSpeedMs, now) : SPIKE_TAKE;
+            if (v == SPIKE_HOLD) {
+                heldWindPulses = (uint32_t)pulsesWind; heldWindMs = elapsed;
+                dbgSerial.printf("Wind: %ld pulses → %.1f m/s held (far above the last minute, waits for the next sample)\n", (long)pulsesWind, newSpeedMs);
+            } else {
+                if (v == SPIKE_TAKE_WITH_HELD) {   // confirmed: both samples count, as one
+                    pulsesWind += (int32_t)heldWindPulses;
+                    elapsed    += heldWindMs;
+                    out.elapsedMs = (uint16_t)(elapsed > 65535 ? 65535 : elapsed);
+                } else if (heldWindMs) {
+                    dbgSerial.println("Wind: held sample not confirmed - dropped");
+                }
+                heldWindPulses = 0; heldWindMs = 0;
+                out.windValid  = true;
+                out.windPulses = (uint32_t)pulsesWind;
+                dbgSerial.printf("Wind: %ld pulses in %lu ms → %.1f m/s\n", (long)pulsesWind, elapsed, newSpeedMs);
+            }
         }
     }
 
@@ -388,6 +421,10 @@ PulseSample readPulseCounters()
         sleepPulsesRain = 0;
         // gCfg.rainMmPerTip: sensor-specific calibration (Davis default: 0.2mm/tip);
         // configurable for other tipping-bucket rain gauges.
+        if (pulseSettling()) {
+            if (pulsesRain) dbgSerial.printf("Rain: %ld pulses ignored (inputs settling after the start)\n", (long)pulsesRain);
+            pulsesRain = 0;
+        }
         out.rainMm        = (float)pulsesRain * gCfg.rainMmPerTip;
         srcBoardRain(out.rainMm);   // into rainMMSinceStart only while the board gauge is the rain source
         if (pulsesRain) dbgSerial.printf("Rain: %ld pulses → %.1f mm\n", (long)pulsesRain, out.rainMm);

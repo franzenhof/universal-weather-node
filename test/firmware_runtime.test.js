@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'weathernode-runtime-'));
-const common = ['src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/derived.cpp', 'src/derived_now.cpp', 'src/calibration.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp',
+const common = ['src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/derived.cpp', 'src/derived_now.cpp', 'src/calibration.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp',
   'test/host/runtime.cpp'];
 try {
   // generated translation headers (include/i18n_*.h, also done by every PlatformIO build)
@@ -21,7 +21,7 @@ try {
     ['loxone', ['src/loxone_lines.cpp']],
     ['itplus', ['lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp']],
     ['fineoffset', ['lib/FineOffsetSensorReceiver/src/FineOffsetDecoder.cpp', 'lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp',
-      'src/rf_sensors_data.cpp', 'src/calibration.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp']],
+      'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/calibration.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp']],
     ['davis', ['lib/DavisSensorReceiver/src/DavisDecoder.cpp', 'lib/DavisSensorReceiver/src/DavisHopper.cpp']],
     ['netids', []],
     ['otacheck', []],
@@ -41,6 +41,7 @@ try {
     ['netcheck', ['src/net_check.cpp']],
     ['tlsgate', ['src/tls_gate.cpp']],
     ['rfautosearch', ['src/rf_autosearch.cpp']],
+    ['rfschedule', ['src/rf_schedule.cpp']],
     ['manifest', ['src/web_manifest.cpp', 'src/i18n.cpp']],
     ['alarms', ['src/alarms.cpp', 'src/placeholders.cpp', 'src/units.cpp']],
     ['notify', ['src/notify.cpp', 'src/placeholders.cpp']],

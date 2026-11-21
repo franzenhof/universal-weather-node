@@ -153,13 +153,28 @@ int srcResolve(SrcGroup g)
     uint8_t sel = gCfg.srcSel[g];
     if (sel == SRC_OFF) return SRC_NONE;
     if (sel == SRC_BOARD) return boardHas(g) ? SRC_IS_BOARD : SRC_NONE;
-    if (sel >= SRC_RF1 && sel <= SRC_RF4) {
-        int idx = rfSensorIndexForSlot(sel - SRC_RF1);
+    if (srcSelSlot(sel) >= 0) {
+        int idx = rfSensorIndexForSlot(srcSelSlot(sel));
         return radioHas(idx, g) ? idx : SRC_NONE;
     }
-    // Auto: board first, then wireless 1..4 (only the value-source slots,
-    // never sensors 5..32; for temperature / humidity no indoor sensor)
+    // Auto: board first, then
+    //  - with ★ sensors: all of them in their number order (the order of the
+    //    ★ list, arrows on the settings page) - the first that delivers; the
+    //    others (neighbours) never;
+    //  - without: wireless 1..4 in Ecowitt's sensor order (never 5..32).
+    // For temperature / humidity no indoor sensor.
     if (boardHas(g)) return SRC_IS_BOARD;
+    const std::vector<uint32_t> mine = rfParseIds(gCfg.rfIds);
+    if (!mine.empty()) {
+        for (uint32_t id : mine)
+            for (int i = 0; i < RF_MAX_SENSORS; i++) {
+                const RfSensorReading& r = gRfSensors[i];
+                if (!r.used || r.id != id) continue;
+                if (!(g == SG_AIR && rfIsIndoor(r)) && radioHas(i, g)) return i;
+                break;
+            }
+        return SRC_NONE;
+    }
     int best = SRC_NONE, bestRank = 99;
     for (int slot = 0; slot < RF_SOURCE_SLOTS; slot++) {
         int idx = rfSensorIndexForSlot(slot);

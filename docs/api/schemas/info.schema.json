@@ -16,7 +16,9 @@
         "uptimeSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last start (same as device.uptimeSec).", "x-unit": "s" },
         "heapFree": { "type": "integer", "minimum": 0, "description": "Free heap now (8-bit capable).", "x-unit": "bytes" },
         "heapMin": { "type": "integer", "minimum": 0, "description": "Lowest free heap since start.", "x-unit": "bytes" },
-        "heapLargest": { "type": "integer", "minimum": 0, "description": "Largest free block now - HTTPS needs about 40 KB in one block.", "x-unit": "bytes" }
+        "heapLargest": { "type": "integer", "minimum": 0, "description": "Largest free block now - HTTPS needs about 40 KB in one block.", "x-unit": "bytes" },
+        "settingsStoreUsed": { "type": "integer", "minimum": 0, "description": "Settings flash partition (cfgdata, 64 KB NVS): bytes in use - settings, alarms, records, rain statistics, saved history.", "x-unit": "bytes" },
+        "settingsStoreFree": { "type": "integer", "minimum": 0, "description": "Settings flash partition: bytes free. The saved history is skipped when less than 16 KB would stay free.", "x-unit": "bytes" }
       }
     },
     "device": {

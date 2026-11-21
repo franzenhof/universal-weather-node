@@ -356,6 +356,7 @@ static_assert(PATH_COUNT == SRC_PATHS, "wireless wind keeps one window per path 
 static WindRing      windRing;
 static WindAcc       windAcc[PATH_COUNT];
 static RainWindow    rainWin[PATH_COUNT];
+static RainRateRing  rainRateRing;   // rate over >= 5 min for short windows
 static unsigned long pathLastMs[PATH_COUNT];
 static constexpr unsigned long SLOW_SAMPLE_MS = 10000;   // BME280: slow-changing values
 
@@ -424,6 +425,16 @@ static void takeSlowSample()
     }
 }
 
+// Rain rate of a path: its own window when that is >= 5 min, otherwise the
+// rolling 5-min rate (a short MQTT / Loxone cycle would turn one tip into a
+// cloudburst: 0.2 mm in 10 s = 72 mm/h).
+static float rainRateFor(int idx, float total, unsigned long now)
+{
+    rainRateRing.push(total, now);
+    if ((uint32_t)(now - rainWin[idx].startMs) >= RAIN_RATE_MIN_MS) return rainWin[idx].rateMmH(total, now);
+    return rainRateRing.rateMmH(total, now);
+}
+
 // Wind/rain values of one path at the moment it sends.
 static PathValues pathValues(int idx, int aggMode, unsigned long now)
 {
@@ -446,7 +457,7 @@ static PathValues pathValues(int idx, int aggMode, unsigned long now)
     if (srcActive(SG_RAIN)) {
         const float total = rainWindowTotalMm();
         v.rainMm      = rainWin[idx].amount(total);
-        v.rainRateMmH = rainWin[idx].rateMmH(total, now);
+        v.rainRateMmH = rainRateFor(idx, total, now);
     }
     return v;
 }
@@ -468,7 +479,7 @@ static void computeFinalValues(unsigned long elapsedMs, unsigned long now)
     if (srcActive(SG_RAIN)) {
         const float total = rainWindowTotalMm();
         rainMM      = rainWin[PATH_BASE].amount(total);
-        rainRateMmH = rainWin[PATH_BASE].rateMmH(total, now);
+        rainRateMmH = rainRateFor(PATH_BASE, total, now);
     }
     if (bme280Present && bme280SampleCount > 0) {
         bme280TempC    = bme280TempSum    / bme280SampleCount;
@@ -896,6 +907,7 @@ void setup()
         unsigned long t = millis();
         lastWindSampleMs = lastSlowSampleMs = lastSendMs = t;
         for (int i = 0; i < PATH_COUNT; i++) resetPath(i, t);
+        rainRateRing.push(rainWindowTotalMm(), t);
     }
 
     // Parallel WiFi + MQTT transport (fully optional, see wifiMqttPoll() in
@@ -914,6 +926,9 @@ void setup()
     takeWindSample();
     takeSlowSample();
     activateDisplay(20000);
+
+    // pulse inputs count from PULSE_SETTLE_MS after here (sensors.h)
+    pulseSettleStart();
 
     // Enable WDT for the loop task from here
     esp_task_wdt_add(nullptr);
@@ -1040,6 +1055,7 @@ void loop()
         if (!mqttOn)      resetPath(PATH_MQTT, cycleEnd);
         if (!loxOn)       resetPath(PATH_LOX, cycleEnd);
 
+        historyStoreCycle();   // restore after the clock sync / save every 24 h (history.h)
         pushHistorySample();   // base cycle values for the dashboard history
         recordsCycle();        // extremes (records.h)
         astroCycle();          // sun / moon times of the day (astro.h)

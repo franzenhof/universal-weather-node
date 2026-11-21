@@ -3,6 +3,9 @@
 #if __has_include(<esp_heap_caps.h>)
 #include <esp_heap_caps.h>
 #endif
+#if __has_include(<nvs.h>) && defined(ESP_PLATFORM)
+#include <nvs.h>
+#endif
 
 // alarms_run.cpp / custom_upload.cpp (weak defaults: host builds without them)
 __attribute__((weak)) void alarmChannelsConfigured(bool* ch) { for (int k = 0; k < 4; k++) ch[k] = false; }
@@ -79,6 +82,18 @@ __attribute__((weak)) size_t hostOrDeviceFreeHeap(int what)
 #endif
 }
 
+// Settings partition "cfgdata" (NVS): bytes used / free (32-byte entries); weak: host tests
+__attribute__((weak)) size_t hostOrDeviceSettingsStore(bool freePart)
+{
+#if __has_include(<nvs.h>) && defined(ESP_PLATFORM)
+    nvs_stats_t st;
+    if (nvs_get_stats("cfgdata", &st) != ESP_OK) return 0;
+    return (freePart ? st.free_entries : st.used_entries) * 32;
+#else
+    return freePart ? 45000 : 14000;
+#endif
+}
+
 void buildInfoJson(JsonDocument& doc)
 {
     doc.clear();
@@ -96,6 +111,8 @@ void buildInfoJson(JsonDocument& doc)
     sys["heapFree"]    = (unsigned long)hostOrDeviceFreeHeap(0);
     sys["heapMin"]     = (unsigned long)hostOrDeviceFreeHeap(1);
     sys["heapLargest"] = (unsigned long)hostOrDeviceFreeHeap(2);
+    sys["settingsStoreUsed"] = (unsigned long)hostOrDeviceSettingsStore(false);
+    sys["settingsStoreFree"] = (unsigned long)hostOrDeviceSettingsStore(true);
     // Language setting of the web interface (a UI may follow it); "auto" = browser
     static const char* const langs[] = { "auto", "en", "de", "fr", "es", "pt" };
     dev["language"] = langs[gCfg.uiLang >= 0 && gCfg.uiLang <= 5 ? gCfg.uiLang : 0];

@@ -10,7 +10,9 @@
     "uptimeSec": 180064,
     "heapFree": 150000,
     "heapMin": 120000,
-    "heapLargest": 90000
+    "heapLargest": 90000,
+    "settingsStoreUsed": 14000,
+    "settingsStoreFree": 45000
   },
   "firmware": {
     "version": "2.0.0"

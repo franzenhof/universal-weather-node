@@ -116,7 +116,12 @@ With a **web settings admin password** set, the portal's `/update` page asks for
 
 OTA requires an existing compatible partition table with `cfgdata`; it cannot prepare a new board or repair an older table. Use [USB flashing](development.md#build--flash) in that case. Heater/fan outputs remain off throughout the portal/update and resume according to saved settings after restart.
 
-> If the captive-portal window doesn't allow file uploads, open **http://192.168.4.1/update** in a normal browser.
+> **Use a normal browser, not the captive-portal window**, for the firmware update. The small sign-in window that phones open automatically (Android: *Sign in to WeatherNode*, iOS: the portal sheet) often can't upload files, and it can't show the password prompt: with an admin password set, Android only shows *Webpage not available* / `ERR_HTTP_RESPONSE_CODE_FAILURE`. Instead:
+> 1. Connect to `WeatherNode`; in the sign-in window choose ⋮ → *Use this network as is* (or just close it) and keep the connection when asked about missing internet.
+> 2. Turn mobile data off for a moment (otherwise the phone may route 192.168.4.1 over it).
+> 3. Open **http://192.168.4.1/update** in Chrome / Safari, log in as `admin` with the admin password and upload the file.
+>
+> On a laptop it works the same way: connect to `WeatherNode` and open http://192.168.4.1/update in the browser.
 
 <!-- help:skip -->
 <table>

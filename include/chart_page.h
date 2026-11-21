@@ -53,19 +53,21 @@ static const char CHART_PAGE_HTML[] PROGMEM = R"HTML(
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="WeatherNode">
 <title>WeatherNode</title>
 <style>
-:root{ --bg:#f4f6f8; --panel:#ffffff; --border:#dde3e9; --text:#1a2028; --dim:#5f6d79; --accent:#0f9d94; --ok:#1d7f46; --bad:#c0392b; --warn:#a86400; }
+:root{ --bg:#f4f6f8; --panel:#ffffff; --border:#dde3e9; --text:#1a2028; --dim:#5f6d79; --accent:#0f9d94;--link:#0b7f78; --ok:#1d7f46; --bad:#c0392b; --warn:#a86400; }
 @media (prefers-color-scheme: dark){
-:root{ --bg:#12161b; --panel:#1a2028; --border:#2a323c; --text:#e7ecf1; --dim:#8f9cab; --accent:#3fd0c9; --ok:#4cc38a; --bad:#ff7b72; --warn:#f0a541; }
+:root{ --bg:#12161b; --panel:#1a2028; --border:#2a323c; --text:#e7ecf1; --dim:#8f9cab; --accent:#3fd0c9;--link:#3fd0c9; --ok:#4cc38a; --bad:#ff7b72; --warn:#f0a541; }
 }
-:root[data-theme="dark"]{ --bg:#12161b; --panel:#1a2028; --border:#2a323c; --text:#e7ecf1; --dim:#8f9cab; --accent:#3fd0c9; --ok:#4cc38a; --bad:#ff7b72; --warn:#f0a541; }
-:root[data-theme="light"]{ --bg:#f4f6f8; --panel:#ffffff; --border:#dde3e9; --text:#1a2028; --dim:#5f6d79; --accent:#0f9d94; --ok:#1d7f46; --bad:#c0392b; --warn:#a86400; }
+:root[data-theme="dark"]{ --bg:#12161b; --panel:#1a2028; --border:#2a323c; --text:#e7ecf1; --dim:#8f9cab; --accent:#3fd0c9;--link:#3fd0c9; --ok:#4cc38a; --bad:#ff7b72; --warn:#f0a541; }
+:root[data-theme="light"]{ --bg:#f4f6f8; --panel:#ffffff; --border:#dde3e9; --text:#1a2028; --dim:#5f6d79; --accent:#0f9d94;--link:#0b7f78; --ok:#1d7f46; --bad:#c0392b; --warn:#a86400; }
 
 *{box-sizing:border-box;}
 body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);
 max-width:1120px;margin:0 auto;padding:0 1rem 2rem;}
 nav{display:flex;flex-wrap:wrap;gap:0.4rem 1.1rem;padding:0.9rem 0;border-bottom:1px solid var(--border);margin-bottom:1rem;}
+a:where(:link,:visited){color:var(--link);}
+:root{color-scheme:light dark;}:root[data-theme="light"]{color-scheme:light;}:root[data-theme="dark"]{color-scheme:dark;}
 nav a{color:var(--dim);text-decoration:none;font-size:0.9rem;}
-nav a:hover,nav a:focus,nav a.on{color:var(--accent);}
+nav a:hover,nav a:focus,nav a.on{color:var(--accent);}nav a.on{font-weight:600;}
 nav select{width:auto;margin-left:auto;padding:0.15rem 0.3rem;font-size:0.8rem;}
 .head{display:flex;align-items:baseline;justify-content:space-between;gap:0.3rem 1rem;flex-wrap:wrap;margin-bottom:0.25rem;}
 .head h3{margin:0;}

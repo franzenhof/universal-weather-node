@@ -36,7 +36,10 @@ static const char CALIBRATE_PAGE_HTML[] PROGMEM = R"CALPAGE(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>@0@</title>
 <style>
+  :root{color-scheme:light dark;}
   body{font-family:sans-serif;max-width:600px;margin:1rem auto;padding:0 1rem;line-height:1.5;}
+  a,a:visited{color:#0b7f78;}
+  @media (prefers-color-scheme: dark){body{background:#12161b;color:#e7ecf1;}a,a:visited{color:#3fd0c9;}}
   button{font-size:1rem;padding:0.5rem 1rem;margin:0.25rem 0.25rem 0.25rem 0;}
   table{border-collapse:collapse;margin:1rem 0;width:100%;}
   th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;}

@@ -98,7 +98,7 @@ The unit system is a device setting; if your UI has its own preference, convert 
 
 The node is a microcontroller that serves one request at a time — be gentle:
 
-1. Read `/api/info` once at start (again if `device.uptimeSec` went down: the node restarted, the history is gone).
+1. Read `/api/info` once at start (again if `device.uptimeSec` went down: the node restarted; the history is restored once its clock is synced, see below).
 2. Read `/api/data`; schedule the next read for `nextCycleInSec + 2` seconds (at least 5 s, at most `measurement.cycleSec`). `/api/data` does not change in between — faster polling only costs the node time.
 3. Read `/api/history` after each new `/api/data` at most, typically every 5 min (`range=24h`) or hourly (`range=7d`) — the 24h document is about 20 KB.
 4. On a network error, back off (e.g. 10 s, 30 s, 60 s) and keep showing the last values marked as old.
@@ -116,7 +116,7 @@ A handful of clients polling like this is no burden for the node; a client hamme
 
 - `null` = no data in that bucket (sensor off or absent, or no cycle ended in that window). Draw a gap, not a 0. All arrays and unit fields are always present, even when every value is `null`.
 - Buckets are fixed, back-to-back windows of `bucketSec` — on the wall clock (`:00`, `:05`, … UTC; full hours) once the node's clock is synced, on the uptime before that. A measurement cycle counts in the bucket in which it **ends**. There is one point per window, so 288 points are exactly 24 h and 168 exactly 7 days, and `ageSec` steps by `bucketSec` (one shorter step where the clock was first synced). With the default 300-s cycle every 5-min bucket holds one cycle; 60-s cycles give 5 per bucket; with cycles longer than the bucket (e.g. 600 s) the windows without a cycle are gaps (`null`), not filled in.
-- The history lives in RAM and starts empty after every restart; long-term storage is MQTT's / Grafana's job.
+- The history lives in RAM and is kept across restarts: the 7-day values are saved to flash every 24 h, both ranges before every planned restart or update; after the start they come back as soon as the clock is synced (the time the node was off shows as gaps). A power cut loses the 5-min values and at most a day of hourly values. Long-term storage is MQTT's / Grafana's job. `system.settingsStoreUsed` / `settingsStoreFree` in `/api/info` show the flash partition this uses (the history is skipped when less than 16 KB would stay free).
 - Rain totals: sum `rainMm` over the buckets you want. For "today" prefer `/api/data` `rainToday` (it survives restarts).
 
 ### Records

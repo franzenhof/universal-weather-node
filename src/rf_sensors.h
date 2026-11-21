@@ -42,6 +42,7 @@
 // node that runs for months); about 170 bytes per entry.
 constexpr int RF_MAX_SENSORS = 32;
 static_assert(RF_MAX_SENSORS >= RF_SOURCE_SLOTS, "the value-source slots must fit into the table");
+static_assert(RF_MAX_SENSORS <= SRC_RF_SLOTS_MAX, "every slot must be selectable as a value source (sources.h)");
 
 // Value bits (RfValues::ok, RfSensorReading::staleMask); the same values as
 // the Bresser library's MSG_OK_* (checked in rf_sensors.cpp).
@@ -70,6 +71,10 @@ struct RfSensorReading {
     // carrying the value.
     uint8_t       staleMask = 0;
     uint32_t      packets = 0;       // received since start
+    // receive scheduling (rf_schedule.h): last packet seen by rfStoreValues()
+    // and the send interval learned from the gaps (0 = not known yet)
+    unsigned long schedMs = 0;
+    uint32_t      periodMs = 0;
     // weather values (only the *_ok groups the sensor sends)
     bool  hasTemp = false, hasHumidity = false, hasWind = false, hasRain = false, hasUv = false, hasLight = false;
     float tempC = 0.0f;
@@ -214,6 +219,7 @@ void rfSensorsLoop();
 // Receiver state for the status page.
 bool    rfSensorsReceiving();
 int16_t rfSensorsLastError();
+int     rfSensorsScheduled();   // sensors followed by the receive schedule (rf_schedule.h), 0 = rotation only
 uint32_t rfSensorsPacketsTotal();
 const char* rfSensorsListening();      // protocol currently listened to, e.g. "IT+ 17.241 kbit/s"
 const char* rfProtoName(int proto);    // "Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset", "Davis"

@@ -41,6 +41,13 @@ constexpr float BATTERY_PRESENT_V = 2.5f;
 // windSpeedMs and windGustMs the same way the raw glitch did.
 #define MAX_PLAUSIBLE_WIND_SPEED_MS  78.0f   // 281 km/h — Davis anemometer rated max
 
+// Pulse inputs (wind, rain, AUX / 2nd anemometer) are ignored until
+// PULSE_SETTLE_MS after the end of setup(): lines and outputs settle after a
+// start - a burst there once read as a 226 km/h gust right after an update.
+constexpr unsigned long PULSE_SETTLE_MS = 10000;
+void pulseSettleStart();   // end of setup()
+bool pulseSettling();      // true until PULSE_SETTLE_MS after pulseSettleStart()
+
 // ============================================================================
 // I2C / BME280
 // ============================================================================

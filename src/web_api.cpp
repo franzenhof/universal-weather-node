@@ -321,14 +321,16 @@ void handleHelpMd()
 // by the dashboard's toggle — both pages work unchanged without JS.
 // ---------------------------------------------------------------------------
 const char PAGE_CSS[] PROGMEM = R"CSS(<style>
-:root{--bg:#f4f6f8;--panel:#fff;--border:#dde3e9;--text:#1a2028;--dim:#62707c;--accent:#0f9d94;--ok:#2e9d57;--warn:#c98a12;--bad:#d0443a;}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#12161b;--panel:#1a2028;--border:#2a323c;--text:#e7ecf1;--dim:#8996a3;--accent:#3fd0c9;--ok:#4cc27a;--warn:#e0a63e;--bad:#ef6a5f;}}
-:root[data-theme="dark"]{--bg:#12161b;--panel:#1a2028;--border:#2a323c;--text:#e7ecf1;--dim:#8996a3;--accent:#3fd0c9;--ok:#4cc27a;--warn:#e0a63e;--bad:#ef6a5f;}
+:root{--bg:#f4f6f8;--panel:#fff;--border:#dde3e9;--text:#1a2028;--dim:#62707c;--accent:#0f9d94;--link:#0b7f78;--ok:#2e9d57;--warn:#c98a12;--bad:#d0443a;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#12161b;--panel:#1a2028;--border:#2a323c;--text:#e7ecf1;--dim:#8996a3;--accent:#3fd0c9;--link:#3fd0c9;--ok:#4cc27a;--warn:#e0a63e;--bad:#ef6a5f;}}
+:root[data-theme="dark"]{--bg:#12161b;--panel:#1a2028;--border:#2a323c;--text:#e7ecf1;--dim:#8996a3;--accent:#3fd0c9;--link:#3fd0c9;--ok:#4cc27a;--warn:#e0a63e;--bad:#ef6a5f;}
 *{box-sizing:border-box;}
 body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);max-width:1000px;margin:0 auto;padding:0 1rem 2rem;}
 nav{display:flex;flex-wrap:wrap;gap:1.1rem;padding:0.9rem 0;border-bottom:1px solid var(--border);margin-bottom:1rem;}
+a:where(:link,:visited){color:var(--link);}
+:root{color-scheme:light dark;}:root[data-theme="light"]{color-scheme:light;}:root[data-theme="dark"]{color-scheme:dark;}
 nav a{color:var(--dim);text-decoration:none;font-size:0.9rem;}
-nav a:hover,nav a:focus,nav a.on{color:var(--accent);}
+nav a:hover,nav a:focus,nav a.on{color:var(--accent);}nav a.on{font-weight:600;}
 h3{margin:0 0 0.25rem;}
 .sub{color:var(--dim);font-size:0.85rem;margin:0 0 1rem;}
 section{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:0.75rem 0.9rem;margin-bottom:0.9rem;}
@@ -475,6 +477,7 @@ String agoText(unsigned long atMs) { return agoSeconds((millis() - atMs) / 1000)
 struct RfTypeEntry { int value; TextId text; };
 const RfTypeEntry RF_TYPES[] = {
     { RF_PROTO_AUTO, T_rft_auto },
+    { RF_PROTO_ALL, T_rft_all },
     { RF_PROTO_BRESSER, T_rft_bresser },
     { RF_PROTO_ITPLUS17 | RF_PROTO_ITPLUS9, T_rft_itplus_both },
     { RF_PROTO_ITPLUS17, T_rft_itplus17 },
@@ -617,7 +620,9 @@ String rfQuickActions(uint32_t id, const char* back = nullptr)
 }
 
 // radio trace (defined further down)
-void addRfTraceRows(HtmlOut& html);
+void addRfTraceStatusRow(HtmlOut& html);
+void addRfTraceControls(HtmlOut& html);
+void addRfSensorTable(HtmlOut& html);
 void sendRfTraceFile(bool attachment);
 
 void addDavisBox(HtmlOut& html)
@@ -1060,7 +1065,8 @@ void handleStatusPage()
             addStateRow(html, gDavisDiag.running ? "ok" : "bad", T(T_st_receiver), T(T_st_davis_exclusive_mode_see_the));
         else if (rfSensorsReceiving())
             addStateRow(html, "ok", T(T_st_receiver), TF(gCfg.loraEn ? T_st_listening_lora : T_st_listening, rfSensorsListening()) +
-                        " &middot; " + TF(T_st_packets_since_start, String(rfSensorsPacketsTotal())));
+                        " &middot; " + TF(T_st_packets_since_start, String(rfSensorsPacketsTotal())) +
+                        (rfSensorsScheduled() ? String(" &middot; ") + TF(T_st_rf_scheduled, String(rfSensorsScheduled())) : String()));
         else if (rfSensorsLastError() == 0)   // LoRaWAN uses the chip right now (uplink + receive windows)
             addStateRow(html, "ok", T(T_st_receiver), String(T(gCfg.loraEn ? T_st_paused_for_a_lorawan_uplink : T_st_starting)) + " &middot; " +
                         TF(T_st_packets_since_start, String(rfSensorsPacketsTotal())));
@@ -1162,7 +1168,7 @@ void handleStatusPage()
             else
                 addRow(html, T(T_st_home_assistant), T(T_st_no_device_per_wireless_sensor));
         }
-        addRfTraceRows(html);
+        addRfTraceStatusRow(html);
         html += "</table></section>";
         if (rfDavisMode(gCfg.rfEn, gCfg.rfProto)) addDavisBox(html);
     }
@@ -1279,6 +1285,8 @@ void handleLogPage()
     HtmlOut html(server, 200);
     pageStart(html, T(T_log_title), "/api/log");
     html += FPSTR(LOG_PAGE_STYLE);
+    addRfTraceControls(html);
+    html += "<h4>"; html += T(T_log_title); html += "</h4>";
     html += "<p class='sub'>"; html += T(T_log_intro); html += "</p>";
     html += "<button class='logbtn' id='toggle'>"; html += T(T_log_pause); html += "</button>";
     html += "<button class='logbtn' id='clear'>"; html += T(T_log_clear); html += "</button>";
@@ -1287,6 +1295,36 @@ void handleLogPage()
     html += ",failed:"; jsString(html, T(T_log_failed)); html += "};</script>";
     html += FPSTR(LOG_PAGE_SCRIPT);
     html += "</body></html>";
+    html.finish();
+}
+
+// Settings -> System, buttons "reset records" / "delete chart history" /
+// "reset rain / sunshine statistics" / "reset AUX pulse total": what =
+// records (today .. this year), recordsall (also all-time), history, rain,
+// sunshine or aux.
+// Done in the loop (records / history store), back to the System tab.
+void handleSettingsReset()
+{
+    selectLanguage();
+    if (!requireAuth()) return;
+    const String w = server.arg("what");
+    if (w == "records" || w == "recordsall") recordsResetRequest(w == "recordsall");
+    else if (w == "history") historyClearRequest();
+    else if (w == "rain") rainStatsReset();
+    else if (w == "sunshine") sunshineStatsReset();
+    else if (w == "aux") cmdResetAuxPulses();
+    else { server.send(400, "text/plain", "what: records, recordsall, history, rain, sunshine or aux"); return; }
+    server.sendHeader("Location", "/api/settings#system");
+    server.send(303, "text/plain", "");
+}
+
+// The settings' wireless sensor table alone (live refresh, see handleSettingsGet()).
+void handleRfSensorTable()
+{
+    selectLanguage();
+    if (!requireAuth()) return;
+    HtmlOut html(server, 200);
+    addRfSensorTable(html);
     html.finish();
 }
 
@@ -1324,28 +1362,48 @@ String rfTraceFilterText(const RfTraceStatus& st)
     return T(T_tr_all);
 }
 
-void addRfTraceRows(HtmlOut& html)
+// State line (recording / finished, filter, progress, time left).
+String rfTraceStateText(const RfTraceStatus& st)
+{
+    String v = st.running ? String("<b>") + T(T_tr_recording) + "</b>" : String(T(T_tr_finished));
+    if (!st.running && st.stopReason[0]) {
+        // the reasons rf_trace.cpp / this file set (English in the trace file)
+        const char* r = !strcmp(st.stopReason, "time is up") ? T(T_tr_reason_time) :
+                        !strcmp(st.stopReason, "stopped by the user") ? T(T_tr_reason_user) :
+                        !strcmp(st.stopReason, "Davis mode left") ? T(T_tr_reason_davis) : nullptr;
+        v += " (";
+        if (r) v += r; else appendEscaped(v, st.stopReason);
+        v += ")";
+    }
+    v += " &middot; " + rfTraceFilterText(st) + " &middot; " +
+         TF(T_tr_progress, String(st.seen), String(st.recorded), String(st.usedBytes * 100UL / RF_TRACE_SIZE));
+    if (st.overwrittenBytes) v += String(" (") + T(T_tr_overwritten) + ")";
+    if (st.running) v += " &middot; " + (st.durationMs ? TF(T_tr_min_left, String((st.leftMs + 59999) / 60000))
+                                                       : String(T(T_tr_until_stopped)) + (st.autoStarted ? String(" (") + T(T_tr_davis_mode) + ")" : String()));
+    return v;
+}
+
+// Status page: one compact row; the controls live on the (password
+// protected) log page, so a visitor sees no buttons that end in a login.
+void addRfTraceStatusRow(HtmlOut& html)
+{
+    const RfTraceStatus st = rfTraceStatusNow();
+    String v;
+    if (st.allocated) v += rfTraceStateText(st) + "<br>";
+    v += T(T_tr_on_log_page);
+    addRow(html, T(T_st_radio_trace_short), v);
+}
+
+// Log page: the full radio trace controls (start / stop / download / discard).
+void addRfTraceControls(HtmlOut& html)
 {
     const RfTraceStatus st = rfTraceStatusNow();
     String v;
     if (rfTraceMessage[0]) { v += "<b>"; appendEscaped(v, rfTraceMessage); v += "</b><br>"; rfTraceMessage[0] = '\0'; }
+    if (!gCfg.rfEn && !st.allocated) v += String(T(T_st_wireless_sensors_are_off)) + "<br>";
     if (st.allocated) {
-        v += st.running ? String("<b>") + T(T_tr_recording) + "</b>" : String(T(T_tr_finished));
-        if (!st.running && st.stopReason[0]) {
-            // the reasons rf_trace.cpp / this file set (English in the trace file)
-            const char* r = !strcmp(st.stopReason, "time is up") ? T(T_tr_reason_time) :
-                            !strcmp(st.stopReason, "stopped by the user") ? T(T_tr_reason_user) :
-                            !strcmp(st.stopReason, "Davis mode left") ? T(T_tr_reason_davis) : nullptr;
-            v += " (";
-            if (r) v += r; else appendEscaped(v, st.stopReason);
-            v += ")";
-        }
-        v += " &middot; " + rfTraceFilterText(st) + " &middot; " +
-             TF(T_tr_progress, String(st.seen), String(st.recorded), String(st.usedBytes * 100UL / RF_TRACE_SIZE));
-        if (st.overwrittenBytes) v += String(" (") + T(T_tr_overwritten) + ")";
-        if (st.running) v += " &middot; " + (st.durationMs ? TF(T_tr_min_left, String((st.leftMs + 59999) / 60000))
-                                                           : String(T(T_tr_until_stopped)) + (st.autoStarted ? String(" (") + T(T_tr_davis_mode) + ")" : String()));
-        v += String("<br><a href='/api/rf/trace'>") + T(T_tr_download) + "</a> <span class='dim'>(" + T(T_tr_admin_pw) + ")</span> ";
+        v += rfTraceStateText(st);
+        v += String("<br><a href='/api/rf/trace'>") + T(T_tr_download) + "</a> ";
         v += "<form method='POST' action='/api/rf/trace' style='display:inline'><input type='hidden' name='redirect' value='1'>";
         if (st.running) v += String("<button name='action' value='stop'>") + T(T_tr_stop) + "</button> ";
         v += String("<button name='action' value='clear'>") + T(T_tr_discard) + "</button></form>";
@@ -1362,14 +1420,15 @@ void addRfTraceRows(HtmlOut& html)
         v += T(T_tr_only_unknown);
         v += "</option><option value='id'>";
         v += T(T_tr_only_this_id);
-        v += "</option></select> <input name='id' size='9' maxlength='8' placeholder='";
+        // only shown while "only this ID" is selected (data-dep, see pageStart())
+        v += "</option></select> <input name='id' size='9' maxlength='8' data-dep='filter=id' placeholder='";
         v += T(T_tr_hex_id);
         v += "'> <button type='submit'>";
         v += T(T_tr_start);
         v += "</button></form>";
     }
     v += String("<span class='dim'>") + T(T_tr_note) + "</span>";
-    addRow(html, T(T_st_radio_trace), v);
+    html += "<section><h4>"; html += T(T_st_radio_trace); html += "</h4><p>"; html += v; html += "</p></section>";
 }
 
 void rfTraceWriteChunked(const char* s, size_t n, void* ctx)
@@ -1384,6 +1443,7 @@ String rfTraceReceiverInfo()
              : String("not receiving (last radio error ") + String(rfSensorsLastError()) + ")";
     r += ", " + String(rfSensorsPacketsTotal()) + " packets since start";
     if (rfSensorsDetectedProto()) r += ", auto search found type " + String(rfSensorsDetectedProto());
+    if (rfSensorsScheduled()) r += ", timed reception for " + String(rfSensorsScheduled()) + " sensors";
     return r;
 }
 
@@ -1482,8 +1542,8 @@ void handleRfTracePost()
         snprintf(err, sizeof(err), "action must be start, stop or clear");
     }
     if (server.hasArg("redirect")) {
-        server.sendHeader("Location", "/status#rftrace");
-        server.send(303, "text/plain", "see /status");
+        server.sendHeader("Location", "/api/log#rftrace");
+        server.send(303, "text/plain", "see /api/log");
         return;
     }
     rfTraceMessage[0] = '\0';
@@ -1670,7 +1730,7 @@ struct Option { int value; const char* text; };
 void fieldSelect(HtmlOut& html, const char* name, const char* label, int current,
                  const Option* opts, size_t count, const char* hint = nullptr)
 {
-    if (strcmp(name, "recreset")) capture(name, String(current));   // not the one-off reset action
+    capture(name, String(current));
     labelStart(html, label, hint);
     html += "<select name='"; html += name; formAttr(html); html += "'>";
     for (size_t i = 0; i < count; i++) {
@@ -1847,7 +1907,7 @@ void addRfSensorTable(HtmlOut& html)
         if (gRfSensors[i].used && rfSlotOfIndex(i) < 0 && rfStateOf(gRfSensors[i].id) != RF_STATE_MINE)
             row(-1, gRfSensors[i].id, i, RF_STATE_RECEIVED, 0);
     html += "</table>";
-    if (!any) { html += "<p class='dim'>"; html += T(T_set_no_sensor_yet); html += "</p>"; }
+    if (!any) { html += "<p class='dim' id='rfnone'>"; html += T(T_set_no_sensor_yet); html += "</p>"; }
     if (rfOnlyMineActive()) { html += "<p class='dim'>"; html += T(T_set_only_mine_note); html += "</p>"; }
 
     int hiddenNear = 0;
@@ -2215,34 +2275,66 @@ void renderSettings(const String& message, bool isError, int httpCode)
     advField = false;
     html += "</section>";
     addRfSensorTable(html);
-    sectionStart(html, T(T_set_value_sources), false);
+    // Live table: every 5 s new sensors are appended and the signal / values
+    // of the listed ones refreshed (GET /api/settings/rfsensors). Cells with
+    // a field are never replaced, so a name being typed or a changed state
+    // stays as it is; sensors that went silent stay until the page is reloaded.
+    // Only while the Sensors tab is shown and no firmware upload runs: the
+    // WebServer keeps ONE digest nonce, and a request that gets challenged
+    // renews it - a firmware upload in flight then fails its auth, the
+    // browser sends it again and finally asks for the password.
+    html += "<script>(function(){var T=document.querySelector('table.rft');if(!T||!window.fetch||!window.DOMParser)return;"
+            "function k(tr){var i=tr.querySelector('input[name^=\"rfnm_\"]');return i?i.name:null;}"
+            "function upd(){if(document.hidden||location.hash!='#sensors'||window.wnBusy)return;fetch('/api/settings/rfsensors',{cache:'no-store'})"
+            ".then(function(r){return r.ok?r.text():null;}).then(function(h){if(!h)return;"
+            "var N=new DOMParser().parseFromString(h,'text/html').querySelector('table.rft');if(!N)return;"
+            "var o={};Array.prototype.forEach.call(T.rows,function(tr){var x=k(tr);if(x)o[x]=tr;});"
+            "Array.prototype.forEach.call(N.rows,function(tr){var x=k(tr);if(!x)return;var e=o[x];"
+            "if(!e){(T.tBodies[0]||T).appendChild(document.importNode(tr,true));var n=document.getElementById('rfnone');if(n)n.remove();return;}"
+            "for(var c=0;c<tr.cells.length&&c<e.cells.length;c++)if(!e.cells[c].querySelector('input,select,button'))e.cells[c].innerHTML=tr.cells[c].innerHTML;"
+            "});}).catch(function(){});}"
+            "setInterval(upd,5000);})();</script>";
+    sectionStart(html, T(T_set_value_sources), false, T(T_set_value_sources_note));
     {
-        // value sources (sources.h): one select per group, wireless slots labelled with their ID
-        static char rfLabel[RF_SOURCE_SLOTS][48];
+        // value sources (sources.h): one select per group; the wireless sensors that
+        // exist (received or ★, up to 32) with their name and ID - an empty number
+        // only while it is chosen
         std::vector<uint32_t> ids = rfParseIds(gCfg.rfIds);
-        for (int k = 0; k < RF_SOURCE_SLOTS; k++) {
-            int idx = rfSensorIndexForSlot(k);
-            if (idx >= 0)
-            {
-                char h[12]; snprintf(h, sizeof(h), "%08lX", (unsigned long)gRfSensors[idx].id);
-                strlcpy(rfLabel[k], TF(T_set_wireless_slot, String(k + 1), h).c_str(), sizeof(rfLabel[k]));
+        std::vector<String> rfLabel;
+        std::vector<Option> srcOpts;
+        rfLabel.reserve(RF_MAX_SENSORS);
+        srcOpts.reserve(RF_MAX_SENSORS + 3);
+        srcOpts.push_back({ SRC_AUTO, T(T_opt_auto_board_first_then_wireless) });
+        srcOpts.push_back({ SRC_BOARD, T(T_opt_board_sensor) });
+        for (int k = 0; k < RF_MAX_SENSORS; k++) {
+            const int idx = rfSensorIndexForSlot(k);
+            bool chosen = false;
+            for (int g = 0; g < SG_COUNT; g++) chosen |= srcSelSlot(gCfg.srcSel[g]) == k;
+            // "Garten · 900181A2" with a user-defined name (rf_names.h), else the ID
+            auto who = [](uint32_t id) {
+                char h[12]; snprintf(h, sizeof(h), "%08lX", (unsigned long)id);
+                String w;
+                const char* nm = rfNameOf(id);
+                if (nm && *nm) { appendEscaped(w, nm); w += " &middot; "; }
+                return w + h;
+            };
+            if (idx >= 0) {
+                rfLabel.push_back(TF(T_set_wireless_slot, String(k + 1), who(gRfSensors[idx].id)));
+            } else if (k < (int)ids.size()) {
+                rfLabel.push_back(TF(T_set_wireless_slot_not_received, String(k + 1), who(ids[k])));
+            } else if (chosen) {
+                rfLabel.push_back(TF(T_set_wireless_slot_empty, String(k + 1)));
+            } else {
+                continue;
             }
-            else if (k < (int)ids.size())
-            {
-                char h[12]; snprintf(h, sizeof(h), "%08lX", (unsigned long)ids[k]);
-                strlcpy(rfLabel[k], TF(T_set_wireless_slot_not_received, String(k + 1), h).c_str(), sizeof(rfLabel[k]));
-            }
-            else
-                strlcpy(rfLabel[k], TF(T_set_wireless_slot_empty, String(k + 1)).c_str(), sizeof(rfLabel[k]));
+            srcOpts.push_back({ srcSelForSlot(k), rfLabel.back().c_str() });
         }
-        const Option srcOpts[] = { { SRC_AUTO, T(T_opt_auto_board_first_then_wireless) }, { SRC_BOARD, T(T_opt_board_sensor) },
-                                   { SRC_RF1, rfLabel[0] }, { SRC_RF1 + 1, rfLabel[1] }, { SRC_RF1 + 2, rfLabel[2] },
-                                   { SRC_RF4, rfLabel[3] }, { SRC_OFF, T(T_opt_off_not_reported) } };
+        srcOpts.push_back({ SRC_OFF, T(T_opt_off_not_reported) });
         static const char* const names[SG_COUNT]  = { "srcair", "srcwind", "srcrain", "srcuv", "srclight", "srcpress" };
         const char* const labels[SG_COUNT] = { T(T_opt_source_temperature_humidity), T(T_set_source_wind),
                                                       T(T_set_source_rain), T(T_set_source_uv), T(T_set_source_light), T(T_opt_source_pressure) };
         for (int g = 0; g < SG_COUNT; g++)
-            fieldSelect(html, names[g], labels[g], gCfg.srcSel[g], OPTS(srcOpts),
+            fieldSelect(html, names[g], labels[g], gCfg.srcSel[g], srcOpts.data(), srcOpts.size(),
                         g == SG_AIR   ? T(T_set_used_for_lorawan_mqtt_weather) :
                         g == SG_PRESS ? T(T_set_station_pressure_bme280_or_a) :
                         g == SG_LIGHT ? T(T_set_only_wireless_sensors_e_g) :
@@ -2606,11 +2698,20 @@ void renderSettings(const String& message, bool isError, int httpCode)
                 "<p><progress id='otaprog' max='100' value='0' hidden></progress> <span id='otamsg'></span></p><p id='otarc'></p>";
         html += "</section>";
     }
-    {   // records (records.h)
-        const Option recOpts[] = { { 0, T(T_set_rec_keep) }, { 1, T(T_set_rec_reset_periods) }, { 2, T(T_set_rec_reset_all) } };
-        sectionStart(html, T(T_set_records), false);
-        fieldSelect(html, "recreset", T(T_set_rec_reset), 0, OPTS(recOpts), T(T_set_rec_reset_hint));
-        html += "</section>";
+    {   // records (records.h) and chart history (history.h): buttons, each posts the
+        // form 'rform' (POST /api/settings/reset) after a confirmation - no Save needed
+        sectionStart(html, T(T_set_records), false, nullptr, false, false);   // actions: no live/restart tag
+        html += "<p>";
+        const struct { const char* what; TextId text; } acts[] = {
+            { "records", T_set_rec_reset_periods }, { "recordsall", T_set_rec_reset_all }, { "history", T_set_hist_reset },
+            { "rain", T_set_rain_reset }, { "sunshine", T_set_sun_reset }, { "aux", T_set_aux_reset } };
+        for (const auto& a : acts) {
+            if (!strcmp(a.what, "aux") && !ioV2()) continue;   // AUX pulse input: PCB v2.0 only
+            html += "<button type='submit' form='rform' name='what' value='"; html += a.what;
+            html += "' onclick='return confirm(this.dataset.q)' data-q='"; html += T(T_set_reset_confirm); html += "'>";
+            html += T(a.text); html += "</button> ";
+        }
+        html += "</p><p><small>"; html += T(T_set_rec_reset_hint); html += "</small></p></section>";
     }
     sectionStart(html, T(T_set_diagnostics), false);
     fieldReadonly(html, T(T_set_log), T(T_set_open_the_device_log));
@@ -2623,6 +2724,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
     html += "<button type='submit' id='ssave'>"; html += T(T_set_save); html += "</button></form>"
             "<form id='aform' method='POST' action='/api/alarms/save'><input type='hidden' name='form' value='1'></form>"
             "<form id='oform' method='POST' action='ota' enctype='multipart/form-data'></form>"
+            "<form id='rform' method='POST' action='/api/settings/reset'></form>"
             "<script>(function(){var d=document,ids=['basics','sensors','outputs','alarms','display','system'];"
             "d.documentElement.className+=' js';"
             "function show(){var h=location.hash.slice(1);if(ids.indexOf(h)<0)h='basics';"
@@ -2649,12 +2751,12 @@ void renderSettings(const String& message, bool isError, int httpCode)
             "var fi=d.querySelector('input[form=oform]');if(!fi||!fi.files[0])return;e.preventDefault();"
             "var fd=new FormData();fd.append('firmware',fi.files[0]);"
             "var x=new XMLHttpRequest(),p=d.getElementById('otaprog'),m=d.getElementById('otamsg'),b=d.getElementById('otabtn');"
-            "b.disabled=true;p.hidden=false;p.value=0;"
+            "b.disabled=true;p.hidden=false;p.value=0;window.wnBusy=1;"
             "x.upload.onprogress=function(ev){if(ev.lengthComputable){var v=Math.round(ev.loaded*100/ev.total);p.value=v;m.textContent=O.up.replace('{0}',v);}};"
             "x.onload=function(){m.textContent=x.responseText;if(x.status==200){d.getElementById('otarc').innerHTML=O.rc;var n=30,t=setInterval(function(){"
             "m.textContent=x.responseText+' '+O.rs.replace('{0}',n);if(--n<0){clearInterval(t);location.href='/status';}},1000);}"
-            "else{b.disabled=false;p.hidden=true;}};"
-            "x.onerror=function(){m.textContent=O.lost;b.disabled=false;};"
+            "else{b.disabled=false;p.hidden=true;window.wnBusy=0;}};"
+            "x.onerror=function(){m.textContent=O.lost;b.disabled=false;window.wnBusy=0;};"
             "x.open('POST','ota?js=1');x.send(fd);});"
             "})();</script></body></html>";
     html.finish();
@@ -3320,8 +3422,6 @@ void handleSettingsPost()
             gCfg.dispScreens = mask ? mask : 1;   // none ticked: the classic screen
         }
     }
-    if (present("recreset") && formArg("recreset").toInt() > 0)
-        apply(PARAM_RECORDS_RESET, formArg("recreset").toInt(), T(T_set_records));
 
     bool ignored = false;   // "changed" sink for live fields (no restart needed)
     int altitude = gCfg.altitudeM;
@@ -3968,6 +4068,8 @@ void webApiSetup()
     server.on("/api/settings", HTTP_GET,  handleSettingsGet);
     server.on("/api/settings", HTTP_POST, handleSettingsPost);
     server.on("/api/settings/backup",  HTTP_GET,  handleSettingsBackup);
+    server.on("/api/settings/rfsensors", HTTP_GET, handleRfSensorTable);
+    server.on("/api/settings/reset", HTTP_POST, handleSettingsReset);
     server.on("/api/settings/restore", HTTP_POST, handleSettingsRestore);
     server.on("/api/ota",      HTTP_POST, handleOtaDone, handleOtaChunk);
     server.on("/api/log",       HTTP_GET,  handleLogPage);
