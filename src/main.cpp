@@ -840,6 +840,10 @@ void setup()
         }
     }
 
+    // Foreign data in cfgdata (another firmware flashed before, factory image
+    // without erasing the chip): erase that partition, start like a new node.
+    cfgdataPrepare();
+
     // Load config and set CPU frequency
     gCfg = loadConfig();
     setCpuFrequencyMhz(gCfg.cpuFreqMhz);

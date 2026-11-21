@@ -4,6 +4,12 @@ Release notes of the Universal Weather Node firmware, newest first. Binaries are
 
 [← back to README](README.md)
 
+## 2.0.0-rc.7
+
+Firmware: [`universal-weather-node-2.0.0-rc.7.bin`](firmware/universal-weather-node-2.0.0-rc.7.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.7-factory.bin`](firmware/universal-weather-node-2.0.0-rc.7-factory.bin) (first installation, USB at `0x0`). A small fix release on top of rc.6; nothing to check after the update.
+
+- **Settings storage with data of another firmware:** if *cfgdata* is not usable as settings storage — e.g. after Meshtastic, whose file system lies at the same flash address, and flashing only the factory image without erasing — the node now erases that partition at the start and comes up like a new one (setup portal) instead of failing to start. Erasing the whole chip when flashing (ESPHome web flasher: *Erase device*) still is the cleanest way.
+
 ## 2.0.0-rc.6
 
 Firmware: [`universal-weather-node-2.0.0-rc.6.bin`](firmware/universal-weather-node-2.0.0-rc.6.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.6-factory.bin`](firmware/universal-weather-node-2.0.0-rc.6-factory.bin) (first installation, USB at `0x0`). Update from rc.5 under Settings → System → Firmware update; from rc.4 or older through the config portal (in a normal browser, see [installation](docs/installation.md#firmware-update-ota)).

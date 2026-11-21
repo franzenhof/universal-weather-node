@@ -28,6 +28,7 @@ The firmware is installed **once over USB, directly from the web browser** — n
 4. Click **CONNECT** and choose the serial port of the board in the browser's list, e.g. *CP2102 USB to UART*, *USB Serial*, *cu.usbserial-…* (macOS) or *COM3* (Windows), then *Connect*.
    - **No port in the list?** Try another cable/USB port. On Windows, install the [Silicon Labs CP210x driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) once and try again.
 5. Click **INSTALL**, choose the downloaded **`…-factory.bin`** and confirm with **INSTALL**. Wait until *Installation complete* (about 1 minute). Don't unplug the board meanwhile.
+   - **Another firmware ran on the board before** (e.g. Meshtastic)? Tick **Erase device** when asked, so no data of the old firmware is left in the flash (from 2.0.0-rc.7 the node would also clear its settings area by itself).
    - **Fails to connect / "failed to enter bootloader"?** Put the board into download mode by hand: hold the **PRG** button, press and release **RST**, release **PRG** — then click *INSTALL* again.
 6. Press **RST** on the board (or unplug and plug in again). The display shows **Config Portal** — continue with [Config Portal](#config-portal): connect your phone to the Wi-Fi **`WeatherNode`** and open http://192.168.4.1.
 

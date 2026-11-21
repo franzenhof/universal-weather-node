@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <esp_partition.h>
+#include <nvs_flash.h>
 
 bool cfgdataPartitionMissing()
 {
@@ -25,4 +26,19 @@ bool cfgdataPartitionMissing()
                        "patch the partition table at runtime (protected region) — a one-time "
                        "full reflash via USB/serial is required. See README.md.");
     return true;
+}
+
+bool cfgdataPrepare()
+{
+    esp_err_t e = nvs_flash_init_partition("cfgdata");
+    if (e != ESP_ERR_NVS_NO_FREE_PAGES && e != ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        if (e != ESP_OK) dbgSerial.printf("cfgdata: NVS init failed (%s).\n", esp_err_to_name(e));
+        return false;
+    }
+    dbgSerial.printf("cfgdata: not usable as settings storage (%s) - data of another firmware? Erasing it.\n",
+                     esp_err_to_name(e));
+    e = nvs_flash_erase_partition("cfgdata");
+    if (e == ESP_OK) e = nvs_flash_init_partition("cfgdata");
+    dbgSerial.printf("cfgdata: %s.\n", e == ESP_OK ? "erased and formatted - starting with default settings" : esp_err_to_name(e));
+    return e == ESP_OK;
 }

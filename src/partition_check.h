@@ -28,3 +28,11 @@
 // rewrites the partition table itself, and gives a natural opportunity to
 // re-check its configured parameters); see README.md.
 bool cfgdataPartitionMissing();
+
+// The "cfgdata" partition holds data of another firmware (e.g. Meshtastic
+// keeps its LittleFS at 0x670000 on 8 MB boards - exactly where cfgdata is)
+// after flashing only the factory image without erasing the chip: NVS can't
+// use it (ESP_ERR_NVS_NO_FREE_PAGES / NEW_VERSION_FOUND). Then this partition
+// alone is erased and formatted, so the node starts like a new one (portal)
+// instead of failing on every settings read. Returns true if it was erased.
+bool cfgdataPrepare();
