@@ -1,9 +1,18 @@
 #include "api_info.h"
+#include "out_status.h"
+#if __has_include(<esp_heap_caps.h>)
+#include <esp_heap_caps.h>
+#endif
+
+// alarms_run.cpp / custom_upload.cpp (weak defaults: host builds without them)
+__attribute__((weak)) void alarmChannelsConfigured(bool* ch) { for (int k = 0; k < 4; k++) ch[k] = false; }
+__attribute__((weak)) void customUploadsConfigured(bool* cu) { cu[0] = cu[1] = false; }
 #include "globals.h"
 #include "units.h"
 #include "board_io.h"
 #include "heltec_board.h"
 #include "sources.h"
+#include "rf_sensors.h"
 #include "history.h"
 #include "time_sync.h"
 #include "wx_upload.h"
@@ -56,6 +65,20 @@ void deviceHostname(char* out, size_t len)
     }
 }
 
+// 0 free, 1 minimum free since start, 2 largest free block (8-bit capable heap); weak: host tests
+__attribute__((weak)) size_t hostOrDeviceFreeHeap(int what)
+{
+#if __has_include(<esp_heap_caps.h>) && defined(ESP_PLATFORM)
+    switch (what) {
+        case 0:  return heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        case 1:  return heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+        default: return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    }
+#else
+    return what == 0 ? 150000 : what == 1 ? 120000 : 90000;
+#endif
+}
+
 void buildInfoJson(JsonDocument& doc)
 {
     doc.clear();
@@ -67,6 +90,15 @@ void buildInfoJson(JsonDocument& doc)
     deviceHostname(host, sizeof(host));
     dev["hostname"] = host;
     dev["uptimeSec"] = (unsigned long)(esp_timer_get_time() / 1000000LL);
+    // memory (bytes): watch heapMin / heapLargest over days for a leak or fragmentation
+    JsonObject sys = doc["system"].to<JsonObject>();
+    sys["uptimeSec"]   = (unsigned long)(esp_timer_get_time() / 1000000LL);
+    sys["heapFree"]    = (unsigned long)hostOrDeviceFreeHeap(0);
+    sys["heapMin"]     = (unsigned long)hostOrDeviceFreeHeap(1);
+    sys["heapLargest"] = (unsigned long)hostOrDeviceFreeHeap(2);
+    // Language setting of the web interface (a UI may follow it); "auto" = browser
+    static const char* const langs[] = { "auto", "en", "de", "fr", "es", "pt" };
+    dev["language"] = langs[gCfg.uiLang >= 0 && gCfg.uiLang <= 5 ? gCfg.uiLang : 0];
 
     JsonObject fw = doc["firmware"].to<JsonObject>();
     fw["version"] = FIRMWARE_VERSION;
@@ -122,6 +154,30 @@ void buildInfoJson(JsonDocument& doc)
         if (gCfg.wnetproId[0])                         wx.add("wetternetzwerk");
         if (gCfg.windyId[0])                           wx.add("windy");
         if (gCfg.osemBoxId[0] && gCfg.osemSensors[0])  wx.add("opensensemap");
+        if (gCfg.wowSiteId[0] && gCfg.wowPin[0])       wx.add("wow");
+        if (gCfg.cwopCall[0] && gCfg.latitude[0] && gCfg.longitude[0]) wx.add("cwop");
+    }
+    // Send status of every enabled output (out_status.h): times as age, short
+    // local reason / trimmed server reply, never URLs or keys.
+    {
+        static OutStatus os[OUT_COUNT];   // static: ~600 bytes, not on the web task's stack
+        outSnapshot(os);
+        bool on[OUT_COUNT] = { (bool)gCfg.loraEn, wifi && gCfg.mqttEn, wifi && gCfg.mqttEn, wifi && gCfg.loxEn,
+            wifi && gCfg.awekasUser[0], wifi && gCfg.wuStationId[0], wifi && gCfg.wcloudId[0], wifi && gCfg.wnetproId[0],
+            wifi && gCfg.windyId[0], wifi && gCfg.osemBoxId[0] && gCfg.osemSensors[0],
+            wifi && gCfg.wowSiteId[0] && gCfg.wowPin[0], wifi && gCfg.cwopCall[0] && gCfg.latitude[0] && gCfg.longitude[0],
+            false, false, false, false, false, false };
+        {   // alarm channels and custom uploads: configured = listed
+            bool ch[4] = {}, cu[2] = {};
+            alarmChannelsConfigured(ch);
+            customUploadsConfigured(cu);
+            for (int k = 0; k < 4; k++) on[OUT_NOTIFY_FIRST + k] = wifi && ch[k];
+            for (int k = 0; k < 2; k++) on[OUT_CUSTOM_FIRST + k] = wifi && cu[k];
+        }
+        JsonObject stat = out["status"].to<JsonObject>();
+        const uint32_t now = millis();
+        for (uint8_t i = 0; i < OUT_COUNT; i++)
+            if (on[i]) outStatusJson(stat[outStatusKey(i)].to<JsonObject>(), os[i], now);
     }
 
     // Value groups /api/data currently carries (same conditions as
@@ -130,7 +186,7 @@ void buildInfoJson(JsonDocument& doc)
     JsonObject a = doc["available"].to<JsonObject>();
     a["temp"]            = gSrc.tempValid;
     a["humidity"]        = gSrc.tempValid && gSrc.humValid;
-    a["pressure"]        = bme280Present;
+    a["pressure"]        = gSrc.pressValid;
     a["wind"]            = srcActive(SG_WIND);
     a["rain"]            = srcActive(SG_RAIN);
     a["uvIndex"]         = gSrc.uvRadio || (v2 && gSrc.uvBoard && gIo.uvIndexCalibrated);
@@ -145,6 +201,13 @@ void buildInfoJson(JsonDocument& doc)
     a["heater"]          = v2 && gCfg.heaterMode != 0;
     a["fan"]             = v2 && (gCfg.fanMode || gCfg.tachoEn);
     a["victron"]         = v2 && gCfg.veDirectEn;
+
+    // Wireless sensor states (counts only; the IDs are in /api/data rfSensors)
+    JsonObject ws = doc["wireless"].to<JsonObject>();
+    ws["onlyMine"]      = rfOnlyMineActive();
+    ws["mine"]          = (int)rfParseIds(gCfg.rfIds).size();
+    ws["hidden"]        = (int)rfParseIds(gCfg.rfIgnore).size();
+    ws["hiddenInRange"] = rfHiddenInRange(millis());
 
     JsonObject src = doc["sources"].to<JsonObject>();
     char d[24];

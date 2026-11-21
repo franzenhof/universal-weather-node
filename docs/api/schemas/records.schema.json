@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/franzenhof/universal-weather-node/docs/api/schemas/records.schema.json",
+  "title": "Universal Weather Node — records (/api/records)",
+  "description": "Extremes of the main values (after the value source and calibration) with their time: today, yesterday, this month, this year and all time, plus the largest daily rain. Days, months and years roll over at local midnight (setting Time zone); needs the clock (valid = false before the first NTP sync). Kept in flash (written at most hourly and before planned restarts), reset in the settings (parameter 64). Stability: within apiVersion 1 fields are only added.",
+  "type": "object",
+  "required": ["apiVersion", "valid", "tempUnit", "pressureUnit", "windUnit", "rainUnit", "rainRateUnit", "today", "yesterday", "month", "year", "allTime"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "type": "integer", "minimum": 1, "description": "API contract version (1).", "x-present": "always" },
+    "valid": { "type": "boolean", "description": "The clock is synced and records exist; false = the periods are empty (or from before a restart without clock).", "x-present": "always" },
+    "tempUnit": { "type": "string", "enum": ["C", "F"], "description": "Unit of the temperature records.", "x-present": "always" },
+    "pressureUnit": { "type": "string", "enum": ["hPa", "inHg"], "description": "Unit of the pressure (QNH) records.", "x-present": "always" },
+    "windUnit": { "type": "string", "enum": ["m/s", "km/h", "mph"], "description": "Unit of the gust records.", "x-present": "always" },
+    "rainUnit": { "type": "string", "enum": ["mm", "in"], "description": "Unit of rainDayMax.", "x-present": "always" },
+    "rainRateUnit": { "type": "string", "enum": ["mm/h", "in/h"], "description": "Unit of the rain-rate records.", "x-present": "always" },
+    "today": { "$ref": "#/$defs/period", "description": "Since local midnight." },
+    "yesterday": { "$ref": "#/$defs/period", "description": "The previous day the node saw (frozen at midnight)." },
+    "month": { "$ref": "#/$defs/period", "description": "Since the 1st of this month (local)." },
+    "year": { "$ref": "#/$defs/period", "description": "Since 1 January (local)." },
+    "allTime": { "$ref": "#/$defs/period", "description": "Since the node first recorded (or the last all-time reset)." }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object", "required": ["value", "time"], "additionalProperties": false,
+      "description": "One extreme value.",
+      "properties": {
+        "value": { "type": "number", "description": "The value in the unit of its group." },
+        "time": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "When it occurred (UTC, end of the measurement cycle)." }
+      }
+    },
+    "period": {
+      "type": "object", "additionalProperties": false, "x-present": "always; an entry only once a value was recorded in the period",
+      "description": "Extremes of one period; entries appear once values exist.",
+      "properties": {
+        "tempMin": { "$ref": "#/$defs/entry", "description": "Lowest temperature." },
+        "tempMax": { "$ref": "#/$defs/entry", "description": "Highest temperature." },
+        "humidityMin": { "$ref": "#/$defs/entry", "description": "Lowest relative humidity (%)." },
+        "humidityMax": { "$ref": "#/$defs/entry", "description": "Highest relative humidity (%)." },
+        "pressureMin": { "$ref": "#/$defs/entry", "description": "Lowest sea-level pressure (QNH)." },
+        "pressureMax": { "$ref": "#/$defs/entry", "description": "Highest sea-level pressure (QNH)." },
+        "gustMax": { "$ref": "#/$defs/entry", "description": "Highest gust (cycle gust of the selected wind source)." },
+        "rainRateMax": { "$ref": "#/$defs/entry", "description": "Highest rain rate (cycle value)." },
+        "rainDayMax": {
+          "type": "object", "required": ["value", "date"], "additionalProperties": false,
+          "description": "Largest rain of one day in this period (month, year, all time only).",
+          "properties": {
+            "value": { "type": "number", "minimum": 0, "description": "Rain of that day." },
+            "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "The local date of that day." }
+          }
+        }
+      }
+    }
+  }
+}

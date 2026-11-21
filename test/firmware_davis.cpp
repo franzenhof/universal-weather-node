@@ -167,6 +167,58 @@ void testRainCounter()
     assert(!rc.valid() && rc.update(7) == 0);
 }
 
+// Phantom-rain filter: synthetic counter sequences, one counter packet every 10 s
+void testRainFilter()
+{
+    uint32_t t = 0;
+    auto feed = [&t](DavisRainFilter& f, uint8_t c) { t += 10000; return f.update(c, t); };
+    DavisRainFilter f;   // defaults: 8 tips per packet, 50 per minute
+    // normal rain incl. the 7-bit wrap 127 -> 0
+    assert(feed(f, 120).event == DRE_FIRST);
+    assert(feed(f, 121).tips == 1 && feed(f, 124).tips == 3 && feed(f, 127).tips == 3);
+    DavisRainStep s = feed(f, 2);
+    assert(s.event == DRE_OK && s.tips == 3);              // 127 -> 0 -> 2
+    assert(f.totalTips() == 10);
+    // single corrupted packet (CRC ok, wrong counter): held, then dropped
+    s = feed(f, 90);
+    assert(s.event == DRE_HELD && s.tips == 0 && s.jump == 88);
+    s = feed(f, 3);
+    assert(s.event == DRE_DROPPED && s.tips == 1 && s.jump == 88 && f.totalTips() == 11);
+    // a decrement that is not a wrap (3 -> 1): held, the next packet goes on from 3
+    assert(feed(f, 1).event == DRE_HELD);
+    s = feed(f, 3);
+    assert(s.event == DRE_DROPPED && s.tips == 0 && f.totalTips() == 11);
+    // heavy rain bursts are NOT filtered: 8 tips per packet directly, a 15-tip burst after confirmation
+    for (int i = 1; i <= 6; i++) assert(feed(f, (uint8_t)(3 + 8 * i)).tips == 8);   // 48 tips in one minute (~576 mm/h)
+    assert(f.totalTips() == 59);
+    s = feed(f, 66);                                       // 51 -> 66: 15 tips in one packet
+    assert(s.event == DRE_HELD);
+    s = feed(f, 70);                                       // continues: 19 tips in 20 s, within 50 per minute
+    assert(s.event == DRE_CONFIRMED && s.tips == 19 && f.totalTips() == 78);
+    // counter reset (ISS power cycle): jump confirmed by the next packet but impossible as rain: re-based
+    s = feed(f, 5);                                        // 70 -> 5 = +63
+    assert(s.event == DRE_HELD);
+    s = feed(f, 6);
+    assert(s.event == DRE_REBASED && s.tips == 1 && s.jump == 63 && f.totalTips() == 79);
+    assert(feed(f, 7).tips == 1);
+    // two different corrupt values in a row: the second is held instead
+    assert(feed(f, 60).event == DRE_HELD && feed(f, 100).event == DRE_HELD);
+    assert(feed(f, 8).event == DRE_DROPPED && f.totalTips() == 81);
+    // long reception gap during rain: a big step is confirmed and counted (minutes since the last count)
+    t += 5 * 60000;
+    assert(feed(f, 80).event == DRE_HELD);                 // 72 tips after > 5 min
+    s = feed(f, 81);
+    assert(s.event == DRE_CONFIRMED && s.tips == 73);
+    // disabled: the old behaviour (steps > 64 = reset, no confirmation)
+    DavisRainFilter o;
+    o.configure(false, 8, 50);
+    feed(o, 10);
+    assert(feed(o, 40).tips == 30);                        // 30 tips at once, unfiltered
+    assert(feed(o, 0).event == DRE_REBASED && feed(o, 1).tips == 1);
+    f.reset();
+    assert(!f.valid() && feed(f, 5).event == DRE_FIRST);
+}
+
 // ---- hop tracker against a simulated transmitter ----
 
 struct Tx {
@@ -406,6 +458,7 @@ int main()
     testSamples();
     testErrorsAndAir();
     testRainCounter();
+    testRainFilter();
     testAcquireAndTrack();
     testDriftPll();
     testOtherIdAndWindow();

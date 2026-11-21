@@ -132,10 +132,12 @@ assert 5/10000 < .002
 base = Path("pcb/v2.0/production")
 bom = list(csv.DictReader((base / "universal-weather-node-v2.0-bom-jlcpcb.csv").open()))
 by_ref = {r.strip(): row for row in bom for r in row["Designator"].split(",")}
-assert len(bom) == 47 and len(by_ref) == 135
+# V3/V4 double socket: + LM66100 line (U8/U9), R65 and C39 in existing lines
+assert len(bom) == 48 and len(by_ref) == 139
 tht = list(csv.DictReader((base / "universal-weather-node-v2.0-tht-lcsc.csv").open()))
 tht_by_ref = {r.strip(): row for row in tht for r in row["Designator"].split(",")}
-assert len(tht) == 9 and len(tht_by_ref) == 23 and not set(tht_by_ref) & set(by_ref)
+# V4 sockets J19/J20 join the 1x18 socket line, J21 (1x2 P4 socket) is a new line
+assert len(tht) == 10 and len(tht_by_ref) == 26 and not set(tht_by_ref) & set(by_ref)
 assert not removed.intersection(tht_by_ref)
 assert not removed.intersection(by_ref)
 assert by_ref["Q4"]["LCSC Part #"] == "C154901"

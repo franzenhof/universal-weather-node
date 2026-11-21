@@ -110,7 +110,7 @@ int main()
     uint32_t m = haRfEntityMask(1);
     assert(has(m, "temp") && !has(m, "humidity") && !has(m, "wind_speed") && has(m, "battery") && has(m, "rssi") && has(m, "age"));
     m = haRfEntityMask(0);
-    assert(has(m, "wind_dir") && has(m, "rain_total") && has(m, "supercap") && !has(m, "soil_moisture") && !has(m, "lightning_count"));
+    assert(has(m, "wind_dir") && has(m, "rain_total") && has(m, "rain_today") && has(m, "supercap") && !has(m, "soil_moisture") && !has(m, "lightning_count"));
     assert(haRfEntityMask(5) == 0 && haRfEntityMask(-1) == 0 && haRfEntityMask(RF_MAX_SENSORS) == 0);
     assert(!strcmp(haRfEntityComponent(13), "binary_sensor") && haRfEntityKey(HA_RF_ENTITY_COUNT) == nullptr);
 
@@ -132,7 +132,7 @@ int main()
     assert(haRfPoll(OUT, 4) == 4);                              // budget: 4 configs per call
     assert(hostHaRfIds == "9000342B");                          // stored before its first config
     pollAll();
-    assert(configsOf("9000342B") == 12 && configsOf("3400A1B2") == 4 && configsOf("30000301") == 0);
+    assert(configsOf("9000342B") == 13 && configsOf("3400A1B2") == 4 && configsOf("30000301") == 0);
     assert(hostHaRfIds == "9000342B,3400A1B2");
     {
         JsonDocument c = parse(retained.at(cfgTopic("sensor", "9000342B", "temp")));
@@ -158,6 +158,12 @@ int main()
         assert(a["unit_of_measurement"] == "s" && a["entity_category"] == "diagnostic");
         JsonDocument t = parse(retained.at(cfgTopic("sensor", "3400A1B2", "temp")));
         assert(t["device"]["name"] == "WN34 3400A1B2");
+        // a user-defined name (rf_names.h): "<name> (<model>)"
+        snprintf(gCfg.rfNames, sizeof(gCfg.rfNames), "3400A1B2:Pool");
+        char dn[64];
+        haRfDeviceNameForTest(dn, sizeof(dn), probe);
+        assert(std::string(dn) == "Pool (WN34)");
+        gCfg.rfNames[0] = '\0';
     }
     // nothing new: nothing sent; a newly reported value adds just its entity
     sent.clear();
@@ -173,7 +179,7 @@ int main()
     // a reconnect announces everything again (retained anyway; HA may have restarted)
     sent.clear();
     haRfConnected();
-    assert(pollAll() == 12 + 6 && sent.size() == 18);
+    assert(pollAll() == 13 + 6 && sent.size() == 19);
     int saves = hostHaRfSaves;
 
     // ---- ID removed from the list: its retained configs are cleared ----
@@ -181,7 +187,7 @@ int main()
     sent.clear();
     assert(haRfPoll(OUT, 4) == HA_RF_ENTITY_COUNT);             // every possible entity, not limited by the budget
     for (const Msg& x : sent) assert(x.retain && x.payload.empty() && x.topic.find("rf_3400A1B2_") != std::string::npos);
-    assert(configsOf("3400A1B2") == 0 && configsOf("9000342B") == 12);
+    assert(configsOf("3400A1B2") == 0 && configsOf("9000342B") == 13);
     assert(hostHaRfIds == "9000342B" && hostHaRfSaves == saves + 1);
     assert(haRfPoll(OUT, 100) == 0);                            // once
 

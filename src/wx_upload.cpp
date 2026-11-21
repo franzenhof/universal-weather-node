@@ -1,3 +1,4 @@
+#include "ota_upload.h"
 #include "wx_upload.h"
 #include "globals.h"
 #include "time_sync.h"
@@ -10,9 +11,20 @@
 #include "board_io.h"
 #include "rain_stats.h"
 #include "system_restart.h"
+#include "awekas.h"
+#include "records.h"
+#include "out_status.h"
+#include "rf_sensors.h"
+#include "alarms.h"
+#include "notify.h"
+#include "custom_upload.h"
+#include "ph_live.h"
+#include "wx_formats.h"
+#include "tls_gate.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_timer.h>
+#include <esp_heap_caps.h>
 
 #include <Arduino.h>
 #include <HTTPClient.h>
@@ -22,6 +34,8 @@
 #include <esp_attr.h>
 #include <stddef.h>
 #include <functional>
+#include <memory>
+#include <new>
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -64,6 +78,12 @@ struct Reading {
     float rain1hMm = 0;
     bool  hasUv = false, hasLux = false;
     float uvIndex = 0, lux = 0;
+    bool  hasSolar = false;       // measured solar radiation (Davis solar sensor as the light source)
+    float solarWm2 = 0;
+    bool  hasSunshine = false;    // sunshine duration today (needs a light source)
+    float sunshineHours = 0;
+    bool  hasTendency = false;    // 3-h pressure tendency (QNH now minus 3 h ago)
+    float pressDelta3hHpa = 0;
     float windMs() const { return windKmh / MS_TO_KMH; }
 };
 
@@ -73,7 +93,7 @@ struct Target {
     unsigned long  windowStartMs;   // 0 = window not started yet (static storage: zero-initialized)
 };
 
-enum TargetIdx { T_AWEKAS = 0, T_WU = 1, T_WCLOUD = 2, T_WNETPRO = 3, T_WINDY = 4, T_OSEM = 5 };
+enum TargetIdx { T_AWEKAS = 0, T_WU = 1, T_WCLOUD = 2, T_WNETPRO = 3, T_WINDY = 4, T_OSEM = 5, T_WOW = 6, T_CWOP = 7 };
 
 // Wind for every network: WMO-style 10-min values from the wind ring
 // (main.cpp) - 10-min mean, highest 3-s gust and vector-mean direction of the
@@ -88,6 +108,8 @@ Target targets[WX_TARGET_COUNT] = {
     { { "Wetternetzwerk.pro" } },
     { { "Windy" } },
     { { "openSenseMap" } },
+    { { "Met Office WOW" } },
+    { { "CWOP" } },
 };
 
 // Guards targets[] (aggregators + status), rtcRain and the upload-related
@@ -288,6 +310,8 @@ void targetConfig(int idx, bool& enabled, int& intervalSec)
         case T_WCLOUD:  enabled = gCfg.wcloudId[0];    intervalSec = gCfg.wcloudIntervalSec;  break;
         case T_WNETPRO: enabled = gCfg.wnetproId[0];   intervalSec = gCfg.wnetproIntervalSec; break;
         case T_WINDY:   enabled = gCfg.windyId[0];     intervalSec = gCfg.windyIntervalSec;   break;
+        case T_WOW:     enabled = gCfg.wowSiteId[0] && gCfg.wowPin[0]; intervalSec = gCfg.wowIntervalSec; break;
+        case T_CWOP:    enabled = gCfg.cwopCall[0] && gCfg.latitude[0] && gCfg.longitude[0]; intervalSec = gCfg.cwopIntervalSec; break;
         default:        enabled = gCfg.osemBoxId[0] && gCfg.osemSensors[0]; intervalSec = gCfg.osemIntervalSec; break;
     }
     if (!gCfg.wifiEn) enabled = false;
@@ -374,34 +398,26 @@ String awekasUrl(const Reading& r, const Creds& c)
     md5.begin();
     md5.add(c.key);
     md5.calculate();
+    String pass = md5.toString(), date = formatTime("%d.%m.%Y", false), time = formatTime("%H:%M", false);
 
-    String v;
-    v.reserve(200);
-    // Appends one field plus its separator; an absent value stays empty.
-    auto field = [&v](bool present, const String& value) {
-        if (present) v += value;
-        v += ';';
-    };
-    field(true,      c.id);
-    field(true,      md5.toString());
-    field(true,      formatTime("%d.%m.%Y", false));
-    field(true,      formatTime("%H:%M", false));
-    field(r.hasBme,  num(r.tempC, 1));
-    field(r.hasHum,  num(r.humidity, 0));
-    field(r.hasPress, num(r.pressureHpa, 1));
-    field(r.hasRain, num(r.dailyRainMm, 2));
-    field(r.hasWind, num(r.windKmh, 1));
-    field(r.hasWind, String(r.dirDeg));
-    v += ";;;";                                // condition, warning text, snow depth
-    field(true,      "en");                    // language
-    v += ';';                                  // pressure tendency
-    field(r.hasWind, num(r.gustKmh, 1));
-    v += ";;;;;";                              // solar, UV, brightness, sunshine, soil temp
-    field(r.hasRain, num(r.rainRateMmH, 1));
-    field(true,      "weather-node-" FIRMWARE_VERSION);
-    field(true,      c.lon);
-    v += c.lat;
-    return "http://data.awekas.at/eingabe_pruefung.php?val=" + urlEncode(v.c_str());
+    AwekasData d;
+    d.user = c.id;  d.md5Pass = pass.c_str();  d.date = date.c_str();  d.time = time.c_str();
+    d.hasTemp = r.hasBme;      d.tempC = r.tempC;
+    d.hasHum = r.hasHum;       d.humidity = r.humidity;
+    d.hasPress = r.hasPress;   d.pressureHpa = r.pressureHpa;
+    d.hasRain = r.hasRain;     d.dailyRainMm = r.dailyRainMm;  d.rainRateMmH = r.rainRateMmH;
+    d.hasWind = r.hasWind;     d.windKmh = r.windKmh;  d.gustKmh = r.gustKmh;  d.dirDeg = r.dirDeg;
+    d.hasTendency = r.hasTendency;  d.tendency = awekasTendency(r.pressDelta3hHpa);
+    d.hasSolar = r.hasSolar;   d.solarWm2 = r.solarWm2;
+    d.hasUv = r.hasUv;         d.uvIndex = r.uvIndex;
+    // brightness only from a lux sensor; a Davis "lux" is converted from W/m2 - that one goes to solar instead
+    d.hasLux = r.hasLux && !r.hasSolar;  d.lux = r.lux;
+    d.hasSunshine = r.hasSunshine;  d.sunshineHours = r.sunshineHours;
+    d.software = "weather-node-" FIRMWARE_VERSION;
+    d.lon = c.lon;  d.lat = c.lat;
+    char v[320];
+    awekasVal(d, v, sizeof(v));
+    return "http://data.awekas.at/eingabe_pruefung.php?val=" + urlEncode(v);
 }
 
 // Weather Underground's PWS Upload Protocol — also spoken by
@@ -534,9 +550,11 @@ int httpPostJson(const String& url, const String& auth, const String& json, Stri
     if (!http.begin(tls, url)) return HTTPC_ERROR_CONNECTION_REFUSED;
     http.addHeader("Content-Type", "application/json");
     if (auth.length()) http.addHeader("Authorization", auth);
+    tlsBegin(); tlsLogHeap("POST", "before");
     int code = http.POST(json);
     if (code > 0) body = http.getString();
     http.end();
+    tlsLogHeap("POST", "after"); tlsEnd();
     return code;
 }
 
@@ -565,10 +583,13 @@ int httpGet(const String& url, String& body, std::function<void(Stream&)> onBody
     }
     if (!begun) return HTTPC_ERROR_CONNECTION_REFUSED;
 
+    const bool isTls = url.startsWith("https://");
+    if (isTls) { tlsBegin(); tlsLogHeap("GET", "before"); }
     int code = http.GET();
     if (code == HTTP_CODE_OK && onBody) onBody(http.getStream());
     else if (code > 0)                  body = http.getString();
     http.end();
+    if (isTls) { tlsLogHeap("GET", "after"); tlsEnd(); }
     return code;
 }
 
@@ -580,6 +601,46 @@ void setReply(WxTargetStatus& st, const char* text)
         st.lastReply[n++] = (c >= 0x20 && c < 0x7F) ? c : ' ';
     }
     st.lastReply[n] = '\0';
+}
+
+WxObs obsFrom(const Reading& r)
+{
+    WxObs o;
+    o.hasTemp = r.hasBme; o.tempC = r.tempC;
+    o.hasHum = r.hasHum;  o.humidity = r.humidity;
+    o.hasPress = r.hasPress; o.qnhHpa = r.pressureHpa;
+    o.hasWind = r.hasWind; o.windMs = r.windMs(); o.gustMs = r.gustKmh / MS_TO_KMH; o.dirDeg = r.dirDeg;
+    o.hasRain = r.hasRain; o.rain1hMm = r.rain1hMm; o.rainDayMm = r.dailyRainMm; o.rain24hMm = historyRainSum(24 * 3600);
+    return o;
+}
+
+// CWOP: one APRS packet over a short APRS-IS TCP session (login, packet, close).
+int cwopSend(const Reading& r, const Creds& c, String& reply)
+{
+    int64_t e;
+    if (!epochNow(e)) { reply = "no time"; return -1; }
+    time_t t = (time_t)e;
+    struct tm u;
+    gmtime_r(&t, &u);
+    char login[96], pkt[200];
+    cwopLogin(c.id, gCfg.cwopPasscode, "UWN", FIRMWARE_VERSION, login, sizeof(login));
+    if (!cwopPacket(obsFrom(r), c.id, atof(c.lat), atof(c.lon), u.tm_mday, u.tm_hour, u.tm_min, "UWN", pkt, sizeof(pkt))) {
+        reply = "packet too long";
+        return -1;
+    }
+    WiFiClient tcp;
+    tcp.setTimeout(5);
+    if (!tcp.connect("cwop.aprs.net", 14580, HTTP_CONNECT_TIMEOUT_MS)) { reply = "connect failed"; return -1; }
+    String banner = tcp.readStringUntil('\n');   // "# aprsc ..."
+    tcp.print(login); tcp.print("\r\n");
+    String ack = tcp.readStringUntil('\n');      // "# logresp CW1234 unverified, server ..."
+    tcp.print(pkt); tcp.print("\r\n");
+    tcp.flush();
+    delay(200);
+    tcp.stop();
+    ack.trim();
+    reply = ack.length() ? ack : banner;
+    return ack.indexOf("logresp") >= 0 ? 200 : -1;
 }
 
 void sendOne(int idx, const Reading& r, const Creds& c)
@@ -594,6 +655,15 @@ void sendOne(int idx, const Reading& r, const Creds& c)
         case T_WCLOUD: url = wcloudUrl(r, c); expect = "200"; break;
         case T_WINDY:  url = windyUrl(r, c);  expect = ""; break;
         case T_OSEM:   break;
+        case T_CWOP:   break;
+        case T_WOW: {
+            static char u[512];
+            wowUrl(obsFrom(r), c.id, c.key, formatTime("%Y-%m-%d %H:%M:%S", true).c_str(),
+                   "universal-weather-node-" FIRMWARE_VERSION, u, sizeof(u));
+            url = u;
+            expect = "";
+            break;
+        }
         default:
             url = wuStyleUrl("http://api.wetternetzwerk.pro/weatherstation/updateweatherstation.php", r, c);
             expect = "success";
@@ -603,7 +673,10 @@ void sendOne(int idx, const Reading& r, const Creds& c)
     String body;
     int code;
     bool ok;
-    if (idx == T_OSEM) {
+    if (idx == T_CWOP) {
+        code = cwopSend(r, c, body);
+        ok = code == 200;
+    } else if (idx == T_OSEM) {
         String json = osemBody(r, c);
         code = httpPostJson(String("https://api.opensensemap.org/boxes/") + urlEncode(c.id) + "/data", c.key, json, body);
         body.trim();
@@ -629,6 +702,7 @@ void sendOne(int idx, const Reading& r, const Creds& c)
     if (ok) { st.okCount++; st.lastOkMs = st.lastAttemptMs; }
     else    { st.failCount++; }
     xSemaphoreGive(wxMutex);
+    outReport(OUT_WX_FIRST + idx, ok, code, reply.c_str());
 }
 
 void copyCreds(int idx, Creds& c)
@@ -641,6 +715,8 @@ void copyCreds(int idx, Creds& c)
         case T_WCLOUD: id = gCfg.wcloudId;    key = gCfg.wcloudKey;    break;
         case T_WNETPRO: id = gCfg.wnetproId;  key = gCfg.wnetproKey;   break;
         case T_WINDY:  id = gCfg.windyId;     key = gCfg.windyPass;    break;
+        case T_WOW:    id = gCfg.wowSiteId;   key = gCfg.wowPin;       break;
+        case T_CWOP:   id = gCfg.cwopCall;    key = "";                break;
         default:       id = gCfg.osemBoxId;   key = gCfg.osemToken;    break;
     }
     strlcpy(c.map, idx == T_OSEM ? gCfg.osemSensors : "", sizeof(c.map));
@@ -662,6 +738,10 @@ void updateCheckPoll()
     unsigned long now = millis();
     if (updateNextMs == 0) { updateNextMs = now + 120000UL; return; }   // 2 min after start
     if ((long)(now - updateNextMs) < 0) return;
+    if (!strncmp(gCfg.updateUrl, "https://", 8) && tlsMayStart("update check") != TLS_GO) {   // tls_gate.h
+        updateNextMs = now + 30000UL;
+        return;
+    }
 
     char url[sizeof(gCfg.updateUrl)];
     xSemaphoreTake(wxMutex, portMAX_DELAY);
@@ -710,12 +790,101 @@ void updateCheckPoll()
     xSemaphoreGive(wxMutex);
 }
 
+// One notification / custom-upload request (notify.h), plain or TLS. The
+// URL may carry a token: never logged.
+int notifyHttp(const NotifyReq& req, char* reply, size_t len)
+{
+    WiFiClient       plain;   // before `http`, see httpPostJson()
+    WiFiClientSecure tls;
+    HTTPClient http;
+    http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+    http.setTimeout(HTTP_TIMEOUT_MS);
+    http.setReuse(false);
+    bool begun;
+    if (!strncmp(req.url, "https://", 8)) {
+        tls.setInsecure();
+        tls.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
+        begun = http.begin(tls, req.url);
+    } else {
+        begun = http.begin(plain, req.url);
+    }
+    if (!begun) { strlcpy(reply, "invalid URL", len); return HTTPC_ERROR_CONNECTION_REFUSED; }
+    if (req.contentType[0]) http.addHeader("Content-Type", req.contentType);
+    if (req.auth[0]) http.addHeader("Authorization", req.auth);
+    const bool isTls = !strncmp(req.url, "https://", 8);
+    if (isTls) { tlsBegin(); tlsLogHeap("request", "before"); }
+    const int code = req.post ? http.POST((uint8_t*)req.body, strlen(req.body)) : http.GET();
+    String b = code > 0 ? http.getString() : HTTPClient::errorToString(code);
+    http.end();
+    if (isTls) { tlsLogHeap("request", "after"); tlsEnd(); }
+    b.trim();
+    size_t n = 0;
+    for (size_t i = 0; i < b.length() && n + 1 < len; i++) reply[n++] = (b[i] >= 0x20 && b[i] < 0x7F) ? b[i] : ' ';
+    reply[n] = '\0';
+    return code;
+}
+
+// Custom uploads (custom_upload.h): due ones, one per call.
+unsigned long customLastMs[CUSTOM_UPLOADS] = {};
+void customUploadService()
+{
+    if (!timeIsValid()) return;
+    static PhLive live;
+    for (int i = 0; i < CUSTOM_UPLOADS; i++) {
+        customUploadLock();
+        const bool on = customUploads()[i].url[0] != '\0';
+        customUploadUnlock();
+        if (!on) { customLastMs[i] = 0; continue; }
+        std::unique_ptr<CustomUpload> uBuf(new (std::nothrow) CustomUpload());   // ~0.5 KB while sending
+        if (!uBuf) return;
+        CustomUpload& u = *uBuf;
+        customUploadLock();
+        u = customUploads()[i];
+        customUploadUnlock();
+        if (!u.url[0]) { customLastMs[i] = 0; continue; }
+        const unsigned long now = millis();
+        if (!customLastMs[i]) { customLastMs[i] = now; continue; }   // first send one interval after enabling / start
+        if (now - customLastMs[i] < (unsigned long)u.intervalSec * 1000UL) continue;
+        if (!strncmp(u.url, "https://", 8) && tlsMayStart("custom upload") != TLS_GO) {
+            customLastMs[i] = now - (unsigned long)u.intervalSec * 1000UL + 10000UL;   // retry in 10 s (tls_gate.h)
+            continue;
+        }
+        customLastMs[i] = now;
+        xSemaphoreTake(wxMutex, portMAX_DELAY);
+        const WindStats w = wind10;
+        xSemaphoreGive(wxMutex);
+        phLiveInit(live, &w);
+        std::unique_ptr<NotifyReq> reqBuf(new (std::nothrow) NotifyReq());   // ~1 KB while sending
+        if (!reqBuf) return;
+        NotifyReq& req = *reqBuf;
+        phRender(u.url, req.url, sizeof(req.url), PE_URL, phLiveLookup, &live);
+        if (u.post) {
+            req.post = true;
+            const bool json = u.body[0] == '{' || u.body[0] == '[';
+            strcpy(req.contentType, json ? "application/json" : "text/plain");
+            phRender(u.body, req.body, sizeof(req.body), json ? PE_JSON : PE_NONE, phLiveLookup, &live);
+        }
+        char reply[48];
+        const int code = notifyHttp(req, reply, sizeof(reply));
+        const bool ok = code >= 200 && code < 300;
+        dbgSerial.printf("Custom upload %d: HTTP %d -> %s\n", i + 1, code, ok ? "OK" : "FAILED");
+        outReport(OUT_CUSTOM_FIRST + i, ok, code, reply);
+        return;   // one request per loop pass
+    }
+}
+
 void wxUploadTask(void*)
 {
     for (;;) {
         vTaskDelay(1000 / portTICK_PERIOD_MS);
         if (!gCfg.wifiEn || !wifiIsConnected()) continue;
+        // Firmware upload in progress (ota_upload.h): no update check,
+        // notifications, custom uploads or weather networks meanwhile - the
+        // windows keep aggregating and are sent afterwards.
+        if (otaUploadActive()) continue;
         updateCheckPoll();
+        alarmsNotifyService(notifyHttp);   // one request at a time, never in parallel with the uploads
+        customUploadService();
 
         for (int i = 0; i < (int)WX_TARGET_COUNT; i++) {
             Target& t = targets[i];
@@ -762,6 +931,13 @@ void wxUploadTask(void*)
                 xSemaphoreGive(wxMutex);
                 continue;
             }
+            // HTTPS networks (WU, Windy, openSenseMap): only with enough memory and no heavy
+            // web page in progress (tls_gate.h) - the window keeps aggregating meanwhile
+            if ((i == T_WU || i == T_WINDY || i == T_OSEM) && tlsMayStart(t.st.name) != TLS_GO) {
+                setReply(t.st, "waiting for free memory / web page");
+                xSemaphoreGive(wxMutex);
+                continue;
+            }
             rollDailyRain();
             Reading r = readingFrom(t.agg, rtcRain.mm, srcActive(SG_RAIN));
             t.agg = Agg{};
@@ -775,6 +951,20 @@ void wxUploadTask(void*)
             if (gSrc.uvRadio) { r.hasUv = true; r.uvIndex = gSrc.uvIndexRadio; }
             else if (gSrc.uvBoard && gIo.uvIndexCalibrated && isfinite(gIo.uvIndex)) { r.hasUv = true; r.uvIndex = gIo.uvIndex; }
             if (gSrc.lightValid) { r.hasLux = true; r.lux = gSrc.lightLux; }
+            {
+                int li = srcResolve(SG_LIGHT);   // Davis solar radiation sensor: the measured W/m2
+                if (li >= 0 && gRfSensors[li].hasSolar) { r.hasSolar = true; r.solarWm2 = gRfSensors[li].solarWm2; }
+            }
+            if (gSrc.lightValid) {               // sunshine is only counted with a light source
+                WxDailyStats ds;
+                wxDailyStats(ds);
+                if (ds.valid) { r.hasSunshine = true; r.sunshineHours = ds.sunTodaySec / 3600.0f; }
+            }
+            float p3h;
+            if (gSrc.pressValid && historyPressureAgo(3 * 3600, p3h)) {
+                r.hasTendency = true;
+                r.pressDelta3hHpa = gSrc.pressSeaHpa - p3h;
+            }
 
             sendOne(i, r, c);
         }
@@ -851,14 +1041,14 @@ void wxUploadPushCycle(const WindStats& w10)
             a.rainRateSum += rainRateMmH;
             a.rainCount++;
         }
-        // temperature/humidity from the selected source; pressure (QNH, like the
-        // bridge) only from the BME280
+        // temperature/humidity and pressure (QNH, like the bridge) from the
+        // selected sources
         if (gSrc.tempValid) {
             a.tempSum += gSrc.tempC;
             a.bmeCount++;
             if (gSrc.humValid) { a.humSum += gSrc.humidity; a.humCount++; }
         }
-        if (bme280Present) { a.pressSum += bme280PressSea; a.pressCount++; }
+        if (gSrc.pressValid) { a.pressSum += gSrc.pressSeaHpa; a.pressCount++; }
     }
 
     const bool clock = rollDailyRain();
@@ -909,6 +1099,7 @@ void systemRestart(const char* reason)
 {
     dbgSerial.printf("Restart: %s\n", reason ? reason : "");
     rainStatsFlush();
+    recordsFlush();
     delay(100);   // let the log line out
     ESP.restart();
 }

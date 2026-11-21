@@ -10,6 +10,7 @@ mkdir -p "$WORK"
 mkdir -p $T/production
 cp $G/proj/$N.kicad_pcb $G/proj/$N.kicad_sch $T/
 [ -f $G/proj/$N.kicad_pro ] && cp $G/proj/$N.kicad_pro $T/
+[ -f $G/proj/$N.kicad_dru ] && cp $G/proj/$N.kicad_dru $T/
 cd $T
 rm -rf production/gerber; mkdir -p production/gerber
 $K pcb export gerbers --layers F.Cu,B.Cu,F.Paste,B.Paste,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts -o production/gerber/ $N.kicad_pcb >/dev/null 2>&1

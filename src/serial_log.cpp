@@ -2,13 +2,27 @@
 #include <Arduino.h>
 
 namespace {
-constexpr size_t LOG_BUF_SIZE = 8192;
+constexpr size_t LOG_BUF_SIZE = 4096;   // the last ~50-80 lines (RAM: was 8 KB)
 char   logBuf[LOG_BUF_SIZE];
 size_t logHead = 0;     // next write position
 bool   logFull = false; // true once the buffer has wrapped at least once
 }
 
 SerialLog dbgSerial;
+
+#if ARDUINO_USB_MODE && !ARDUINO_USB_CDC_ON_BOOT
+#include <HWCDC.h>
+static Print* logOut = &Serial;   // UART0 (CP2102 on the V3) unless serialLogUseUsb()
+void serialLogUseUsb()
+{
+    USBSerial.setTxTimeoutMs(0);   // no USB host: drop, never block the loop
+    USBSerial.begin(115200);
+    logOut = &USBSerial;
+}
+#else
+static Print* logOut = &Serial;
+void serialLogUseUsb() {}
+#endif
 
 size_t SerialLog::write(uint8_t c)
 {
@@ -17,7 +31,7 @@ size_t SerialLog::write(uint8_t c)
     logHead = (logHead + 1) % LOG_BUF_SIZE;
     if (logHead == 0) logFull = true;
     xSemaphoreGive(mutex_);
-    return Serial.write(c);
+    return logOut->write(c);
 }
 
 size_t SerialLog::write(const uint8_t* buffer, size_t size)
@@ -29,7 +43,7 @@ size_t SerialLog::write(const uint8_t* buffer, size_t size)
         if (logHead == 0) logFull = true;
     }
     xSemaphoreGive(mutex_);
-    return Serial.write(buffer, size);
+    return logOut->write(buffer, size);
 }
 
 size_t SerialLog::snapshot(char* out, size_t outSize) const

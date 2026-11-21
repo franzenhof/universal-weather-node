@@ -10,6 +10,7 @@
 //     a failed datagram (lwIP/Wi-Fi buffers full) is retried once after 2 ms,
 //     at most 4 retries per set, and the set is cut off after 50 ms.
 #include "loxone.h"
+#include "out_status.h"
 #include "globals.h"
 #include "json_payload.h"
 #include "serial_log.h"
@@ -51,6 +52,7 @@ void dnsFound(const char*, const ip_addr_t* ip, void* arg)
 
 void setError(const char* e)
 {
+    outReport(OUT_LOXONE, false, 0, e);
     st.lastError   = e;
     st.lastErrorMs = millis();
 }
@@ -187,6 +189,7 @@ void loxoneSendTelemetry(const PathValues* pv)
     st.lastValues = c.ok;
     st.lastFailed = c.failed;
     st.sets++;
+    if (!c.failed) outReport(OUT_LOXONE, true);
     if (c.failed) {
         st.errors += c.failed;
         setError(c.cut ? "send cut off (too slow), datagrams dropped" : "datagrams not sent (network buffers full)");

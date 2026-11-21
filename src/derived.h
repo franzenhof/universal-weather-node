@@ -30,6 +30,11 @@ float feelsLikeC(float tempC, float humidityPct, bool humValid, float windMs, bo
 // dew point spread). Negative spreads (rounding) give 0.
 float cloudBaseM(float tempC, float dewPointC);
 
+// Station pressure reduced to sea level (QNH) for the configured altitude -
+// the BMP180/BME280 formula the board's BME280 path uses (Adafruit
+// seaLevelForAltitude()): p / (1 - h / 44330)^5.255.
+float seaLevelPressureHpa(float stationHpa, int altitudeM);
+
 // 16-point compass text ("N", "NNE", ... "NNW").
 const char* windDirText(int deg);
 

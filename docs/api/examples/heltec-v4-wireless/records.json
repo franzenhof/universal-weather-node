@@ -1,0 +1,14 @@
+{
+  "apiVersion": 1,
+  "valid": false,
+  "tempUnit": "C",
+  "pressureUnit": "hPa",
+  "windUnit": "km/h",
+  "rainUnit": "mm",
+  "rainRateUnit": "mm/h",
+  "today": {},
+  "yesterday": {},
+  "month": {},
+  "year": {},
+  "allTime": {}
+}

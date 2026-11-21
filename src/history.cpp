@@ -29,22 +29,23 @@ uint32_t uptimeSec()
 // single on/off group, so each of the 3 slots uses its own sentinel value
 // (DS18B20_INVALID_X10) instead of a validMask bit; same idea as
 // DEVICE_DISCONNECTED_C, which is exactly where that sentinel is checked.
-struct HistorySample {
+struct HistorySample {   // ordered by size: 32 bytes without padding (was 36)
     uint32_t bucketEndSec;      // end of the bucket's time window, in uptimeSec()
-    uint8_t  validMask;         // 0 = a gap (no cycle, or no value at all, in that window)
     int16_t  windSpeedX100;     // average over the bucket
     int16_t  windGustX100;      // max over the bucket
     uint16_t windDirDeg;        // last valid reading in the bucket (not averaged — bearings wrap)
     int16_t  rainRateX100;      // average over the bucket
     uint16_t rainAmountX100;    // *sum* over the bucket (mm accumulated, not a rate)
     int16_t  tempCx10;          // average over the bucket
-    uint8_t  humidityX2;        // average over the bucket
     uint16_t pressureQnhX10;    // average over the bucket
     uint16_t batteryVoltX100;   // average over the bucket
     uint16_t uvVoltsX1000;      // average over the bucket
     uint16_t uvIndexX100;       // average over the bucket; 0xFFFF if uncalibrated
     int16_t  ds18b20X10[3];     // average over the bucket, per probe slot
+    uint8_t  validMask;         // 0 = a gap (no cycle, or no value at all, in that window)
+    uint8_t  humidityX2;        // average over the bucket
 };
+static_assert(sizeof(HistorySample) == 32, "no padding in the history rings");
 
 constexpr uint8_t VALID_WIND   = 1 << 0;
 constexpr uint8_t VALID_RAIN   = 1 << 1;
@@ -144,7 +145,7 @@ void mergeIntoBucket(OpenBucket& b)
         b.bmeCount++;
     }
     if (gSrc.tempValid && gSrc.humValid) { b.humiditySum += gSrc.humidity; b.humCount++; }
-    if (bme280Present) { b.pressureSum += bme280PressSea; b.pressCount++; }
+    if (gSrc.pressValid) { b.pressureSum += gSrc.pressSeaHpa; b.pressCount++; }
     if (gCfg.lipoEn) {
         b.batterySum += batteryVolt;
         b.lipoCount++;

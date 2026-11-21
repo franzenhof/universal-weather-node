@@ -38,3 +38,8 @@ private:
 };
 
 extern SerialLog dbgSerial;
+
+// Heltec V4: the log goes over the native USB (USB-Serial-JTAG, HWCDC) instead
+// of UART0 - GPIO43/44 are 1-Wire and wind speed on the PCB (heltec_board.h
+// boardUseUart0()). Call before the first log line; UART0 is then never started.
+void serialLogUseUsb();

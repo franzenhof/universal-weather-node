@@ -341,7 +341,20 @@ doc = [Sym("kicad_sch"), [Sym("version"), 20250114], [Sym("generator"), "eeschem
        [Sym("lib_symbols")] + list(libsyms.values())]
 doc += items
 doc += [[Sym("sheet_instances"), [Sym("path"), "/", [Sym("page"), "1"]]], [Sym("embedded_fonts"), Sym("no")]]
-open(OUT, "w").write(dump(doc) + "\n")
+def passive_pins(text):
+    """schem spec PASSIVE_PINS: {lib_id: {pin names}} -> those pins of the embedded library
+    symbol become passive (e.g. ideal diodes wired as OR-ing elements, open-drain ST to GND)"""
+    import re
+    for lib_id, names in getattr(S, "PASSIVE_PINS", {}).items():
+        i = text.find(f'(symbol "{lib_id}"')
+        if i < 0: continue
+        j = text.find('\n\t\t(symbol "', i + 10)
+        j = len(text) if j < 0 else j
+        blk = re.sub(r'\(pin \w+ (\w+)(?=((?:(?!\(pin ).)*?)\(name "([^"]*)")',
+                     lambda m: f"(pin passive {m.group(1)}" if m.group(3) in names else m.group(0), text[i:j], flags=re.S)
+        text = text[:i] + blk + text[j:]
+    return text
+open(OUT, "w").write(passive_pins(dump(doc) + "\n"))
 json.dump({"root": ROOT, "parts": {p["ref"]: p["uuid"] for p in PARTS}, "flags": flags},
           open(OUT.replace(".kicad_sch", ".uuids.json"), "w"), indent=1)
 print("written", OUT, "parts", len(PARTS), "symbols", len(placed), "wires", len(segs), "junctions", len(jn))

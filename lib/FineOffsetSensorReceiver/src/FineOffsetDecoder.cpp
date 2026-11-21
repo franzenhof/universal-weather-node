@@ -146,6 +146,9 @@ void decodeWs80(const uint8_t* b, FoFrame& o)   // WS80 and WS90 (same first 14 
     if (light != 0xFFFF) { o.hasLight = true; o.lightLux = light * 10.0f; }
     o.batteryMv = (uint16_t)(b[6] * 20);
     o.batteryOk = o.batteryMv > 2400;    // 2 x AA lithium (WS85 threshold of rtl_433)
+    // WS90 firmware >= 1.6.0 (WS80 likely too) reports 0 V on an external power
+    // supply (Ecowitt wiki by Gyvate, section WS90): not a flat battery
+    if (b[6] == 0) { o.extPower = true; o.batteryOk = true; }
     int temp = (b[7] & 0x03) << 8 | b[8];
     if (temp != 0x3FF) setTemp400(o, temp);
     setHumidity(o, b[9]);
@@ -270,6 +273,7 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             o.batteryMv   = (uint16_t)((b[4] & 0x1F) * 100);
             o.batteryOk   = o.batteryMv >= 1300;   // 1 x AA; erratic readings from 1.2 V
             if (b[6] <= 100) { o.hasMoisture = true; o.moisture = b[6]; }
+            o.moistureAd  = (uint16_t)((b[7] & 0x01) << 8 | b[8]);   // raw AD (9 bit), for a two-point calibration
             break;
         case FO_FAMILY_WH57: {
             o.id             = (uint32_t)(b[1] & 0x0F) << 16 | be16(b + 2);

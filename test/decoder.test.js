@@ -172,6 +172,17 @@ function testLppLightAndSources() {
   eq(d.sources.rain, 'board', 'LPP source rain');
   eq(d.sources.light, 'wireless', 'LPP source light');
   eq(d.wireless_battery_low, true, 'LPP wireless battery low');
+  eq(d.sources.pressure, 'none', 'LPP pressure bits 10-11 unset (older firmware)');
+  // pressure source (bits 10-11): board 0x0400, wireless 0x0800; the other groups unchanged
+  const b = Decode(1, [16, 100, 0x00, 0x00, 0x04, 0x1A]);   // pressure board, tempHum wireless, wind wireless, rain board
+  eq(b.sources.pressure, 'board', 'LPP source pressure board');
+  eq(b.sources.temp_humidity, 'wireless', 'LPP source temp/hum with pressure bits');
+  eq(b.sources.rain, 'board', 'LPP source rain with pressure bits');
+  eq(b.wireless_battery_low, false, 'LPP no battery low');
+  const w = Decode(1, [16, 100, 0x00, 0x00, 0x88, 0x00]);   // pressure wireless + battery low
+  eq(w.sources.pressure, 'wireless', 'LPP source pressure wireless');
+  eq(w.sources.temp_humidity, 'none', 'LPP source temp/hum none');
+  eq(w.wireless_battery_low, true, 'LPP battery low with pressure bits');
 }
 
 function testBinaryUnknownVersion() {

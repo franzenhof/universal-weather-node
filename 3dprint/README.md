@@ -4,7 +4,7 @@
 |---|---|---|
 | Rev 1.2 | `heltec weather node pcb v1.2 Case-body.stl`, `… Case-top.stl`, `… button.stl` | `heltec weather node pcb v1.2.f3d` (Fusion 360) |
 | **Rev 1.3** | `rev13/heltec weather node pcb v1.3 case-body.stl`, `… case-lid.stl`, `… button-pin.stl` (+ STEP, assembly STEP) | [`case_rev13.py`](case_rev13.py) (build123d) |
-| **v2.0** | [`v20/`](v20/): body, lid, button pin, optional gland blank (STL + STEP), assembly STEP and preview | [`case_v20.py`](case_v20.py) (build123d; reads current KiCad PCB) |
+| **v2.0** | [`v20/`](v20/) for a Heltec **V3**, [`v20-v4/`](v20-v4/) for a Heltec **V4**: body, lid, button pin, optional gland blank (STL + STEP), assembly STEP and preview | [`case_v20.py`](case_v20.py) (build123d; reads current KiCad PCB; `--heltec v3\|v4`) |
 | **Minimal wireless build** (no PCB) | [`minimal/`](minimal/): body, two lids, PRG/RST pins (STL + STEP), assembly STEP and preview | [`case_minimal.py`](case_minimal.py) (build123d) |
 
 ## Minimal wireless build enclosure (bare Heltec V3 + BME280, no PCB)
@@ -117,6 +117,14 @@ thermal qualification is claimed.
 
 ![v2.0 enclosure](v20/preview.png)
 
+**Heltec V3 or V4:** PCB v2.0 takes either module on its own socket set; the V4 rows are
+2.54 mm further down the board (PCB-local Y) and the V4 is 51.7 mm long. The lid's display
+window, the PRG button pin and the USB opening follow the module, so print the matching
+variant: [`v20/`](v20/) (`--heltec v3`, default) or [`v20-v4/`](v20-v4/) (`--heltec v4`, files
+`universal-weather-node-v2.0-v4-*`). The body differs only in the USB window; the V4 button
+position comes from Heltec's V4 3D model and the display window is the V3 window moved with
+the rows — check both on the first print.
+
 ### Download / print
 
 | File | Purpose |
@@ -202,7 +210,8 @@ Python 3.14 on macOS. A working build123d/OCP package for your OS is required.
 ```bash
 python3 -m venv .venv-cad
 .venv-cad/bin/pip install -r 3dprint/requirements.txt
-.venv-cad/bin/python 3dprint/case_v20.py
+.venv-cad/bin/python 3dprint/case_v20.py                 # Heltec V3 -> v20/
+.venv-cad/bin/python 3dprint/case_v20.py --heltec v4     # Heltec V4 -> v20-v4/
 ```
 
 The source reuses the repository's KiCad S-expression reader; KiCad itself is

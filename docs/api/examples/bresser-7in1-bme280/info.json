@@ -3,7 +3,14 @@
   "device": {
     "name": "Garden",
     "hostname": "garden",
-    "uptimeSec": 180064
+    "uptimeSec": 180064,
+    "language": "auto"
+  },
+  "system": {
+    "uptimeSec": 180064,
+    "heapFree": 150000,
+    "heapMin": 120000,
+    "heapLargest": 90000
   },
   "firmware": {
     "version": "2.0.0"
@@ -52,7 +59,28 @@
     "lorawan": false,
     "loxone": false,
     "updateCheck": false,
-    "weatherNetworks": ["awekas", "wunderground"]
+    "weatherNetworks": ["awekas", "wunderground"],
+    "status": {
+      "mqtt": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0
+      },
+      "haDiscovery": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0
+      },
+      "awekas": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0
+      },
+      "wunderground": {
+        "lastOkSecAgo": 63,
+        "lastErrorSecAgo": 63,
+        "lastError": "Unauthorized",
+        "lastErrorCode": 401,
+        "failsInRow": 1
+      }
+    }
   },
   "available": {
     "temp": true,
@@ -73,11 +101,18 @@
     "fan": false,
     "victron": false
   },
+  "wireless": {
+    "onlyMine": false,
+    "mine": 0,
+    "hidden": 0,
+    "hiddenInRange": 0
+  },
   "sources": {
     "tempHum": "board",
     "wind": "radio:39582376",
     "rain": "radio:39582376",
     "uv": "radio:39582376",
-    "light": "radio:39582376"
+    "light": "radio:39582376",
+    "pressure": "board"
   }
 }

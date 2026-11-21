@@ -1,0 +1,66 @@
+{
+  "apiVersion": 1,
+  "active": [1],
+  "rules": [
+    {
+      "n": 1,
+      "name": "Frost",
+      "enabled": true,
+      "value": "frost",
+      "compare": ">",
+      "raise": 0.5,
+      "clear": 0.5,
+      "unit": "",
+      "minDurationMin": 0,
+      "repeatMin": 0,
+      "priority": 3,
+      "channels": ["ntfy", "mqtt"],
+      "allClear": true,
+      "active": true,
+      "activeSec": 1200,
+      "current": 1
+    },
+    {
+      "n": 2,
+      "name": "Storm",
+      "enabled": true,
+      "value": "pressureTrend3h",
+      "compare": "<",
+      "raise": -0.18,
+      "clear": -0.09,
+      "unit": "inHg",
+      "minDurationMin": 0,
+      "repeatMin": 0,
+      "priority": 4,
+      "channels": [],
+      "allClear": true,
+      "active": false,
+      "current": -0.02
+    },
+    {
+      "n": 3,
+      "name": "Cellar leak",
+      "enabled": true,
+      "value": "sensor",
+      "sensorId": "39582376",
+      "sensorValue": "leak",
+      "compare": ">",
+      "raise": 0.5,
+      "clear": 0.5,
+      "unit": "",
+      "minDurationMin": 0,
+      "repeatMin": 30,
+      "priority": 5,
+      "channels": ["pushover"],
+      "allClear": false,
+      "active": false
+    }
+  ],
+  "channels": {
+    "ntfy": true,
+    "pushover": true,
+    "telegram": false,
+    "mqtt": false,
+    "webhook": false
+  }
+}

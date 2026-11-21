@@ -25,7 +25,7 @@ Rain rate [mm/h] = rain [mm] / (cycle length [ms] / 3,600,000)
 
 **Temperature probes (DS18B20):** up to 3 probes, found automatically every cycle (hot-pluggable). The order follows their ROM addresses. A conversion that is still incomplete after 1 s is aborted: probe readings are marked unavailable, the switched bus supply is turned off on Rev 1.3/v2.0, and the next cycle searches/retries normally. A stuck bus cannot indefinitely stop all other measurements or telemetry.
 
-**Air pressure (BME280):** converted to sea level (QNH) using the configured altitude:
+**Air pressure (BME280 or a wireless sensor with a barometer, see [value sources](wireless-sensors.md#value-sources)):** the station pressure is converted to sea level (QNH) using the configured altitude — the same formula for both:
 
 ```
 QNH = absolute pressure × (1 - 0.0000226 × altitude[m])^(-5.255)
@@ -82,11 +82,29 @@ Computed on the node from the measured values — the same numbers in JSON/MQTT,
 | Rain last hour / 24 h | sum of the 5-min history buckets (fixed 5-min windows, each with the cycles that ended in it) that lie completely inside the window, plus the current one — never longer than 1 h / 24 h, at most one bucket shorter (since start if shorter) | rain source |
 | Rain this week / month / year | ISO week (Monday start), calendar month and year, local time (NTP); kept like the daily values below | rain source, time |
 | Rain today / yesterday, last rain | local days (NTP); kept in RTC RAM and — with *Keep rain statistics over a power cut* (default on) — saved to flash at most once per hour and before every planned restart or update, so updates lose nothing and a power cut at most the last hour (after a cut of two or more days *yesterday* is unknown); rain before the first time sync after a restart counts as today | rain source, time |
-| Sunshine today / yesterday | time with the selected light source ≥ 15 000 lx — an estimate of the WMO 120 W/m² threshold; a lux sensor sees global, not direct radiation | Bresser 7-in-1 (light) |
+| Sunshine today / yesterday | time with the selected light source ≥ 15 000 lx — an estimate of the WMO 120 W/m² threshold; a lux sensor sees global, not direct radiation. Option (*Settings → Sensors → Measurement → Sunshine duration*, parameter 65): solar radiation ≥ 0.4 × the clear-sky maximum at the current sun elevation (above 3°) — closer to the WMO definition, for a W/m² sensor (Davis solar radiation) with latitude / longitude set | light source (Bresser 7-in-1, Davis solar) |
 | Vapour pressure deficit (VPD) | saturation minus actual vapour pressure (Magnus), kPa — for plants / greenhouses | temperature + humidity |
 | Warnings | *frost* (T ≤ 0 °C), *fog/dew* (spread ≤ 1 K and RH ≥ 95 %), *sultry* (dew point ≥ 16 °C) | temperature (+ humidity) |
 
-Longer statistics (summer/frost days, records, multi-year series) are a job for your database — e.g. InfluxDB/Grafana or Home Assistant's long-term statistics fed by MQTT; the node keeps only 7 days in RAM.
+Which sensor feeds each value group is set with the [value sources](wireless-sensors.md#value-sources); with *Auto* the board sensor comes first, then wireless 1–4 in Ecowitt's sensor order (e.g. wind WS90 > WS80 > WS85 > WS69 > WS68, rain WH40 > WN20 > WS69 > the piezo arrays) and otherwise by number.
+
+All values above use the **calibrated** main values (offsets / factors after the value source, see [Calibration](settings.md#calibration)).
+
+Longer statistics (summer/frost days, multi-year series) are a job for your database — e.g. InfluxDB/Grafana or Home Assistant's long-term statistics fed by MQTT; the node keeps 7 days of history in RAM, plus the records below.
+
+### Records
+
+Minimum and maximum **with their time** of temperature, humidity, pressure (QNH), the maximum gust and rain rate, plus the largest **daily rain** — for **today, yesterday, this month, this year and all time** (the daily rain: month, year, all time). Fed every measurement cycle from the selected (calibrated) values; the gust is the cycle gust of the wind source, the rain rate the cycle value. Days, months and years roll over at local midnight (time zone setting), so the records need the clock (NTP); before the first sync nothing is recorded. "Yesterday" is the last day the node saw.
+
+Kept in one small flash record (namespace `records`, ~430 bytes): written at most once per hour, at the day change and before every planned restart or update — a power cut loses at most the last hour. Reset in *Settings → System → Records* (today … this year, or everything including all time; parameter 64).
+
+Output: the full set in `GET /api/records` ([API](api.md#records)) and the dashboard's *Records* panel; today's minimum / maximum temperature and maximum gust also in `/api/data` (`tempMinToday`, `tempMaxToday`, `gustMaxToday`) and therefore in MQTT, Home Assistant (*Temperature Min / Max Today*, *Gust Max Today*) and Loxone.
+
+### Sun and Moon
+
+Computed on the node from latitude / longitude (*Settings → Basics → Location* or wizard step 3) and the clock — no internet service: **sunrise, sunset** (upper limb, standard refraction −0.833°), **civil twilight** begin / end (−6°), **solar noon**, **day length**, the current **sun elevation**, the **clear-sky solar maximum** (Haurwitz model, W/m²), **moonrise, moonset, moon transit** (highest point), **moon illumination** and **phase** (eight phases). Events belong to the local day; one that does not happen that day is left out — polar day / night (`polar`), days without moonrise or moonset. Accuracy: sun about ±1 min, moon about ±2 min against the U.S. Naval Observatory (tested). Own implementation of the published NOAA / Meeus solar equations and the Astronomical Almanac's low-precision moon series.
+
+Output: the `astro` object in `/api/data` (only with a location and a synced clock; times in UTC ISO 8601), the dashboard's *Sun & moon* panel (with a hint when the location is missing), Home Assistant (*Sunrise*, *Sunset*, *Moonrise*, *Moonset* as timestamps, *Moon Phase*, *Moon Illumination*) and Loxone (`astro…`, times as minutes since local midnight).
 
 ## Units (Metric/Imperial)
 
@@ -106,4 +124,4 @@ One switch, **Units**, sets the unit for everything the node sends and shows:
 
 ## Firmware Update Check
 
-With *Check daily for newer firmware* on (web settings, *Firmware update check*; off by default), the node asks a version list once a day — by default this project's Gitea tags API, any Gitea `…/tags` or GitHub `…/releases` URL works — and shows a newer version on the status page, as `firmwareUpdate` in JSON and in Home Assistant. Installing stays manual ([OTA](installation.md#firmware-update-ota)). Pre-releases count: `2.0.0-beta.3` is newer than `2.0.0-beta.2`, `2.0.0` newer than any `2.0.0-beta` (tags compared case-insensitively, a `-dirty` build counts as the release). GitHub release lists are read with `per_page=5` and streamed, so long release notes don't exhaust the heap.
+With *Check daily for newer firmware* on (web settings, *Firmware update check*; off by default), the node asks a version list once a day — by default this project's GitHub releases (`https://api.github.com/repos/franzenhof/universal-weather-node/releases`; nodes that still have the former internal Gitea URL are moved to it automatically), any Gitea `…/tags` or GitHub `…/releases` URL works — and shows a newer version on the status page, as `firmwareUpdate` in JSON and in Home Assistant. Installing stays manual ([OTA](installation.md#firmware-update-ota)). Pre-releases count: `2.0.0-beta.3` is newer than `2.0.0-beta.2`, `2.0.0` newer than any `2.0.0-beta` (tags compared case-insensitively, a `-dirty` build counts as the release). GitHub release lists are read with `per_page=5` and streamed, so long release notes don't exhaust the heap.

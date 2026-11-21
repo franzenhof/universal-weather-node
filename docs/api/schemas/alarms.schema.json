@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/franzenhof/universal-weather-node/docs/api/schemas/alarms.schema.json",
+  "title": "Universal Weather Node — alarm rules (/api/alarms)",
+  "description": "The alarm rules (Settings → Alarms, docs/alarms.md) with their current state. Thresholds and values in the configured units. Never contains channel addresses, tokens or keys - channels only as configured yes/no. Stability: within apiVersion 1 fields are only added.",
+  "type": "object",
+  "required": ["apiVersion", "active", "rules", "channels"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "type": "integer", "minimum": 1, "description": "API contract version (1).", "x-present": "always" },
+    "active": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 12, "description": "Rule slot." }, "description": "Slots of the active (raised) rules.", "x-present": "always (may be empty)" },
+    "rules": {
+      "type": "array", "maxItems": 12, "x-present": "always (only defined slots)",
+      "description": "Defined rules.",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["n", "name", "enabled", "value", "compare", "raise", "clear", "unit", "minDurationMin", "repeatMin", "priority", "channels", "allClear", "active"],
+        "description": "One rule.",
+        "properties": {
+          "n": { "type": "integer", "minimum": 1, "maximum": 12, "description": "Slot (parameter 66 bit n-1)." },
+          "name": { "type": "string", "description": "Name given in the settings (may be empty)." },
+          "enabled": { "type": "boolean", "description": "Rule switched on." },
+          "value": { "type": "string", "enum": ["temp", "feelsLike", "humidity", "dewPoint", "pressureQnh", "pressureTrend3h", "windSpeed", "windGust", "rainRate", "rainToday", "rain1h", "uvIndex", "frost", "fog", "sultry", "sensor"], "description": "Watched value; sensor = a wireless sensor's value (sensorId, sensorValue)." },
+          "sensorId": { "type": "string", "pattern": "^[0-9A-F]{8}$", "description": "Wireless sensor ID (value sensor only)." },
+          "sensorValue": { "type": "string", "enum": ["temp", "humidity", "windSpeed", "windGust", "uvIndex", "lightLux", "leak", "lightningKm", "moisturePct", "co2Ppm", "pm25", "silentMin", "batteryLow"], "description": "Value of that sensor (value sensor only)." },
+          "compare": { "type": "string", "enum": [">", "<"], "description": "Raised while value > raise (or < raise)." },
+          "raise": { "type": "number", "description": "Raise threshold." },
+          "clear": { "type": "number", "description": "Clear threshold (hysteresis)." },
+          "unit": { "type": "string", "description": "Unit of raise / clear / current (empty for yes/no values)." },
+          "minDurationMin": { "type": "integer", "minimum": 0, "description": "Condition must hold this long before raising.", "x-unit": "min" },
+          "repeatMin": { "type": "integer", "minimum": 0, "description": "Repeat interval while raised (0 = once).", "x-unit": "min" },
+          "priority": { "type": "integer", "minimum": 1, "maximum": 5, "description": "1 lowest … 5 urgent (Pushover emergency)." },
+          "channels": { "type": "array", "items": { "type": "string", "enum": ["ntfy", "pushover", "telegram", "mqtt", "webhook"], "description": "Channel." }, "description": "Channels notified." },
+          "allClear": { "type": "boolean", "description": "The all clear is notified too." },
+          "active": { "type": "boolean", "description": "Raised now." },
+          "activeSec": { "type": "integer", "minimum": 0, "description": "Raised since (active only).", "x-unit": "s" },
+          "current": { "type": "number", "description": "Last value seen (absent while not available)." }
+        }
+      }
+    },
+    "channels": {
+      "type": "object", "additionalProperties": false, "required": ["ntfy", "pushover", "telegram", "mqtt", "webhook"],
+      "description": "Configured channels (yes / no only).", "x-present": "always",
+      "properties": {
+        "ntfy": { "type": "boolean", "description": "ntfy topic set." },
+        "pushover": { "type": "boolean", "description": "Pushover token and user key set." },
+        "telegram": { "type": "boolean", "description": "Telegram bot token and chat set." },
+        "mqtt": { "type": "boolean", "description": "MQTT alarm events on." },
+        "webhook": { "type": "boolean", "description": "Webhook URL set." }
+      }
+    }
+  }
+}

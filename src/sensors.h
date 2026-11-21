@@ -6,7 +6,9 @@
 // FIXED PIN ASSIGNMENT (independent of PCB revision)
 // ============================================================================
 #define PIN_ADC_VOLTBATTERY     1   // LiPo voltage measurement (ADC)
-#define PIN_ADC_WINDDIRECTION   2   // Davis wind direction (potentiometer, ADC)
+// Davis wind direction (ADC): GPIO2 on a V3, GPIO6 on a V4 with PCB v2.0 - boardPins() / windDirPin()
+// Below this the LiPo input reads only noise: no battery connected (USB powered)
+constexpr float BATTERY_PRESENT_V = 2.5f;
 #define PIN_ADC_BATCTRL        37   // HIGH enables ADC measurement path (from heltec wifi lora v3 board rev. 3.2)
 #define PIN_1WIRE_HSS          47   // High-side switch VCC_1WIRE (LP0701N3-G via TN2106N3-G, from universal-weather-node pcb rev 1.3)
 #define PIN_I2C_SDA_BME280     41
@@ -54,7 +56,8 @@
 // Rev 1.3: Wind=GPIO6, Rain=GPIO7, 1-Wire=GPIO5
 // ============================================================================
 struct PinSet { int windSpeed, rain, oneWire; };
-PinSet getPins(int pcbVersion);
+PinSet getPins(int pcbVersion);   // for the board in effect (heltec_board.h boardPins())
+int windDirPin();                 // wind direction ADC of the board in effect, -1 = none
 extern PinSet gPins;
 
 // Wind / rain pulses counted in software during light sleep (low_power.cpp),

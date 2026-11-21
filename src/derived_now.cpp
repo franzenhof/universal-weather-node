@@ -27,13 +27,13 @@ void derivedNow(DerivedNow& d, float windMs, int dirDeg)
         if (historyTempAgo(3600, t1h)) { d.tempTrendValid = true; d.tempDelta1hC = t - t1h; }
     }
     if (wind) d.windDirText = windDirText(dirDeg);
-    if (bme280Present) {
+    if (gSrc.pressValid) {
         float p3h;
         if (historyPressureAgo(3 * 3600, p3h)) {
             d.pressTrendValid = true;
-            d.pressDelta3hHpa = bme280PressSea - p3h;
+            d.pressDelta3hHpa = gSrc.pressSeaHpa - p3h;
             d.tendency        = pressureTendency(d.pressDelta3hHpa);
-            d.weatherTrend    = weatherTrendText(d.pressDelta3hHpa, bme280PressSea);
+            d.weatherTrend    = weatherTrendText(d.pressDelta3hHpa, gSrc.pressSeaHpa);
         }
     }
     if (srcActive(SG_RAIN)) {

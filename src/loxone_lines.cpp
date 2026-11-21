@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 bool loxPrefixValid(const char* s)
 {
@@ -109,6 +110,34 @@ void emitObject(Walk& w, const char* parent, JsonObjectConst o)
     }
 }
 
+// Sun / moon (astro): numbers as they are, event times ("…T…Z", UTC) as
+// minutes since local midnight (astroSunrise=392 = 06:32) - Loxone has no
+// time-of-day input type, and minutes compare easily in a Loxone program.
+void emitAstro(Walk& w, JsonObjectConst o)
+{
+    for (JsonPairConst kv : o) {
+        char name[64];
+        joinName(name, sizeof(name), "astro", kv.key().c_str());
+        const char* s = kv.value().as<const char*>();
+        int y, mo, d, h, mi, se;
+        if (s && sscanf(s, "%d-%d-%dT%d:%d:%dZ", &y, &mo, &d, &h, &mi, &se) == 6) {
+            // days from civil (UTC), then the local time of day
+            y -= mo <= 2;
+            const long era = (y >= 0 ? y : y - 399) / 400, yoe = y - era * 400;
+            const long doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+            const time_t t = (time_t)((era * 146097L + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468) * 86400LL +
+                                      h * 3600 + mi * 60 + se);
+            struct tm lt;
+            localtime_r(&t, &lt);
+            JsonDocument tmp;
+            tmp.set(lt.tm_hour * 60 + lt.tm_min);
+            emit(w, name, tmp.as<JsonVariantConst>(), kv.key().c_str());
+        } else {
+            emit(w, name, kv.value(), kv.key().c_str());   // numbers; phase / polar text skipped
+        }
+    }
+}
+
 // Stale group ("stale" array in rfSensors) of a wireless sensor value key.
 const char* staleGroup(const char* key)
 {
@@ -118,6 +147,7 @@ const char* staleGroup(const char* key)
     if (!strcmp(key, "rainTotal"))   return "rain";
     if (!strcmp(key, "uvIndex"))     return "uv";
     if (!strcmp(key, "lightLux"))    return "light";
+    if (!strcmp(key, "pressure"))    return "pressure";
     return nullptr;
 }
 
@@ -160,6 +190,7 @@ int loxoneLines(const JsonDocument& doc, const char* prefix, LoxLineFn fn, void*
         if (!strcmp(key, "apiVersion")) continue;   // API contract version, not a measurement
         if (v.is<JsonObjectConst>()) {
             if      (!strcmp(key, "warnings")) emitObject(w, "warn", v.as<JsonObjectConst>());
+            else if (!strcmp(key, "astro"))    emitAstro(w, v.as<JsonObjectConst>());
             else if (!strcmp(key, "wind2") || !strcmp(key, "heater") || !strcmp(key, "fan") ||
                      !strcmp(key, "victron"))  emitObject(w, key, v.as<JsonObjectConst>());
             // status, sources: not sent

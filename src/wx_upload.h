@@ -42,7 +42,7 @@ struct WxTargetStatus {
     char          lastReply[48];   // server reply (trimmed) or a local reason
 };
 
-constexpr size_t WX_TARGET_COUNT = 6;
+constexpr size_t WX_TARGET_COUNT = 8;   // AWEKAS, WU, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap, WOW, CWOP
 
 // Copies a consistent snapshot of every network's status (WX_TARGET_COUNT
 // entries) for the status page.

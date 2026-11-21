@@ -12,6 +12,25 @@
   "temp": 18.20338,
   "tempUnit": "C",
   "humidityPct": 47.68195,
+  "astro": {
+    "sunrise": "2026-06-15T03:08:40Z",
+    "sunset": "2026-06-15T19:08:15Z",
+    "civilDawn": "2026-06-15T02:27:47Z",
+    "civilDusk": "2026-06-15T19:49:10Z",
+    "solarNoon": "2026-06-15T11:08:22Z",
+    "dayLengthMin": 960,
+    "sunElevation": 63.4,
+    "clearSkyWm2": 922,
+    "moonrise": "2026-06-15T02:45:20Z",
+    "moonset": "2026-06-15T20:13:18Z",
+    "moonTransit": "2026-06-15T11:30:44Z",
+    "moonIlluminationPct": 0,
+    "moonPhase": "new",
+    "moonPhaseIndex": 0
+  },
+  "tempMinToday": 10.6,
+  "tempMaxToday": 18.2,
+  "gustMaxToday": 9.1,
   "pressureAbs": 946.8462,
   "pressureQnh": 1013.046,
   "pressureUnit": "hPa",
@@ -23,7 +42,8 @@
     "wind": "radio:DA000001",
     "rain": "radio:DA000001",
     "uv": "radio:DA000001",
-    "light": "radio:DA000001"
+    "light": "radio:DA000001",
+    "pressure": "board"
   },
   "radioBatteryLow": false,
   "dewPoint": 6.9,
@@ -69,6 +89,7 @@
     {
       "id": "DA000001",
       "slot": 1,
+      "mine": false,
       "type": 1,
       "protocol": "Davis",
       "model": "Vantage Pro2",
@@ -82,6 +103,8 @@
       "windGust": 9,
       "windDirDeg": 231,
       "rainTotal": 6.599999,
+      "rainToday": 6.6,
+      "rain1h": 1.8,
       "uvIndex": 4.1,
       "lightLux": 49413,
       "solarWm2": 390

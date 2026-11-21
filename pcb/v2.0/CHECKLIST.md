@@ -19,10 +19,10 @@ and JP12 tacho pull-up remain. The four stability improvements below add
 C31-C34, replace C1 with a specified bias-characterized part and revise R32.
 The fan gate-driver resistor is now a four-part R33/R62/R63/R64 bank.
 Final DRC: **0 errors, 0 unconnected items, 0 schematic-parity issues**;
-nine known terminal silkscreen-edge warnings remain.
-BOM (SMD only): 135 populated references in 47 lines, all with LCSC and MPN fields.
-CPL: 135 top-side SMD placements, checked against PCB positions and rotations;
-the 22 through-hole parts are listed separately in `production/*-tht-lcsc.csv` (8 lines,
+warnings only (terminal silkscreen edge, J19/J20 footprint-silk mismatch, dangling vias from the V4 re-route; see docs/pcb.md).
+BOM (SMD only): 139 populated references in 48 lines, all with LCSC and MPN fields.
+CPL: 139 top-side SMD placements, checked against PCB positions and rotations;
+the 26 through-hole references (both Heltec socket sets; fit one) are listed separately in `production/*-tht-lcsc.csv` (10 lines,
 LCSC order list) and require separate/manual assembly arrangements. DNP parts are excluded from both files.
 KiCad rotations are not a guarantee of JLCPCB library orientation: complete the
 assembly preview checks below before paying. Availability, price and actual
@@ -53,6 +53,42 @@ right / minus left; Q4 remains gate lower left, source lower right, drain tab
 top. The screenshot does not establish article identity or placement count:
 confirm C17944 for all four resistors and 135 SMD placements in the order list.
 This is visual placement evidence, not hardware qualification.
+
+## Heltec V3 / V4 double socket
+
+v2.0 takes a **Heltec WiFi LoRa 32 V3 (J1/J2) or V4 (J19/J20 + J21)** — fit **one socket set
+only**; an unused socket under the other module collides with its bottom-side parts.
+Pin map, revision ID and the 5 V/USB rule: [Heltec V3 or V4 on the PCB](../../docs/pcb.md#heltec-v3-or-v4-on-the-pcb).
+The change was applied to the routed board by `tools/pcbgen/dual_socket.sh`
+(scripted, like the earlier J18 edit): new J19/J20 (2.54 mm towards J1), J21 (P4,
+GPIO15/16, from the Heltec V4 STEP model), U8/U9 (TI LM66100DCKR ideal diodes, C2869734, extended) + C39 (1 µF) on the V4 5 V pin,
+R65 (100k, existing C149504) VE.Direct TX pull-down, GPIO19 net renamed `VANE_EN`
+(J16 silk `VANE`); C36/C37/R1 moved under the module, JP8 1.0 mm and JP12 0.4 mm down,
+J14 (and its labels) 0.5 mm down, the VE.Direct isolation moat and GND_VICTRON pour
+1.65 mm lower (unchanged 1.5 mm moat width). Copper colliding with the new parts was
+ripped up and re-routed by `route_grid.py`; the rest of the reviewed routing is unchanged.
+`checknet.py` checks every function net on its V3 and V4 pin and that the V4's
+RF-front-end/USB pins stay open. The courtyards of the two socket sets overlap by design
+(`universal-weather-node.kicad_dru`).
+
+**Order / assembly**
+
+- [ ] THT list: J1/J2 **or** J19/J20 (Kinghelm C2905422, 1×18, 8.5 mm) plus, for a V4, J21 (SHOU HAN PM2.54-1x2PZZ-H8.5, C54876674). Buy only the set for your module.
+- [x] Preview 2026-11-21: the 08:35 UTC preview showed U2/U3 (UMW SN74LVC2G14DBVR, C5375976) and U8/U9 (LM66100, C2869734) turned by 90 degrees; corrected in the CPL (U2/U3 +180, U8/U9 +270 from the raw KiCad angle). The 08:51:47 UTC preview confirms all four: leads on the pads, pin 1 at the PCB mark (U2 lower left, U3 lower right, U8 upper left / VIN, U9 lower right / VIN). R65, C39 present.
+- [ ] Before soldering J21: plug a V4 (with its P4 pins) into J19/J20 dry and check that P4 meets J21 (position from the 3D model, 0.45 mm off grid — not yet measured on a real V4). Check whether the V4 is supplied with the 2×2 P4 pins.
+
+**Bring-up with a V4 (first board)**
+
+- [ ] Without module, VIN mode (JP8 fitted): TP3 ≈ 5.0 V, J19.2 ≈ 4.95 V (U8 on). Then hold J19.2 at 5.2 V from a lab supply: no current flows into J19.2 from the board (U8 off) and TP3 stays at the buck voltage.
+- [ ] Without module, unpowered board, JP8 removed: 5 V via 100 Ω into J19.2 (simulated USB) → TP3 rises to ≈ 4.9 V through U9 (USB-only mode works); J19.2 at 4.7 V with VIN on → the board does not drive the lower supply by more than a few mA (U8 hysteresis ≈ 0.15 V).
+- [ ] With V4, VIN mode: module 5 V pin under 27 dBm LoRa TX + Wi-Fi ≥ 4.7 V (U8 ≈ 0.1 V at 1 A); U8 temperature; module works; display, Wi-Fi.
+- [ ] USB flashing with the PCB fitted and JP8 removed / VIN off (native USB on GPIO19/20 — both pins open on J19).
+- [ ] Scope at power-up: GPIO45 (VE TX, R65) stays LOW until the firmware runs; GPIO43 (1-Wire) boot-log toggling harmless; fan gate (GPIO39).
+- [ ] Revision ID on GPIO15 ≈ 1.65 V → firmware reports PCB v2.0; all sensors on their V4 GPIOs (wind 44/6, rain 16, 1-Wire 43, vane 34).
+- [ ] `espefuse.py summary` of the V4 (VDD_SPI_FORCE, DIS_PAD_JTAG, UART_PRINT_CONTROL) and resistance of GPIO15/16/45/34/44 to GND/3V3 on the bare module.
+- [ ] Never plug a GNSS module into a V4 on this PCB (shares GPIO34 and 38–42).
+- [ ] Thermal / drop check of the 0.3 mm necks where routes now pass between socket pins: +5V between J1/J19 pins 8|9 (whole module + sensor 5 V current in VIN mode), 3V3_HELTEC between pins 7|8, +5V_V4 between J1.2|3, 3V3_LDO between J20/J2 3|4 (as before); measure the 5 V drop J1.2 / J19.2 vs TP3 at LoRa TX.
+- [ ] Visual review of the re-routed area under and around the module (scripted grid router, 45° segments, about 16 dangling-via/stub DRC warnings) in the Gerber viewer before ordering.
 
 ## Electrical-stability improvements
 
@@ -145,9 +181,9 @@ Upload the newly generated files; J3 and JP8 now have different footprints.
 
 | File | Use |
 |------|-----|
-| [JLCPCB CPL](production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | 135 top-side SMD parts; Q4 and C31 corrections preview-confirmed |
-| [JLCPCB BOM](production/universal-weather-node-v2.0-bom-jlcpcb.csv) | SMD parts only (47 lines); THT parts are hand-soldered |
-| [THT parts (LCSC)](production/universal-weather-node-v2.0-tht-lcsc.csv) | 9 LCSC articles for terminals, RJ11, sockets, JST, headers and the optional DC jack J18, quantity per board; add jumper shunts separately |
+| [JLCPCB CPL](production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | 139 top-side SMD parts; Q4 and C31 corrections preview-confirmed; U8/U9 (LM66100) and the new U2/U3 article preview-confirmed 2026-11-21 |
+| [JLCPCB BOM](production/universal-weather-node-v2.0-bom-jlcpcb.csv) | SMD parts only (48 lines); THT parts are hand-soldered |
+| [THT parts (LCSC)](production/universal-weather-node-v2.0-tht-lcsc.csv) | 10 LCSC articles for terminals, RJ11, the Heltec sockets of both sets (fit one: J1/J2 or J19/J20/J21), JST, headers and the optional DC jack J18, quantity per board; add jumper shunts separately |
 
 Offsets: U1-U5/Q3 **+270 degrees**, Q1/Q2/Q5/Q6/Q8 and the selected
 BAT54S/PESD5V0S2BT SOT-23 diodes **+180 degrees**. C6, Q7 and

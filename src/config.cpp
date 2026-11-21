@@ -118,6 +118,9 @@ void sanitizeConfig(Config& c)
     range (c.davisOffsetHz, -100000, 100000);
     range (c.davisWindowMs, 5, 500);
     range (c.davisGuardMs, 5, 500);
+    choice(c.davisRainFilter, d.davisRainFilter, 0, 1);
+    range (c.davisRainMaxPkt, 1, 127);
+    range (c.davisRainMaxMin, 1, 127);
     choice(c.davisBucket, d.davisBucket, 0, 1);
     choice(c.davisModel, d.davisModel, 0, 1);
     choice(c.davisSniffer, d.davisSniffer, 0, 1);
@@ -139,6 +142,23 @@ void sanitizeConfig(Config& c)
     choice(c.unitSystem, d.unitSystem, 0, 1);
     rangeF(c.rainMmPerTip, d.rainMmPerTip, 0.001f, 5.0f);
     rangeF(c.windMsPerPps, d.windMsPerPps, 0.001f, 10.0f);
+    range (c.wowIntervalSec, 300, 3600);
+    range (c.cwopIntervalSec, 300, 3600);
+    range (c.cwopPasscode, -1, 32767);
+    range (c.calTempDc, -100, 100);
+    range (c.calHumDpct, -200, 200);
+    range (c.calPressDhpa, -200, 200);
+    range (c.calRainPermil, 500, 2000);
+    range (c.calWindPermil, 500, 2000);
+    choice(c.sunMethod, d.sunMethod, 0, 1);
+    range (c.dispMode, 0, 2);
+    range (c.dispMinutes, 1, 120);
+    range (c.dispScreens, 0, 63);
+    if (!c.dispScreens) c.dispScreens = 1;
+    range (c.dispRotateSec, 2, 60);
+    range (c.dispContrast, 1, 255);
+    range (c.dispNightFrom, 0, 23);
+    range (c.dispNightTo, 0, 23);
     choice(c.windDirSensorType, d.windDirSensorType, 0, 1);
     range (c.windDirCalCount, 0, 16);
     choice(c.loraEn, d.loraEn, 0, 1);
@@ -224,10 +244,18 @@ Config loadConfig()
     c.rfEn             = prefs.getInt    ("rfen",      c.rfEn);
     c.rfProto          = prefs.getInt    ("rfproto",   c.rfProto);
     prefs.getString("rfids", c.rfIds, sizeof(c.rfIds));
+    prefs.getString("rfignore", c.rfIgnore, sizeof(c.rfIgnore));
+    c.uiLang           = prefs.getInt    ("uilang",    c.uiLang);
+    c.setupDone        = prefs.isKey("setupdone") ? prefs.getInt("setupdone", 0) : (prefs.isKey("deveui") ? 1 : 0);
+    if (c.uiLang < 0 || c.uiLang > 5) c.uiLang = 0;
+    c.rfOnlyMine       = prefs.isKey("rfonly") ? prefs.getInt("rfonly", 0) : rfOnlyMineDefault(c.rfIds);
     c.davisTxId        = prefs.getInt    ("dvid",      c.davisTxId);
     c.davisOffsetHz    = prefs.getInt    ("dvoff",     c.davisOffsetHz);
     c.davisWindowMs    = prefs.getInt    ("dvwin",     c.davisWindowMs);
     c.davisGuardMs     = prefs.getInt    ("dvguard",   c.davisGuardMs);
+    c.davisRainFilter  = prefs.getInt    ("dvrfilt",   c.davisRainFilter);
+    c.davisRainMaxPkt  = prefs.getInt    ("dvrpkt",    c.davisRainMaxPkt);
+    c.davisRainMaxMin  = prefs.getInt    ("dvrmin",    c.davisRainMaxMin);
     c.davisBucket      = prefs.getInt    ("dvbucket",  c.davisBucket);
     c.davisModel       = prefs.getInt    ("dvmodel",   c.davisModel);
     c.davisSniffer     = prefs.getInt    ("dvsniff",   c.davisSniffer);
@@ -237,7 +265,7 @@ Config loadConfig()
     c.davisAfc         = prefs.getInt    ("dvafc",     c.davisAfc);
     c.davisTable       = prefs.getInt    ("dvtable",   c.davisTable);
     c.davisRxBw        = prefs.getInt    ("dvbw",      c.davisRxBw);
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < (int)sizeof(c.srcSel); i++) {
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
         int v = prefs.getInt(key, c.srcSel[i]);
         c.srcSel[i] = (uint8_t)((v >= 0 && v <= 6) ? v : 0);
@@ -254,6 +282,21 @@ Config loadConfig()
     c.unitSystem       = prefs.getInt    ("unitsys",  c.unitSystem);
     c.rainMmPerTip     = prefs.getFloat  ("rainmmtip", c.rainMmPerTip);
     c.windMsPerPps     = prefs.getFloat  ("windmspp",  c.windMsPerPps);
+    c.calTempDc        = prefs.getInt    ("caltemp",   c.calTempDc);
+    c.calHumDpct       = prefs.getInt    ("calhum",    c.calHumDpct);
+    c.calPressDhpa     = prefs.getInt    ("calpress",  c.calPressDhpa);
+    c.calRainPermil    = prefs.getInt    ("calrain",   c.calRainPermil);
+    c.calWindPermil    = prefs.getInt    ("calwind",   c.calWindPermil);
+    c.sunMethod        = prefs.getInt    ("sunmethod", c.sunMethod);
+    c.dispMode         = prefs.getInt    ("dispmode",  c.dispMode);
+    c.dispMinutes      = prefs.getInt    ("dispmin",   c.dispMinutes);
+    c.dispScreens      = prefs.getInt    ("dispscr",   c.dispScreens);
+    c.dispRotateSec    = prefs.getInt    ("disprot",   c.dispRotateSec);
+    c.dispContrast     = prefs.getInt    ("dispcon",   c.dispContrast);
+    c.dispNightFrom    = prefs.getInt    ("dispnf",    c.dispNightFrom);
+    c.dispNightTo      = prefs.getInt    ("dispnt",    c.dispNightTo);
+    prefs.getString("rfcal", c.rfCal, sizeof(c.rfCal));
+    prefs.getString("rfnames", c.rfNames, sizeof(c.rfNames));
     c.windDirSensorType = prefs.getInt   ("winddirtyp", c.windDirSensorType);
     c.windDirCalCount  = prefs.getInt    ("wdcalcnt",  c.windDirCalCount);
     prefs.getBytes("wdcaladc", c.windDirCalAdc, sizeof(c.windDirCalAdc));
@@ -314,8 +357,18 @@ Config loadConfig()
     prefs.getString("osemtok",    c.osemToken,    sizeof(c.osemToken));
     prefs.getString("osemmap",    c.osemSensors,  sizeof(c.osemSensors));
     c.osemIntervalSec    = prefs.getInt("osemint", c.osemIntervalSec);
+    prefs.getString("wowid",      c.wowSiteId,    sizeof(c.wowSiteId));
+    prefs.getString("wowpin",     c.wowPin,       sizeof(c.wowPin));
+    c.wowIntervalSec     = prefs.getInt("wowint", c.wowIntervalSec);
+    prefs.getString("cwopcall",   c.cwopCall,     sizeof(c.cwopCall));
+    c.cwopPasscode       = prefs.getInt("cwoppass", c.cwopPasscode);
+    c.cwopIntervalSec    = prefs.getInt("cwopint", c.cwopIntervalSec);
     c.updateCheckEn      = prefs.getBool("updchk", c.updateCheckEn);
     if (prefs.isKey("updurl")) prefs.getString("updurl", c.updateUrl, sizeof(c.updateUrl));
+    // Old default (the project's internal Gitea, not reachable for everyone):
+    // move nodes that still have it to the public GitHub releases list.
+    if (!strcmp(c.updateUrl, "https://git.lb.franzenhof.com/api/v1/repos/esp32/universal-weather-node/tags?limit=20"))
+        strlcpy(c.updateUrl, "https://api.github.com/repos/franzenhof/universal-weather-node/releases", sizeof(c.updateUrl));
 
     c.auxAinEn         = prefs.getInt    ("auxainen",   c.auxAinEn);
     c.auxAinScale      = prefs.getFloat  ("auxainscale", c.auxAinScale);
@@ -368,10 +421,17 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("rfen",        prefs.putInt    ("rfen",      c.rfEn), 4);
     ok &= checkWrite   ("rfproto",     prefs.putInt    ("rfproto",   c.rfProto), 4);
     ok &= checkWriteStr("rfids",       prefs.putString ("rfids",     c.rfIds), c.rfIds);
+    ok &= checkWriteStr("rfignore",    prefs.putString ("rfignore",  c.rfIgnore), c.rfIgnore);
+    ok &= checkWrite   ("uilang",      prefs.putInt    ("uilang",    c.uiLang), 4);
+    ok &= checkWrite   ("setupdone",   prefs.putInt    ("setupdone", c.setupDone), 4);
+    ok &= checkWrite   ("rfonly",      prefs.putInt    ("rfonly",    c.rfOnlyMine), 4);
     ok &= checkWrite   ("dvid",        prefs.putInt    ("dvid",      c.davisTxId), 4);
     ok &= checkWrite   ("dvoff",       prefs.putInt    ("dvoff",     c.davisOffsetHz), 4);
     ok &= checkWrite   ("dvwin",       prefs.putInt    ("dvwin",     c.davisWindowMs), 4);
     ok &= checkWrite   ("dvguard",     prefs.putInt    ("dvguard",   c.davisGuardMs), 4);
+    ok &= checkWrite   ("dvrfilt",     prefs.putInt    ("dvrfilt",   c.davisRainFilter), 4);
+    ok &= checkWrite   ("dvrpkt",      prefs.putInt    ("dvrpkt",    c.davisRainMaxPkt), 4);
+    ok &= checkWrite   ("dvrmin",      prefs.putInt    ("dvrmin",    c.davisRainMaxMin), 4);
     ok &= checkWrite   ("dvbucket",    prefs.putInt    ("dvbucket",  c.davisBucket), 4);
     ok &= checkWrite   ("dvmodel",     prefs.putInt    ("dvmodel",   c.davisModel), 4);
     ok &= checkWrite   ("dvsniff",     prefs.putInt    ("dvsniff",   c.davisSniffer), 4);
@@ -381,7 +441,7 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("dvafc",       prefs.putInt    ("dvafc",     c.davisAfc), 4);
     ok &= checkWrite   ("dvtable",     prefs.putInt    ("dvtable",   c.davisTable), 4);
     ok &= checkWrite   ("dvbw",        prefs.putInt    ("dvbw",      c.davisRxBw), 4);
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < (int)sizeof(c.srcSel); i++) {
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
         ok &= checkWrite(key, prefs.putInt(key, c.srcSel[i]), 4);
     }
@@ -397,6 +457,21 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("unitsys",     prefs.putInt    ("unitsys",  c.unitSystem), 4);
     ok &= checkWrite   ("rainmmtip",   prefs.putFloat  ("rainmmtip", c.rainMmPerTip), 4);
     ok &= checkWrite   ("windmspp",    prefs.putFloat  ("windmspp",  c.windMsPerPps), 4);
+    ok &= checkWrite   ("caltemp",     prefs.putInt    ("caltemp",   c.calTempDc), 4);
+    ok &= checkWrite   ("calhum",      prefs.putInt    ("calhum",    c.calHumDpct), 4);
+    ok &= checkWrite   ("calpress",    prefs.putInt    ("calpress",  c.calPressDhpa), 4);
+    ok &= checkWrite   ("calrain",     prefs.putInt    ("calrain",   c.calRainPermil), 4);
+    ok &= checkWrite   ("calwind",     prefs.putInt    ("calwind",   c.calWindPermil), 4);
+    ok &= checkWrite   ("sunmethod",   prefs.putInt    ("sunmethod", c.sunMethod), 4);
+    ok &= checkWrite   ("dispmode",    prefs.putInt    ("dispmode",  c.dispMode), 4);
+    ok &= checkWrite   ("dispmin",     prefs.putInt    ("dispmin",   c.dispMinutes), 4);
+    ok &= checkWrite   ("dispscr",     prefs.putInt    ("dispscr",   c.dispScreens), 4);
+    ok &= checkWrite   ("disprot",     prefs.putInt    ("disprot",   c.dispRotateSec), 4);
+    ok &= checkWrite   ("dispcon",     prefs.putInt    ("dispcon",   c.dispContrast), 4);
+    ok &= checkWrite   ("dispnf",      prefs.putInt    ("dispnf",    c.dispNightFrom), 4);
+    ok &= checkWrite   ("dispnt",      prefs.putInt    ("dispnt",    c.dispNightTo), 4);
+    ok &= checkWriteStr("rfcal",       prefs.putString ("rfcal",     c.rfCal), c.rfCal);
+    ok &= checkWriteStr("rfnames",     prefs.putString ("rfnames",   c.rfNames), c.rfNames);
     ok &= checkWrite   ("winddirtyp",  prefs.putInt    ("winddirtyp", c.windDirSensorType), 4);
     ok &= checkWrite   ("wdcalcnt",    prefs.putInt    ("wdcalcnt",  c.windDirCalCount), 4);
     ok &= checkWrite   ("wdcaladc",    prefs.putBytes  ("wdcaladc",  c.windDirCalAdc, sizeof(c.windDirCalAdc)), sizeof(c.windDirCalAdc));
@@ -456,6 +531,12 @@ void saveConfig(const Config& c)
     ok &= checkWriteStr("osemtok",     prefs.putString ("osemtok",    c.osemToken), c.osemToken);
     ok &= checkWriteStr("osemmap",     prefs.putString ("osemmap",    c.osemSensors), c.osemSensors);
     ok &= checkWrite   ("osemint",     prefs.putInt    ("osemint",    c.osemIntervalSec), 4);
+    ok &= checkWriteStr("wowid",       prefs.putString ("wowid",      c.wowSiteId), c.wowSiteId);
+    ok &= checkWriteStr("wowpin",      prefs.putString ("wowpin",     c.wowPin), c.wowPin);
+    ok &= checkWrite   ("wowint",      prefs.putInt    ("wowint",     c.wowIntervalSec), 4);
+    ok &= checkWriteStr("cwopcall",    prefs.putString ("cwopcall",   c.cwopCall), c.cwopCall);
+    ok &= checkWrite   ("cwoppass",    prefs.putInt    ("cwoppass",   c.cwopPasscode), 4);
+    ok &= checkWrite   ("cwopint",     prefs.putInt    ("cwopint",    c.cwopIntervalSec), 4);
     ok &= checkWrite   ("updchk",      prefs.putBool   ("updchk",     c.updateCheckEn), 1);
     ok &= checkWriteStr("updurl",      prefs.putString ("updurl",     c.updateUrl), c.updateUrl);
 

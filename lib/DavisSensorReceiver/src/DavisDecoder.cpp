@@ -171,6 +171,50 @@ bool davisDecodeOrdered(const uint8_t bytes[DAVIS_PACKET_LEN], DavisPacket& p, D
     return true;
 }
 
+DavisRainStep DavisRainFilter::update(uint8_t count, uint32_t nowMs)
+{
+    DavisRainStep r;
+    count &= 0x7F;
+    if (!valid_) { valid_ = true; last_ = count; lastMs_ = nowMs; pending_ = false; r.event = DRE_FIRST; return r; }
+    const uint8_t step = (uint8_t)((count - last_) & 0x7F);
+    if (!enabled_) {
+        last_ = count; lastMs_ = nowMs;
+        if (step > 64) { r.event = DRE_REBASED; r.jump = step; return r; }
+        total_ += step; r.tips = step; return r;
+    }
+    auto accept = [&](uint8_t tips, DavisRainEvent ev) {
+        last_ = count; lastMs_ = nowMs; pending_ = false; total_ += tips;
+        r.tips = tips; r.event = ev;
+        return r;
+    };
+    if (pending_) {
+        r.jump = (uint8_t)((pend_ - last_) & 0x7F);
+        if (step <= maxPkt_) {   // back on the old track: the held value was corrupt
+            const uint8_t jump = r.jump;
+            accept(step, DRE_DROPPED);
+            r.jump = jump;
+            return r;
+        }
+        const uint8_t fromHeld = (uint8_t)((count - pend_) & 0x7F);
+        if (fromHeld <= maxPkt_) {   // continues from the held value: the jump is real
+            const uint32_t dt = nowMs - lastMs_;
+            const uint32_t perRate = ((uint32_t)maxMin_ * (dt < 60000UL ? 60000UL : dt) + 59999UL) / 60000UL;
+            if (step <= perRate) { r.jump = step; return accept(step, DRE_CONFIRMED); }
+            const uint8_t jump = r.jump;
+            accept(fromHeld, DRE_REBASED);   // counter reset: only what came after the new reference
+            r.jump = jump;
+            return r;
+        }
+        pend_ = count;          // another implausible value: hold this one instead
+        r.event = DRE_HELD; r.jump = step;
+        return r;
+    }
+    if (step <= maxPkt_) return accept(step, DRE_OK);
+    pending_ = true; pend_ = count;
+    r.event = DRE_HELD; r.jump = step;
+    return r;
+}
+
 uint8_t DavisRainCounter::update(uint8_t count)
 {
     count &= 0x7F;

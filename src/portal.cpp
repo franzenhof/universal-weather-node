@@ -1,4 +1,5 @@
 #include "portal.h"
+#include "portal_pages.h"
 #include "system_restart.h"
 #include "wind_window.h"
 #include "globals.h"
@@ -7,19 +8,22 @@
 #include "generated_version.h"
 #include "decoder_js.h"
 #include "readme_md.h"
+#include <new>
+#include "net_check.h"
+#include "gz_send.h"
 #include "help_page.h"
 #include "calibrate_page.h"
 #include "heltec_board.h"
 #include "serial_log.h"
 #include "loxone.h"
 #include "api_info.h"
+#include "i18n.h"
 
 #include <WiFiManager.h>
 #include <ArduinoOTA.h>
 #include <ArduinoJson.h>
 #include <Update.h>
-#include "ota_check.h"
-#include "esp_flash.h"
+#include "ota_upload.h"
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -46,18 +50,115 @@ static String htmlAttr(const char* s)
 }
 
 // Firmware upload page for /update (see below).
+// A template for sendI18nTemplate(): @N@ = OTA_TEXTS[N].
+static const TextId OTA_TEXTS[] = { T_ota_title, T_ota_hint, T_ota_update, T_ota_back };
 static const char OTA_PAGE_HTML[] PROGMEM =
-    "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<title>Firmware update</title></head><body style='font-family:sans-serif;max-width:480px;margin:1rem auto;padding:0 1rem;'>"
-    "<h3>Firmware update</h3><form method='POST' action='/u' enctype='multipart/form-data'>"
-    "<input type='file' name='update' accept='.bin,application/octet-stream'><br/><small>Either <b>universal-weather-node-&lt;version&gt;.bin</b> or the <i>-factory</i> file (only its firmware part is written). Files that are no firmware are refused.</small><br/><br/>"
-    "<button type='submit'>Update</button></form><p><a href='/'>Back</a></p></body></html>";
+    "<!DOCTYPE html><html lang='@L@'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
+    "<title>@0@</title></head><body style='font-family:sans-serif;max-width:480px;margin:1rem auto;padding:0 1rem;'>"
+    "<h3>@0@</h3><form method='POST' action='/u' enctype='multipart/form-data'>"
+    "<input type='file' name='update' accept='.bin,application/octet-stream'><br/><small>@1@</small><br/><br/>"
+    "<button type='submit'>@2@</button></form><p><a href='/'>@3@</a></p></body></html>";
 
 // ============================================================================
 // WI-FI CONFIGURATION PORTAL
 // ============================================================================
+// Our own portal pages (/update, /calibrate): a PROGMEM template with
+// @N@ = texts[N] (HTML), @jN@ = texts[N] as a JavaScript string, @L@ = the
+// language code; streamed in chunks.
+static void sendI18nTemplate(WebServer& srv, const char* tpl, const TextId* texts, size_t n)
+{
+    srv.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    srv.send(200, "text/html; charset=utf-8", "");
+    String out;
+    auto flush = [&]() { if (out.length()) { srv.sendContent(out); out = String(); } };
+    for (const char* p = tpl; *p; p++) {
+        if (*p == '@') {
+            const char* q = p + 1;
+            bool js = *q == 'j';
+            if (js) q++;
+            if (q[0] == 'L' && q[1] == '@') { out += langCode(i18nCurrent()); p = q + 1; continue; }
+            if (isdigit((unsigned char)*q)) {
+                size_t k = (size_t)atoi(q);
+                while (isdigit((unsigned char)*q)) q++;
+                if (*q == '@' && k < n) {
+                    const char* t = T(texts[k]);
+                    if (!js) out += t;
+                    else {
+                        out += '\'';
+                        for (; *t; t++) { if (*t == '\'' || *t == '\\') out += '\\'; out += *t; }
+                        out += '\'';
+                    }
+                    p = q;
+                    continue;
+                }
+            }
+        }
+        out += *p;
+        if (out.length() >= 512) flush();
+    }
+    flush();
+    srv.sendContent("");
+}
+
+// ---- Shared with the web interface (portal_pages.h) ----
+void portalSendDecoder(WebServer& srv)
+{
+    srv.sendHeader("Content-Disposition", "attachment; filename=\"weather-node-decoder.js\"");
+    srv.send_P(200, "application/javascript; charset=utf-8", DECODER_JS);
+}
+
+void portalSendCalibratePage(WebServer& srv)
+{
+    sendI18nTemplate(srv, CALIBRATE_PAGE_HTML, CALIBRATE_TEXTS, sizeof(CALIBRATE_TEXTS) / sizeof(CALIBRATE_TEXTS[0]));
+}
+
+void portalSendCalibrateSample(WebServer& srv)
+{
+    // Heltec V4: GPIO2 is the RF front end's enable - never read it as the vane
+    int adc = boardPcbAllowed() ? adcAverage(windDirPin()) : 0;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "{\"adc\":%d}", adc);
+    srv.send(200, "application/json", buf);
+}
+
+bool portalHandleCalibrateSave(WebServer& srv)
+{
+    JsonDocument doc;
+    if (deserializeJson(doc, srv.arg("plain"))) {
+        srv.send(400, "text/plain", "Invalid JSON");
+        return false;
+    }
+    Config c = loadConfig();
+    int n = 0;
+    for (JsonObject p : doc["positions"].as<JsonArray>()) {
+        if (n >= 16) break;
+        c.windDirCalAdc[n] = (uint16_t)constrain(p["adc"].as<int>(), 0, 4095);
+        c.windDirCalDeg[n] = (uint16_t)(((p["deg"].as<int>() % 360) + 360) % 360);
+        n++;
+    }
+    if (n == 0) {
+        srv.send(400, "text/plain", "No positions received");
+        return false;
+    }
+    c.windDirCalCount   = n;
+    c.windDirSensorType = 1;
+    saveConfig(c);
+    // Keep the in-memory gCfg in sync too: the web interface keeps running,
+    // and so may the portal (calibration re-run from the button-triggered
+    // portal) without an immediate restart afterward.
+    gCfg.windDirCalCount   = c.windDirCalCount;
+    gCfg.windDirSensorType = c.windDirSensorType;
+    memcpy(gCfg.windDirCalAdc, c.windDirCalAdc, sizeof(gCfg.windDirCalAdc));
+    memcpy(gCfg.windDirCalDeg, c.windDirCalDeg, sizeof(gCfg.windDirCalDeg));
+    srv.send(200, "text/plain; charset=utf-8", TF(T_cal_saved, String(n)));
+    return true;
+}
+
 Config runConfigPortal(const Config& cur)
 {
+    // Portal language: the setting; "Auto" = English here (the parameter
+    // labels are fixed before any browser request).
+    i18nSet(cur.uiLang > 0 && cur.uiLang <= LANG_COUNT ? (uint8_t)(cur.uiLang - 1) : (uint8_t)LANG_EN);
     // Frozen copy of the config as it was when the portal was opened. cur
     // itself is a reference to gCfg (openPortalSaveAndRestart() calls this
     // as runConfigPortal(gCfg)), which the immediate-persist save in
@@ -138,9 +239,10 @@ Config runConfigPortal(const Config& cur)
     itoa(cur.mqttWindAgg,      b_mqttwagg, 10);
     itoa(cur.rfEn,             b_rfen,    10);
     itoa(cur.rfProto,          b_rfproto, 10);
-    // value sources as one field: "air,wind,rain,uv,light" (0 auto, 1 board, 2-5 wireless 1-4, 6 off)
+    // value sources as one field: "air,wind,rain,uv,light,pressure" (0 auto, 1 board, 2-5 wireless 1-4, 6 off;
+    // a value left out keeps its setting, so the old 5-value form still works)
     char b_srcs[16];
-    snprintf(b_srcs, sizeof(b_srcs), "%u,%u,%u,%u,%u", cur.srcSel[0], cur.srcSel[1], cur.srcSel[2], cur.srcSel[3], cur.srcSel[4]);
+    snprintf(b_srcs, sizeof(b_srcs), "%u,%u,%u,%u,%u,%u", cur.srcSel[0], cur.srcSel[1], cur.srcSel[2], cur.srcSel[3], cur.srcSel[4], cur.srcSel[5]);
     itoa(cur.windDirOffsetDeg, b_windoff, 10);
     itoa(cur.windUnitMs,       b_windunit, 10);
     itoa(cur.debugMode,        b_debug,   10);
@@ -193,15 +295,22 @@ Config runConfigPortal(const Config& cur)
     // The CA-cert field is rendered as a raw <textarea>, not a normal
     // WiFiManagerParameter input (2048 bytes doesn't fit that template well).
     // Its value is captured separately via setSaveParamsCallback() below.
-    // Both buffers are `static` (~4.4 KB combined) to avoid growing this
-    // function's stack frame — runConfigPortal() is never called reentrantly.
-    static char b_cacert_html[sizeof(cur.mqttCaCert) + 300];
-    snprintf(b_cacert_html, sizeof(b_cacert_html),
-             "<label>MQTT Root CA certificate (PEM, only used if TLS mode = 1/CA-pinned)</label><br/>"
+    // Both buffers (~4.4 KB) come from the heap only while the portal runs -
+    // not static RAM, not this function's stack frame (runConfigPortal() is
+    // never called reentrantly; the lambdas below use them through the
+    // static pointers).
+    constexpr size_t CACERT_HTML_LEN = sizeof(cur.mqttCaCert) + 300, CACERT_LEN = sizeof(cur.mqttCaCert);
+    static char* b_cacert_html = nullptr;
+    static char* capturedCaCert = nullptr;
+    if (!b_cacert_html) b_cacert_html = (char*)malloc(CACERT_HTML_LEN);
+    if (!capturedCaCert) capturedCaCert = (char*)calloc(1, CACERT_LEN);
+    static char noCaField[1] = "";
+    if (!b_cacert_html || !capturedCaCert) { free(b_cacert_html); free(capturedCaCert); b_cacert_html = capturedCaCert = nullptr; }
+    if (b_cacert_html) snprintf(b_cacert_html, CACERT_HTML_LEN,
+             "<label>%s</label><br/>"
              "<textarea name='mqttcacert' id='mqttcacert' rows='8' cols='48' "
-             "placeholder='-----BEGIN CERTIFICATE-----'>%s</textarea><br/>",
+             "placeholder='-----BEGIN CERTIFICATE-----'>%s</textarea><br/>", T(T_pt_cacert),
              cur.mqttCaCert);
-    static char capturedCaCert[sizeof(cur.mqttCaCert)];
     bool capturedCaCertSet = false;
     // Set once the parameter form was submitted (setSaveParamsCallback). Until
     // then the text/secret parameters hold their display values (escaped,
@@ -218,140 +327,156 @@ Config runConfigPortal(const Config& cur)
     static char capturedStaticDns[16];
     bool capturedStaticIpSet = false;
 
-    WiFiManagerParameter p_lora_section("<div style='margin:1rem 0 0.5rem 0;'><h3>LoRaWAN (optional)</h3><p style='margin:0;'>Only for sending over a LoRaWAN network (TTN, ChirpStack, ...): switch it on and enter the keys. Not needed for a Wi-Fi station.</p></div>");
-    WiFiManagerParameter p_loraen("loraen", "LoRaWAN transport enabled (0=No, 1=Yes)", b_loraen, 2);
-    WiFiManagerParameter p_lowpower("lowpower", "Low-power mode: light sleep between samples (LoRa only, WiFi off; 0=No, 1=Yes)", b_lowpower, 2);
-    WiFiManagerParameter p_vanesave("vanesave", "Low-power mode: switch the wind-vane supply off between readings (PCB v2.0; 0=No, 1=Yes)", b_vanesave, 2);
-    WiFiManagerParameter p_dev    ("dev",      "DevEUI (16 hex chars)",                        b_dev,     17);
-    WiFiManagerParameter p_join   ("join",     "JoinEUI (16 hex chars)",                       b_join,    17);
+    WiFiManagerParameter p_lora_section(T(T_pt_lorawan_optional_only_for_sending));
+    WiFiManagerParameter p_loraen("loraen", T(T_pt_lorawan_transport_enabled_0_no), b_loraen, 2);
+    WiFiManagerParameter p_lowpower("lowpower", T(T_pt_low_power_mode_light_sleep), b_lowpower, 2);
+    WiFiManagerParameter p_vanesave("vanesave", T(T_pt_low_power_mode_switch_the), b_vanesave, 2);
+    WiFiManagerParameter p_dev    ("dev",      T(T_pt_deveui_16_hex_chars),                        b_dev,     17);
+    WiFiManagerParameter p_join   ("join",     T(T_pt_joineui_16_hex_chars),                       b_join,    17);
     // Secrets are never prefilled (the portal AP is open): empty field, an
     // empty submission keeps the stored value.
-    WiFiManagerParameter p_key    ("key",      "AppKey (32 hex chars; leave empty to keep the stored key)", "", 33,
+    WiFiManagerParameter p_key    ("key",      T(T_pt_appkey_32_hex_chars_leave), "", 33,
                                    "placeholder='(unchanged)' autocomplete='off'");
-    WiFiManagerParameter p_region ("region",   "LoRaWAN region (EU868, US915, AU915, AS923, IN865, KR920, CN470, RU864)", b_region, 8);
-    WiFiManagerParameter p_pcb    ("pcbver",   "PCB revision (12=Rev1.2, 13=Rev1.3, 20=v2.0; v2.0 is detected automatically; ignored on a Heltec V4: wireless build only)", b_pcb, 3);
+    WiFiManagerParameter p_region ("region",   T(T_pt_lorawan_region_eu868_us915_au915), b_region, 8);
+    WiFiManagerParameter p_pcb    ("pcbver",   T(T_pt_pcb_revision_12_rev1_2), b_pcb, 3);
     char b_board[2], l_board[160];
     itoa(cur.boardSel, b_board, 10);
-    snprintf(l_board, sizeof(l_board), "Heltec board (0=Auto by flash size, 3=V3, 4=V4; detected: %s, running as %s%s)",
-             boardName(gBoard.detected), boardName(gBoard.kind), boardIsR8() ? ", V4-R8 NOT supported" : "");
+    strlcpy(l_board, (TF(T_pt_board, boardName(gBoard.detected), boardName(gBoard.kind)) +
+                      (boardIsR8() ? String(T(T_pt_v4_r8_not_supported)) : String())).c_str(), sizeof(l_board));
     WiFiManagerParameter p_board  ("board",    l_board, b_board, 2);
-    WiFiManagerParameter p_alt    ("altitude", "Altitude above sea level in m (0-4000)",       b_alt,     6);
-    WiFiManagerParameter p_uplink ("uplinksec","LoRaWAN / measurement interval in s (5-3600)",  b_uplink, 7);
-    WiFiManagerParameter p_sample ("samplesec","Wind sample interval in s: 1 or 3",            b_sample, 4);
-    WiFiManagerParameter p_lorawagg("lorawagg","LoRaWAN wind values: 0 = interval since the last uplink, 1 = 10-min (WMO)", b_lorawagg, 2);
-    WiFiManagerParameter p_mqttsec ("mqttsec", "MQTT interval in s: 0 = like the LoRaWAN interval, else 2-3600", b_mqttsec, 7);
-    WiFiManagerParameter p_mqttwagg("mqttwagg","MQTT wind values: 0 = interval since the last publish, 1 = 10-min (WMO)", b_mqttwagg, 2);
-    WiFiManagerParameter p_rfen    ("rfen",    "Wireless sensors (868 MHz): 1 = receive with the LoRa chip (between uplinks), 0 = off", b_rfen, 2);
-    WiFiManagerParameter p_rfproto ("rfproto", "Wireless sensor type: 16 = Auto (search: stores the type of the first sensor received), 1 = Bresser, 6 = TFA/LaCrosse IT+ (both rates), 2 = IT+ 17.241 kbit/s only, 4 = IT+ 9.579 kbit/s only, 8 = Fine Offset / Ecowitt / Froggit, 10 = IT+ 17.241 kbit/s + Fine Offset (same data rate), 14 = IT+ both rates + Fine Offset, 7 = Bresser + IT+ / 9 = Bresser + Fine Offset alternating (misses packets, not recommended), 17 = Davis Vantage Pro2 / Vue (exclusive: LoRaWAN paused, no other sensors; experimental)", b_rfproto, 2);
+    WiFiManagerParameter p_alt    ("altitude", T(T_pt_altitude_above_sea_level_in),       b_alt,     6);
+    WiFiManagerParameter p_uplink ("uplinksec",T(T_pt_lorawan_measurement_interval_in_s),  b_uplink, 7);
+    WiFiManagerParameter p_sample ("samplesec",T(T_pt_wind_sample_interval_in_s),            b_sample, 4);
+    WiFiManagerParameter p_lorawagg("lorawagg",T(T_pt_lorawan_wind_values_0_interval), b_lorawagg, 2);
+    WiFiManagerParameter p_mqttsec ("mqttsec", T(T_pt_mqtt_interval_in_s_0), b_mqttsec, 7);
+    WiFiManagerParameter p_mqttwagg("mqttwagg",T(T_pt_mqtt_wind_values_0_interval), b_mqttwagg, 2);
+    WiFiManagerParameter p_rfen    ("rfen",    T(T_pt_wireless_sensors_868_mhz_1), b_rfen, 2);
+    WiFiManagerParameter p_rfproto ("rfproto", T(T_pt_wireless_sensor_type_16_auto), b_rfproto, 2);
     // Free-text fields: shown HTML-escaped (htmlAttr), so the field length is
     // at least the escaped length; Config's own buffer limits the saved text.
     auto shownLen = [](int maxLen, const String& shown) { return max(maxLen, (int)shown.length()); };
     const String e_rfids = htmlAttr(cur.rfIds);
-    WiFiManagerParameter p_rfids   ("rfids",   "Wireless sensor IDs (hex, comma-separated, max 32, order = wireless 1-32; empty = any)", e_rfids.c_str(), shownLen(sizeof(cur.rfIds) - 1, e_rfids));
-    WiFiManagerParameter p_srcs    ("srcs",    "Value sources temp/hum, wind, rain, UV, light (0 auto, 1 board, 2-5 wireless 1-4, 6 off)", b_srcs, 15);
-    WiFiManagerParameter p_windoff("windoff",  "Wind direction offset in degrees (-180 to +180)", b_windoff, 5);
+    WiFiManagerParameter p_rfids   ("rfids",   T(T_pt_wireless_sensors_mine_hex_ids), e_rfids.c_str(), shownLen(sizeof(cur.rfIds) - 1, e_rfids));
+    const String e_rfignore = htmlAttr(cur.rfIgnore);
+    WiFiManagerParameter p_rfignore("rfignore", T(T_pt_hidden_wireless_sensors_hex_ids), e_rfignore.c_str(), shownLen(sizeof(cur.rfIgnore) - 1, e_rfignore));
+    char b_rfonly[4];
+    itoa(cur.rfOnlyMine, b_rfonly, 10);
+    WiFiManagerParameter p_rfonly  ("rfonly",  T(T_pt_only_my_sensors_1_accept), b_rfonly, 1);
+    WiFiManagerParameter p_srcs    ("srcs",    T(T_pt_value_sources_temp_hum_wind), b_srcs, 15);
+    WiFiManagerParameter p_windoff("windoff",  T(T_pt_wind_direction_offset_in_degrees), b_windoff, 5);
 
     // Units (in "Basic setup"): one master switch (Metric/Imperial) plus the
     // km/h-vs-m/s refinement, which only applies when Units = Metric.
-    WiFiManagerParameter p_unitsys ("unitsys",  "Units (0=Metric: °C/mm/hPa, 1=Imperial: °F/in/inHg/mph)", b_unitsys, 2);
-    WiFiManagerParameter p_windunit("windunit", "Wind speed unit if Metric (0=km/h, 1=m/s; ignored if Imperial)", b_windunit, 2);
+    WiFiManagerParameter p_unitsys ("unitsys",  T(T_pt_units_0_metric_c_mm), b_unitsys, 2);
+    WiFiManagerParameter p_windunit("windunit", T(T_pt_wind_speed_unit_if_metric), b_windunit, 2);
 
     // Generic (non-Davis) sensor calibration. Rain/wind-speed are simple
     // scale factors; wind direction additionally supports a calibrated
     // lookup table for reed-switch/resistor-ladder vanes (which don't
     // output a continuous voltage) — see the "Calibrate Wind Direction"
     // button on the portal start page.
-    WiFiManagerParameter p_cal_section("<div style='margin:0.5rem 0 0.5rem 0;'><strong>Sensor Calibration</strong> (defaults match the Davis 6410/6466M)</div>");
-    WiFiManagerParameter p_rainmmtip("rainmmtip", "Rain: mm per tip/pulse",                     b_rainmmtip, 11);
-    WiFiManagerParameter p_windmspp ("windmspp",  "Wind speed: m/s per pulse-per-second",       b_windmspp,  11);
-    WiFiManagerParameter p_winddirtyp("winddirtyp", "Wind direction sensor (0=potentiometer, 1=calibrated table — see 'Calibrate Wind Direction' button)", b_winddirtyp, 2);
+    WiFiManagerParameter p_cal_section(T(T_pt_sensor_calibration_defaults_match_the));
+    WiFiManagerParameter p_rainmmtip("rainmmtip", T(T_pt_rain_mm_per_tip_pulse),                     b_rainmmtip, 11);
+    WiFiManagerParameter p_windmspp ("windmspp",  T(T_pt_wind_speed_m_s_per),       b_windmspp,  11);
+    WiFiManagerParameter p_winddirtyp("winddirtyp", T(T_pt_wind_direction_sensor_0_potentiometer), b_winddirtyp, 2);
 
-    WiFiManagerParameter p_winden ("winden",   "Wind sensor on the PCB enabled (0=No, 1=Yes; 0 without a PCB)", cur.windEn ? "1" : "0", 2);
-    WiFiManagerParameter p_rainen ("rainen",   "Rain sensor on the PCB enabled (0=No, 1=Yes; 0 without a PCB)", cur.rainEn ? "1" : "0", 2);
-    WiFiManagerParameter p_rainpersist("rainpersist", "Rain statistics (today/yesterday, last rain, week/month/year): save to flash at most hourly and before restarts so they survive a power cut (1=Yes, 0=RTC RAM only)", cur.rainPersist ? "1" : "0", 2);
-    WiFiManagerParameter p_lipo   ("lipoen",   "LiPo measurement enabled (0=No, 1=Yes)",       cur.lipoEn ? "1" : "0", 2);
-    WiFiManagerParameter p_debug  ("debugmode","Debug mode (0=No, 1=Yes, sends extra telemetry)", b_debug, 2);
-    WiFiManagerParameter p_cpu    ("cpufreq",  "CPU frequency in MHz (80 or 240)",             b_cpu,     4);
-    WiFiManagerParameter p_payfmt ("payfmt",   "LoRaWAN payload format: 1 = compact binary (FPort 3, recommended), 0 = CayenneLPP (FPort 1, about twice the size). "
-                                               "At slow data rates (SF10-SF12: max. 51 bytes) the node leaves out the least important values "
-                                               "(debug, AUX, outputs, Victron, LiPo, DS18B20, then BME280, rain, wind) until the uplink fits - "
-                                               "binary usually sends everything, CayenneLPP often has to drop some. Both need the matching decoder (Payload decoder button).",
+    WiFiManagerParameter p_winden ("winden",   T(T_pt_wind_sensor_on_the_pcb), cur.windEn ? "1" : "0", 2);
+    WiFiManagerParameter p_rainen ("rainen",   T(T_pt_rain_sensor_on_the_pcb), cur.rainEn ? "1" : "0", 2);
+    WiFiManagerParameter p_rainpersist("rainpersist", T(T_pt_rain_statistics_today_yesterday_last), cur.rainPersist ? "1" : "0", 2);
+    WiFiManagerParameter p_lipo   ("lipoen",   T(T_pt_lipo_measurement_enabled_0_no),       cur.lipoEn ? "1" : "0", 2);
+    WiFiManagerParameter p_debug  ("debugmode",T(T_pt_debug_mode_0_no_1), b_debug, 2);
+    WiFiManagerParameter p_cpu    ("cpufreq",  T(T_pt_cpu_frequency_in_mhz_80),             b_cpu,     4);
+    WiFiManagerParameter p_payfmt ("payfmt",   T(T_pt_lorawan_payload_format_1_compact),
                                    b_payfmt, 2);
     // PCB v2.0 I/O block, all off by default; ignored on Rev 1.2/1.3.
     WiFiManagerParameter p_io_section(gIo.hwIdDetected
-        ? "<div style='margin:0.5rem 0 0.5rem 0;'><strong>PCB v2.0 Inputs / Outputs</strong> (board detected as v2.0)</div>"
-        : "<div style='margin:0.5rem 0 0.5rem 0;'><strong>PCB v2.0 Inputs / Outputs</strong> (only used on PCB v2.0)</div>");
-    WiFiManagerParameter p_auxainen  ("auxainen",   "AUX analog input GPIO4 (0=off, 1=on)",                    b_auxainen,   2);
-    WiFiManagerParameter p_auxainscale("auxainscale","AUX analog scale (1 = direct, 1.66667 with R25 15k for 0-5 V)", b_auxainscale, 11);
-    WiFiManagerParameter p_auxpulseen("auxpulseen", "AUX pulse counter GPIO48 (0=off, 1=on)",                  b_auxpulseen, 2);
-    WiFiManagerParameter p_wind2     ("wind2",      "2nd wind sensor on AUX (0=off, 1=speed at PULSE, 2=speed + direction at AIN)", b_wind2, 2);
-    WiFiManagerParameter p_wind2off  ("wind2off",   "2nd wind vane offset in degrees (-180 to 180)",          b_wind2off,   5);
-    WiFiManagerParameter p_heatmode  ("heatmode",   "Heater J12 (0=off, 1=on, 2=auto below threshold)",        b_heatmode,   2);
-    WiFiManagerParameter p_heatduty  ("heatduty",   "Heater power in % (1-100, 10 s cycle / 0.1 Hz; auto: at full-power temperature)", b_heatduty, 4);
-    WiFiManagerParameter p_heatbelow ("heatbelow",  "Heater auto: on below °C (off 1 K above)",                b_heatbelow,  7);
-    WiFiManagerParameter p_heatminduty("heatminduty","Heater auto: power in % at the switch-on temperature",   b_heatminduty, 4);
-    WiFiManagerParameter p_heatfull  ("heatfull",   "Heater auto: full power at and below °C",                 b_heatfull,   7);
-    WiFiManagerParameter p_fanmode   ("fanmode",    "Fan J13 (0=off, 1=on, 2=auto above threshold)",           b_fanmode,    2);
-    WiFiManagerParameter p_fanduty   ("fanduty",    "Fan speed in % (1-100, PWM)",                             b_fanduty,    4);
-    WiFiManagerParameter p_fanabove  ("fanabove",   "Fan auto: on from °C (off 1 K below)",                    b_fanabove,   7);
-    WiFiManagerParameter p_fanminpv  ("fanminpv",   "Fan auto: minimum PV W (0=ignore; missing VE.Direct data=off)", b_fanminpv,   5);
-    WiFiManagerParameter p_tachoen   ("tachoen",    "Fan tacho GPIO40 (0=off, 1=on)",                          b_tachoen,    2);
-    WiFiManagerParameter p_tachoppr  ("tachoppr",   "Tacho pulses per revolution (PC fans: 2)",                b_tachoppr,   2);
-    WiFiManagerParameter p_vedirecten("vedirecten", "Victron VE.Direct (0=off, 1=on)",                         b_vedirecten, 2);
-    WiFiManagerParameter p_outminbatt("outminbatt", "Heater/fan minimum battery V (0=no limit; missing VE.Direct data=off)",  b_outminbatt, 5);
-    WiFiManagerParameter p_uven("uven", "UV sensor on GPIO3 (0=off, 1=on; PCB v2.0 only)", b_uven, 2);
-    WiFiManagerParameter p_uvscale("uvscale", "UV divider scale (terminal V per ADC V: 1.1 for JP10 1-2 / 0-3.3 V, 1.66534 for JP10 2-3 / 0-5 V)", b_uvscale, 11);
-    WiFiManagerParameter p_uvindexen("uvindexen", "Publish calculated UV index (0=off, 1=on)", b_uvindexen, 2);
-    WiFiManagerParameter p_uvcal("uvcal", "UV calibration explicitly verified (0=no, 1=yes)", b_uvcal, 2);
-    WiFiManagerParameter p_uvslope("uvslope", "UV index calibration slope (index per volt, 0.001-30)", b_uvslope, 11);
-    WiFiManagerParameter p_uvoffset("uvoffset", "UV index calibration offset (-10 to +10)", b_uvoffset, 11);
+        ? T(T_pt_pcb_v2_0_inputs_outputs)
+        : T(T_pt_pcb_v2_0_inputs_outputs2));
+    WiFiManagerParameter p_auxainen  ("auxainen",   T(T_pt_aux_analog_input_gpio4_0),                    b_auxainen,   2);
+    WiFiManagerParameter p_auxainscale("auxainscale",T(T_pt_aux_analog_scale_1_direct), b_auxainscale, 11);
+    WiFiManagerParameter p_auxpulseen("auxpulseen", T(T_pt_aux_pulse_counter_gpio48_0),                  b_auxpulseen, 2);
+    WiFiManagerParameter p_wind2     ("wind2",      T(T_pt_2nd_wind_sensor_on_aux), b_wind2, 2);
+    WiFiManagerParameter p_wind2off  ("wind2off",   T(T_pt_2nd_wind_vane_offset_in),          b_wind2off,   5);
+    WiFiManagerParameter p_heatmode  ("heatmode",   T(T_pt_heater_j12_0_off_1),        b_heatmode,   2);
+    WiFiManagerParameter p_heatduty  ("heatduty",   T(T_pt_heatduty), b_heatduty, 4);
+    WiFiManagerParameter p_heatbelow ("heatbelow",  T(T_pt_heater_auto_on_below_c),                b_heatbelow,  7);
+    WiFiManagerParameter p_heatminduty("heatminduty",T(T_pt_heatminduty),   b_heatminduty, 4);
+    WiFiManagerParameter p_heatfull  ("heatfull",   T(T_pt_heater_auto_full_power_at),                 b_heatfull,   7);
+    WiFiManagerParameter p_fanmode   ("fanmode",    T(T_pt_fan_j13_0_off_1),           b_fanmode,    2);
+    WiFiManagerParameter p_fanduty   ("fanduty",    T(T_pt_fanduty),                             b_fanduty,    4);
+    WiFiManagerParameter p_fanabove  ("fanabove",   T(T_pt_fan_auto_on_from_c),                    b_fanabove,   7);
+    WiFiManagerParameter p_fanminpv  ("fanminpv",   T(T_pt_fan_auto_minimum_pv_w), b_fanminpv,   5);
+    WiFiManagerParameter p_tachoen   ("tachoen",    T(T_pt_fan_tacho_gpio40_0_off),                          b_tachoen,    2);
+    WiFiManagerParameter p_tachoppr  ("tachoppr",   T(T_pt_tacho_pulses_per_revolution_pc),                b_tachoppr,   2);
+    WiFiManagerParameter p_vedirecten("vedirecten", T(T_pt_victron_ve_direct_0_off),                         b_vedirecten, 2);
+    WiFiManagerParameter p_outminbatt("outminbatt", T(T_pt_heater_fan_minimum_battery_v),  b_outminbatt, 5);
+    WiFiManagerParameter p_uven("uven", T(T_pt_uv_sensor_on_gpio3_0), b_uven, 2);
+    WiFiManagerParameter p_uvscale("uvscale", T(T_pt_uv_divider_scale_terminal_v), b_uvscale, 11);
+    WiFiManagerParameter p_uvindexen("uvindexen", T(T_pt_publish_calculated_uv_index_0), b_uvindexen, 2);
+    WiFiManagerParameter p_uvcal("uvcal", T(T_pt_uv_calibration_explicitly_verified_0), b_uvcal, 2);
+    WiFiManagerParameter p_uvslope("uvslope", T(T_pt_uv_index_calibration_slope_index), b_uvslope, 11);
+    WiFiManagerParameter p_uvoffset("uvoffset", T(T_pt_uv_index_calibration_offset_10), b_uvoffset, 11);
 
-    WiFiManagerParameter p_section("<div style='margin:0.5rem 0 0.75rem 0;'><h3>Universal-Weather-Node Parameter</h3><p style='margin:0 0 0.35rem 0;'>Firmware version: " FIRMWARE_VERSION "</p><p style='margin:0;'>A Wi-Fi station with a wireless outdoor sensor only needs the Wi-Fi network (\"Configure WiFi\"); the fields under <b>Basic setup</b> are optional. Everything else can also be changed later on the node's web settings page.</p></div>");
-    WiFiManagerParameter p_basic_section("<div style='margin:0.5rem 0 0.5rem 0;'><strong>Basic setup</strong></div>");
-    WiFiManagerParameter p_board_section("<div style='margin:1rem 0 0.5rem 0;'><strong>Board sensors and measurement</strong> (PCB: Davis wind/rain, BME280 is detected automatically)</div>");
+    const String s_section = String("<div style='margin:0.5rem 0 0.75rem 0;'><h3>") + T(T_pt_section_title) +
+                             "</h3><p style='margin:0 0 0.35rem 0;'>" + TF(T_pt_fw_version, FIRMWARE_VERSION) +
+                             "</p><p style='margin:0;'>" + T(T_pt_section_text) + "</p></div>";
+    WiFiManagerParameter p_section(s_section.c_str());
+    char b_uilang[3];
+    itoa(cur.uiLang, b_uilang, 10);
+    WiFiManagerParameter p_uilang ("uilang",   T(T_pt_language), b_uilang, 2);
+    WiFiManagerParameter p_basic_section(T(T_pt_basic_setup));
+    WiFiManagerParameter p_board_section(T(T_pt_board_sensors_and_measurement_pcb));
 
     // Parallel WiFi + MQTT transport, fully optional alongside LoRaWAN. WiFi
     // STA credentials/static-IP are configured via WiFiManager's own "wifi"
     // menu, not here.
-    WiFiManagerParameter p_net_section("<div style='margin:1rem 0 0.75rem 0;'><h3>WiFi + MQTT Parameter</h3><p style='margin:0;'>WiFi network credentials and static IP (optional, default DHCP) are configured separately via the \"Configure WiFi\" menu.</p><p style='margin:0.35rem 0 0 0;'>Weather network uploads (AWEKAS, Weather Underground, ...) and time zone are set on the node's web settings page (http://&lt;node-ip&gt;/api/settings) once WiFi is up.</p></div>");
-    WiFiManagerParameter p_wifien    ("wifien",     "WiFi enabled (0=No, 1=Yes) - master switch for MQTT/Web API", b_wifien, 2);
+    WiFiManagerParameter p_net_section(T(T_pt_wifi_mqtt_parameter_wifi_network));
+    WiFiManagerParameter p_wifien    ("wifien",     T(T_pt_wifi_enabled_0_no_1), b_wifien, 2);
     const String e_devname = htmlAttr(cur.deviceName), e_mqtthost = htmlAttr(cur.mqttHost),
                  e_mqttuser = htmlAttr(cur.mqttUser), e_mqtttopic = htmlAttr(cur.mqttTopic);
-    WiFiManagerParameter p_devname   ("devname",    "Device name (WiFi hostname, MQTT client id, default topic prefix)", e_devname.c_str(), shownLen(33, e_devname));
-    WiFiManagerParameter p_webapien  ("webapien",   "Web REST API + settings page enabled (0=No, 1=Yes)", b_webapien, 2);
-    WiFiManagerParameter p_webadminpw("webadminpw", "Admin password for the web settings page and firmware updates (OTA, /update); leave empty to keep", "", 33,
+    WiFiManagerParameter p_devname   ("devname",    T(T_pt_device_name_wifi_hostname_mqtt), e_devname.c_str(), shownLen(33, e_devname));
+    WiFiManagerParameter p_webapien  ("webapien",   T(T_pt_web_rest_api_settings_page), b_webapien, 2);
+    WiFiManagerParameter p_webadminpw("webadminpw", T(T_pt_admin_password_for_the_web), "", 33,
                                       cur.webAdminPass[0] ? "type='password' autocomplete='new-password' placeholder='(unchanged)'"
                                                           : "type='password' autocomplete='new-password' placeholder='(not set)'");
-    WiFiManagerParameter p_webadminpwclr("webadminpwclr", "Remove the stored admin password (settings page locked, OTA unprotected)", "1", 2,
+    WiFiManagerParameter p_webadminpwclr("webadminpwclr", T(T_pt_remove_the_stored_admin_password), "1", 2,
                                          "type='checkbox'", WFM_LABEL_AFTER);
-    WiFiManagerParameter p_mqtten    ("mqtten",     "MQTT publish/control enabled (0=No, 1=Yes)",   b_mqtten,     2);
-    WiFiManagerParameter p_mqttctrlen("mqttctrlen", "MQTT command topic enabled (0=No, 1=Yes)",     b_mqttctrlen, 2);
-    WiFiManagerParameter p_mqtthost  ("mqtthost",   "MQTT broker host",                             e_mqtthost.c_str(), shownLen(65, e_mqtthost));
-    WiFiManagerParameter p_mqttport  ("mqttport",   "MQTT broker port (standard: 1883 = plain/no TLS, 8883 = TLS)", b_mqttport, 7);
-    WiFiManagerParameter p_mqttuser  ("mqttuser",   "MQTT username (optional)",                     e_mqttuser.c_str(), shownLen(33, e_mqttuser));
-    WiFiManagerParameter p_mqttpass  ("mqttpass",   "MQTT password (optional; leave empty to keep)", "", 33,
+    WiFiManagerParameter p_mqtten    ("mqtten",     T(T_pt_mqtt_publish_control_enabled_0),   b_mqtten,     2);
+    WiFiManagerParameter p_mqttctrlen("mqttctrlen", T(T_pt_mqtt_command_topic_enabled_0),     b_mqttctrlen, 2);
+    WiFiManagerParameter p_mqtthost  ("mqtthost",   T(T_pt_mqtt_broker_host),                             e_mqtthost.c_str(), shownLen(65, e_mqtthost));
+    WiFiManagerParameter p_mqttport  ("mqttport",   T(T_pt_mqtt_broker_port_standard_1883), b_mqttport, 7);
+    WiFiManagerParameter p_mqttuser  ("mqttuser",   T(T_pt_mqtt_username_optional),                     e_mqttuser.c_str(), shownLen(33, e_mqttuser));
+    WiFiManagerParameter p_mqttpass  ("mqttpass",   T(T_pt_mqtt_password_optional_leave_empty), "", 33,
                                       cur.mqttPass[0] ? "type='password' autocomplete='new-password' placeholder='(unchanged)'"
                                                       : "type='password' autocomplete='new-password' placeholder='(not set)'");
-    WiFiManagerParameter p_mqttpassclr("mqttpassclr", "Remove the stored MQTT password", "1", 2, "type='checkbox'", WFM_LABEL_AFTER);
-    WiFiManagerParameter p_mqtttopic ("mqtttopic",  "MQTT topic prefix (optional, default = device name)", e_mqtttopic.c_str(), shownLen(65, e_mqtttopic));
-    WiFiManagerParameter p_mqtttls   ("mqtttls",    "MQTT security (0=plain/no TLS, 1=TLS/trust any cert, 2=TLS/verify cert below)", b_mqtttls, 2);
-    WiFiManagerParameter p_cacert_html(b_cacert_html);
+    WiFiManagerParameter p_mqttpassclr("mqttpassclr", T(T_pt_remove_the_stored_mqtt_password), "1", 2, "type='checkbox'", WFM_LABEL_AFTER);
+    WiFiManagerParameter p_mqtttopic ("mqtttopic",  T(T_pt_mqtt_topic_prefix_optional_default), e_mqtttopic.c_str(), shownLen(65, e_mqtttopic));
+    WiFiManagerParameter p_mqtttls   ("mqtttls",    T(T_pt_mqtt_security_0_plain_no), b_mqtttls, 2);
+    WiFiManagerParameter p_cacert_html(b_cacert_html ? b_cacert_html : noCaField);
     // Loxone UDP output (loxone.h)
     char b_loxen[2], b_loxport[8], b_loxsec[8];
     itoa(cur.loxEn,   b_loxen,   10);
     itoa(cur.loxPort, b_loxport, 10);
     itoa(cur.loxSec,  b_loxsec,  10);
     const String e_loxhost = htmlAttr(cur.loxHost), e_loxprefix = htmlAttr(cur.loxPrefix);
-    WiFiManagerParameter p_loxen    ("loxen",     "Loxone UDP output (0=No, 1=Yes): one datagram name=value per value", b_loxen, 2);
-    WiFiManagerParameter p_loxhost  ("loxhost",   "Loxone Miniserver IP or host name", e_loxhost.c_str(), shownLen(65, e_loxhost));
-    WiFiManagerParameter p_loxport  ("loxport",   "Loxone UDP port (1-65535, default 7000)", b_loxport, 7);
-    WiFiManagerParameter p_loxprefix("loxprefix", "Loxone name prefix (optional, max 16 of A-Z a-z 0-9 _ . -)", e_loxprefix.c_str(), shownLen(17, e_loxprefix));
-    WiFiManagerParameter p_loxsec   ("loxsec",    "Loxone interval in s: 0 = every measurement cycle, else 2-3600", b_loxsec, 7);
+    WiFiManagerParameter p_loxen    ("loxen",     T(T_pt_loxone_udp_output_0_no), b_loxen, 2);
+    WiFiManagerParameter p_loxhost  ("loxhost",   T(T_pt_loxone_miniserver_ip_or_host), e_loxhost.c_str(), shownLen(65, e_loxhost));
+    WiFiManagerParameter p_loxport  ("loxport",   T(T_pt_loxone_udp_port_1_65535), b_loxport, 7);
+    WiFiManagerParameter p_loxprefix("loxprefix", T(T_pt_loxone_name_prefix_optional_max), e_loxprefix.c_str(), shownLen(17, e_loxprefix));
+    WiFiManagerParameter p_loxsec   ("loxsec",    T(T_pt_loxone_interval_in_s_0), b_loxsec, 7);
 
     WiFiManager wm;
     const char* menu[] = { "wifi", "info", "custom", "sep", "exit" };
     wm.setMenu(menu, 5);
-    wm.setCustomMenuHTML("<div style='margin:0.75rem 0 1rem 0;'><div style='font-size:0.85rem;opacity:0.75;margin:0 0 0.25rem 0;'>Firmware version: " FIRMWARE_VERSION "</div><form action='/param' method='get'><button>Universal-Weather-Node Parameter</button></form><br/><form action='/decoder' method='get'><button>Payload decoder (JS)</button></form><br/><form action='/help' method='get'><button>Help / Documentation</button></form><br/><form action='/calibrate' method='get'><button>Calibrate Wind Direction</button></form><br/><form action='/update' method='get'><button>Firmwareupdate</button></form></div>");
+    // kept alive until the portal ends (WiFiManager stores the pointer)
+    static String menuHtml;
+    menuHtml = String("<div style='margin:0.75rem 0 1rem 0;'><div style='font-size:0.85rem;opacity:0.75;margin:0 0 0.25rem 0;'>") +
+               TF(T_pt_fw_version, FIRMWARE_VERSION) + "</div><form action='/param' method='get'><button>" + T(T_pt_section_title) +
+               "</button></form><br/><form action='/decoder' method='get'><button>" + T(T_pt_menu_decoder) +
+               "</button></form><br/><form action='/help' method='get'><button>" + T(T_c_help) +
+               "</button></form><br/><form action='/calibrate' method='get'><button>" + T(T_pt_menu_calibrate) +
+               "</button></form><br/><form action='/update' method='get'><button>" + T(T_pt_menu_update) + "</button></form></div>";
+    wm.setCustomMenuHTML(menuHtml.c_str());
 
     // Static IP (optional, default DHCP): shown as WiFiManager's own built-in
     // IP/Gateway/Subnet/DNS fields on the "Configure WiFi" page (not a custom
@@ -376,6 +501,9 @@ Config runConfigPortal(const Config& cur)
     // - /calibrate*: guided wind-direction calibration for resistor-ladder/
     //   reed-switch vanes (see include/calibrate_page.h)
     wm.setWebServerCallback([&wm, &calibratedThisSession]() {
+        // /help.md is gzip (gz_send.h): it needs the client's Accept-Encoding
+        static const char* hdrs[] = { "Accept-Encoding" };
+        wm.server->collectHeaders(hdrs, 1);
         // Firmware upload, always our own handlers - registered before
         // WiFiManager's /update and /u (this callback runs first, the first
         // matching handler wins): Digest auth when an admin password is set.
@@ -384,63 +512,35 @@ Config runConfigPortal(const Config& cur)
         // its partition table matches this node's); anything else is refused
         // before a byte is written, so a wrong file can't leave a node that
         // doesn't boot.
+        // The streaming part is shared with the web interface (ota_upload.h).
         {
-            static bool uploadAuthOk = false, uploadOk = false;
-            static const char* uploadError = nullptr;
-            static OtaUploadFilter filter;
-            static uint8_t devicePt[OTA_FACTORY_PT_LEN];
-            static bool devicePtOk = false;
             wm.server->on("/update", HTTP_ANY, [&wm]() {
                 if (otaPass[0] && !wm.server->authenticate("admin", otaPass)) {
                     wm.server->requestAuthentication(DIGEST_AUTH, "WeatherNode firmware update");
                     return;
                 }
-                wm.server->send_P(200, "text/html; charset=utf-8", OTA_PAGE_HTML);
+                sendI18nTemplate(*wm.server, OTA_PAGE_HTML, OTA_TEXTS, sizeof(OTA_TEXTS) / sizeof(OTA_TEXTS[0]));
             });
             wm.server->on("/u", HTTP_POST, [&wm]() {
-                if (!uploadAuthOk) {
+                const OtaOutcome o = otaUploadOutcome();
+                if (o == OTA_OUT_NOT_AUTHORIZED || (o == OTA_OUT_NONE && otaPass[0])) {
+                    otaUploadReset();
                     wm.server->requestAuthentication(DIGEST_AUTH, "WeatherNode firmware update");
                     return;
                 }
-                String msg = uploadOk ? String("Update successful, restarting...")
-                           : uploadError ? String("Update refused: ") + uploadError
-                                         : String("Update failed: ") + Update.errorString();
-                wm.server->send(uploadOk ? 200 : 400, "text/plain; charset=utf-8", msg);
-                if (uploadOk) { delay(1000); systemRestart("firmware update (browser)"); }
+                String msg = o == OTA_OUT_OK      ? String(T(T_ota_ok))
+                           : o == OTA_OUT_REFUSED ? TF(T_ota_refused, otaUploadError())
+                                                  : TF(T_ota_failed, o == OTA_OUT_NONE ? "no file" : otaUploadError());
+                otaUploadReset();
+                wm.server->send(o == OTA_OUT_OK ? 200 : 400, "text/plain; charset=utf-8", msg);
+                if (o == OTA_OUT_OK) { delay(1000); systemRestart("firmware update (browser)"); }
             }, [&wm]() {
                 HTTPUpload& up = wm.server->upload();
-                auto refuse = [](const char* why) {
-                    uploadError = why;
-                    dbgSerial.printf("Portal OTA: refused - %s\n", why);
-                    if (Update.isRunning()) Update.abort();
-                };
-                if (up.status == UPLOAD_FILE_START) {
-                    uploadAuthOk = !otaPass[0] || wm.server->authenticate("admin", otaPass);
-                    uploadOk     = false;
-                    uploadError  = nullptr;
-                    dbgSerial.printf("Portal OTA: upload %s\n", uploadAuthOk ? "started" : "refused (not authenticated)");
-                    if (!uploadAuthOk) return;
-                    if (!devicePtOk)
-                        devicePtOk = esp_flash_read(nullptr, devicePt, OTA_FACTORY_PT_OFFSET, sizeof(devicePt)) == ESP_OK;
-                    filter.begin(devicePtOk ? devicePt : nullptr);
-                    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) dbgSerial.printf("Portal OTA: %s\n", Update.errorString());
-                } else if (!uploadAuthOk || uploadError) {
-                    return;   // the rest of the body is read and discarded
-                } else if (up.status == UPLOAD_FILE_WRITE) {
-                    if (!Update.isRunning()) return;
-                    bool ok = filter.feed(up.buf, up.currentSize, [](const uint8_t* d, size_t n, void*) {
-                        return Update.write(const_cast<uint8_t*>(d), n) == n;
-                    }, nullptr);
-                    if (!ok) refuse(filter.error());
-                } else if (up.status == UPLOAD_FILE_END) {
-                    if (!Update.isRunning()) return;
-                    if (!filter.finish()) { refuse(filter.error()); return; }
-                    uploadOk = Update.end(true);
-                    if (uploadOk) dbgSerial.printf("Portal OTA: %s image written\n", filter.isFactory() ? "application part of the factory" : "application");
-                    else          dbgSerial.printf("Portal OTA: %s\n", Update.errorString());
-                } else if (up.status == UPLOAD_FILE_ABORTED) {
-                    Update.abort();
-                }
+                if (up.status == UPLOAD_FILE_START)
+                    otaUploadStart(otaEspOps(), !otaPass[0] || wm.server->authenticate("admin", otaPass), "Portal OTA");
+                else if (up.status == UPLOAD_FILE_WRITE) otaUploadChunk(up.buf, up.currentSize);
+                else if (up.status == UPLOAD_FILE_END)   otaUploadFinish();
+                else if (up.status == UPLOAD_FILE_ABORTED) otaUploadAbort();
             });
         }
         // WiFiManager's own /restart (not in the menu, reachable by URL)
@@ -451,59 +551,17 @@ Config runConfigPortal(const Config& cur)
             delay(1000);
             systemRestart("portal /restart");
         });
-        wm.server->on("/decoder", [&wm]() {
-            wm.server->sendHeader("Content-Disposition",
-                                  "attachment; filename=\"weather-node-decoder.js\"");
-            wm.server->send_P(200, "application/javascript; charset=utf-8", DECODER_JS);
-        });
+        wm.server->on("/decoder", [&wm]() { portalSendDecoder(*wm.server); });
         wm.server->on("/help", [&wm]() {
             wm.server->send_P(200, "text/html; charset=utf-8", HELP_PAGE_HTML);
         });
         wm.server->on("/help.md", [&wm]() {
-            wm.server->send_P(200, "text/plain; charset=utf-8", README_MD);
+            sendGzipAsset(*wm.server, README_MD_GZ, README_MD_GZ_LEN, README_MD_LEN, "text/plain; charset=utf-8");
         });
-        wm.server->on("/calibrate", [&wm]() {
-            wm.server->send_P(200, "text/html; charset=utf-8", CALIBRATE_PAGE_HTML);
-        });
-        wm.server->on("/calibrate/sample", HTTP_GET, [&wm]() {
-            // Heltec V4: GPIO2 is the RF front end's enable - never read it as the vane
-            int adc = boardPcbAllowed() ? adcAverage(PIN_ADC_WINDDIRECTION) : 0;
-            char buf[32];
-            snprintf(buf, sizeof(buf), "{\"adc\":%d}", adc);
-            wm.server->send(200, "application/json", buf);
-        });
+        wm.server->on("/calibrate", [&wm]() { portalSendCalibratePage(*wm.server); });
+        wm.server->on("/calibrate/sample", HTTP_GET, [&wm]() { portalSendCalibrateSample(*wm.server); });
         wm.server->on("/calibrate/save", HTTP_POST, [&wm, &calibratedThisSession]() {
-            String body = wm.server->arg("plain");
-            JsonDocument doc;
-            if (deserializeJson(doc, body)) {
-                wm.server->send(400, "text/plain", "Invalid JSON");
-                return;
-            }
-            Config c = loadConfig();
-            int n = 0;
-            for (JsonObject p : doc["positions"].as<JsonArray>()) {
-                if (n >= 16) break;
-                c.windDirCalAdc[n] = (uint16_t)constrain(p["adc"].as<int>(), 0, 4095);
-                c.windDirCalDeg[n] = (uint16_t)(((p["deg"].as<int>() % 360) + 360) % 360);
-                n++;
-            }
-            if (n == 0) {
-                wm.server->send(400, "text/plain", "No positions received");
-                return;
-            }
-            c.windDirCalCount   = n;
-            c.windDirSensorType = 1;
-            saveConfig(c);
-            // Keep the in-memory gCfg in sync too, in case the device keeps
-            // running (e.g. calibration re-run from the button-triggered
-            // portal) without an immediate restart afterward.
-            gCfg.windDirCalCount   = c.windDirCalCount;
-            gCfg.windDirSensorType = c.windDirSensorType;
-            memcpy(gCfg.windDirCalAdc, c.windDirCalAdc, sizeof(gCfg.windDirCalAdc));
-            memcpy(gCfg.windDirCalDeg, c.windDirCalDeg, sizeof(gCfg.windDirCalDeg));
-            calibratedThisSession = true;
-            wm.server->send(200, "text/plain",
-                            "Calibration saved (" + String(n) + " positions). You can close this page.");
+            if (portalHandleCalibrateSave(*wm.server)) calibratedThisSession = true;
         });
     });
 
@@ -601,10 +659,15 @@ Config runConfigPortal(const Config& cur)
         c.mqttIntervalSec  = (ms == 0 || (ms >= 2 && ms <= 3600)) ? ms : c.mqttIntervalSec;
         { int v = atoi(p_rfen.getValue()); c.rfEn = v == RF_RADIO_SX1262 ? RF_RADIO_SX1262 : RF_RADIO_OFF; }
         { int v = atoi(p_rfproto.getValue()); if (rfProtoValid(v)) c.rfProto = v; }
-        if (paramsSubmitted) strlcpy(c.rfIds, p_rfids.getValue(), sizeof(c.rfIds));
+        if (paramsSubmitted) {
+            strlcpy(c.rfIds, p_rfids.getValue(), sizeof(c.rfIds));
+            strlcpy(c.rfIgnore, p_rfignore.getValue(), sizeof(c.rfIgnore));
+            int v = atoi(p_rfonly.getValue());
+            if (v == 0 || v == 1) c.rfOnlyMine = v;
+        }
         {
             const char* p = p_srcs.getValue();
-            for (int i = 0; i < 5 && *p; i++) {
+            for (int i = 0; i < (int)sizeof(c.srcSel) && *p; i++) {
                 int v = atoi(p);
                 if (v >= 0 && v <= 6) c.srcSel[i] = (uint8_t)v;
                 while (*p && *p != ',') p++;
@@ -614,6 +677,7 @@ Config runConfigPortal(const Config& cur)
         c.windDirOffsetDeg = constrain(atoi(p_windoff.getValue()), -180, 180);
         c.windUnitMs       = (atoi(p_windunit.getValue()) == 0) ? 0 : 1;
         c.unitSystem       = (atoi(p_unitsys.getValue()) == 1) ? 1 : 0;
+        { int v = atoi(p_uilang.getValue()); if (v >= 0 && v <= LANG_COUNT) c.uiLang = v; }
         float rainMmPerTipVal = atof(p_rainmmtip.getValue());
         if (rainMmPerTipVal > 0.0f) c.rainMmPerTip = rainMmPerTipVal;
         float windMsPerPpsVal = atof(p_windmspp.getValue());
@@ -648,7 +712,10 @@ Config runConfigPortal(const Config& cur)
         // page was actually submitted this session, or a param-only save
         // would otherwise silently reset an existing static IP to DHCP.
         if (capturedStaticIpSet) {
-            if (capturedStaticIp[0] != '\0') {
+            // a complete address only (an IP without a valid gateway was stored before and made
+            // every later web save fail with "static IP: invalid address"); else DHCP
+            if (ipValid(capturedStaticIp) && ipValid(capturedStaticGw) &&
+                (!capturedStaticSn[0] || ipValid(capturedStaticSn)) && (!capturedStaticDns[0] || ipValid(capturedStaticDns))) {
                 c.staticIpEn = 1;
                 strlcpy(c.staticIp,      capturedStaticIp, sizeof(c.staticIp));
                 strlcpy(c.staticGateway, capturedStaticGw,  sizeof(c.staticGateway));
@@ -683,7 +750,7 @@ Config runConfigPortal(const Config& cur)
         // submitted this session (setSaveParamsCallback fired) — otherwise a
         // portal session that never touches the params page (e.g. WiFi-only
         // reconfiguration) would silently wipe a previously stored certificate.
-        if (capturedCaCertSet) strlcpy(c.mqttCaCert, capturedCaCert, sizeof(c.mqttCaCert));
+        if (capturedCaCertSet && capturedCaCert) strlcpy(c.mqttCaCert, capturedCaCert, sizeof(c.mqttCaCert));
 
         c.loxEn = atoi(p_loxen.getValue()) ? 1 : 0;
         { int v = atoi(p_loxport.getValue()); if (loxPortValid(v)) c.loxPort = v; }
@@ -702,8 +769,10 @@ Config runConfigPortal(const Config& cur)
     // wm.server still has the submitted request's args available.
     wm.setSaveParamsCallback([&wm, &capturedCaCertSet, &paramsSubmitted, &buildConfig]() {
         String v = wm.server->arg("mqttcacert");
-        strlcpy(capturedCaCert, v.c_str(), sizeof(capturedCaCert));
-        capturedCaCertSet = true;
+        if (capturedCaCert) {
+            strlcpy(capturedCaCert, v.c_str(), CACERT_LEN);
+            capturedCaCertSet = true;
+        }
         paramsSubmitted   = true;
 
         // Persist immediately. The "Universal-Weather-Node Parameter" page
@@ -745,8 +814,9 @@ Config runConfigPortal(const Config& cur)
     // wireless sensor may want first, LoRaWAN (optional) at the end.
     wm.addParameter(&p_section);
     wm.addParameter(&p_basic_section);
+    wm.addParameter(&p_uilang);
     wm.addParameter(&p_devname);  wm.addParameter(&p_alt);
-    wm.addParameter(&p_rfen);     wm.addParameter(&p_rfproto); wm.addParameter(&p_rfids);
+    wm.addParameter(&p_rfen);     wm.addParameter(&p_rfproto); wm.addParameter(&p_rfids); wm.addParameter(&p_rfignore); wm.addParameter(&p_rfonly);
     wm.addParameter(&p_unitsys);  wm.addParameter(&p_windunit);
 
     wm.addParameter(&p_board_section);
@@ -842,5 +912,8 @@ Config runConfigPortal(const Config& cur)
 
     if (otaHandle) { vTaskDelete(otaHandle); ArduinoOTA.end(); }
 
-    return buildConfig();
+    Config result = buildConfig();
+    free(b_cacert_html);  b_cacert_html = nullptr;   // the portal's heap buffers
+    free(capturedCaCert); capturedCaCert = nullptr;
+    return result;
 }

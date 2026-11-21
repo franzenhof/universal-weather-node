@@ -6,15 +6,15 @@
 #include <Arduino.h>
 #include "vedirect.h"
 
-#define PIN_HW_ID        20   // revision ID divider (ADC2 - read before WiFi starts)
+// revision ID divider (ADC2 - read before WiFi starts): V3 GPIO20, V4 GPIO15 (heltec_board.h boardHwIdPin())
 #define PIN_UV_AIN        3   // PCB v2.0 UV input (ADC1), input-only even when disabled
 #define PIN_AUX_AIN       4   // AUX analog input (ADC1), 10k series, optional 15k divider
 #define PIN_AUX_PULSE    48   // AUX pulse input via inverting Schmitt trigger
 #define PIN_HEATER       38   // heater output J12, low side, HIGH = on
 #define PIN_FAN          39   // fan output J13, high side, HIGH = on
 #define PIN_TACHO        40   // fan tacho via inverting Schmitt trigger
-#define PIN_VE_RX        33   // from the Victron TX (through the isolator)
-#define PIN_VE_TX        34   // to the Victron RX (not used, idle high)
+// VE.Direct RX 33 (both), TX V3 34 / V4 45 (strap pin: R65 holds it low at reset,
+// driven HIGH = idle only after boot) - heltec_board.h boardPins()
 
 #define PCNT_UNIT_AUX_PULSE  PCNT_UNIT_2
 #define PCNT_UNIT_TACHO      PCNT_UNIT_3

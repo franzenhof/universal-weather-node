@@ -7,6 +7,14 @@
 #include "board_io.h"
 #include "heltec_board.h"
 #include "serial_log.h"
+#include "sources.h"
+#include "records.h"
+#include "alarms.h"
+
+// records_store.cpp (weak default: host builds without it)
+__attribute__((weak)) void recordsResetRequest(bool) {}
+// alarms_run.cpp (weak default: host builds without it)
+__attribute__((weak)) bool alarmsSetEnabledMask(uint16_t) { return false; }
 #include <Arduino.h>
 #include <Preferences.h>
 
@@ -52,6 +60,34 @@ bool applyParam(uint8_t paramId, int16_t value)
         case PARAM_SRC_UV: case PARAM_SRC_LIGHT:
             if (value < 0 || value > 6) return false;
             gCfg.srcSel[paramId - PARAM_SRC_TEMP_HUM] = (uint8_t)value;
+            return true;
+        case PARAM_RF_ONLY_MINE:
+            if (value != 0 && value != 1) return false;
+            gCfg.rfOnlyMine = value;
+            return true;
+        case PARAM_CAL_TEMP_DC:     if (value < -100 || value > 100)  return false; gCfg.calTempDc = value;     return true;
+        case PARAM_CAL_HUM_DPCT:    if (value < -200 || value > 200)  return false; gCfg.calHumDpct = value;    return true;
+        case PARAM_CAL_PRESS_DHPA:  if (value < -200 || value > 200)  return false; gCfg.calPressDhpa = value;  return true;
+        case PARAM_CAL_RAIN_PERMIL: if (value < 500 || value > 2000)  return false; gCfg.calRainPermil = value; return true;
+        case PARAM_CAL_WIND_PERMIL: if (value < 500 || value > 2000)  return false; gCfg.calWindPermil = value; return true;
+        case PARAM_RECORDS_RESET:   if (value != 1 && value != 2)     return false; recordsResetRequest(value == 2); return true;
+        case PARAM_ALARM_ENABLED:   if (value < 0 || value > 4095)    return false; return alarmsSetEnabledMask((uint16_t)value);
+        case PARAM_SUN_METHOD:      if (value != 0 && value != 1)     return false; gCfg.sunMethod = value;     return true;
+        case PARAM_SETUP_DONE:
+            if (value != 0 && value != 1) return false;
+            gCfg.setupDone = value;
+            return true;
+        case PARAM_UI_LANG:
+            if (value < 0 || value > 5) return false;
+            gCfg.uiLang = value;
+            return true;
+        case PARAM_RF_HIDDEN_CLEAR:
+            if (value != 0) return false;
+            gCfg.rfIgnore[0] = '\0';
+            return true;
+        case PARAM_SRC_PRESSURE:
+            if (value < 0 || value > 6) return false;
+            gCfg.srcSel[SG_PRESS] = (uint8_t)value;
             return true;
         case PARAM_RF_PROTO:
             if (!rfProtoValid(value)) return false;

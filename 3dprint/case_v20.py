@@ -1,4 +1,10 @@
-"""Generate the v2.0 indoor enclosure; dimensions in mm, PCB-local XY."""
+"""Generate the v2.0 indoor enclosure; dimensions in mm, PCB-local XY.
+
+--heltec v3 (default, sockets J1/J2) or v4 (sockets J19/J20, rows 2.54 mm further down in
+PCB-local Y, module 51.7 mm long): the lid window, PRG button and USB opening follow the
+module. V4 button / USB positions come from the Heltec V4 STEP model, the display window is
+the V3 window shifted with the rows - check the first print.
+"""
 
 import argparse
 import importlib.util
@@ -38,6 +44,13 @@ GUIDE_H = 3.0
 JACK_Z = 6.5        # J18 DC jack barrel axis above the PCB top (XKB DC-005 drawing)
 JACK_D = 10.0       # knock-out diameter: room for common 5.5 mm plug overmoulds
 JACK_SKIN = 0.6     # left closed on the outside until J18 is fitted
+# Heltec module variants (PCB-local mm): row shift, PRG button, module envelope (x0, x1, y0, y1)
+HELTEC = {
+    "v3": dict(dy=0.0, button=BUTTON, envelope=(1.5, 51.7, 8.18, 33.68), out="v20", stem="universal-weather-node-v2.0"),
+    # V4 STEP: board X -1.27..50.42 / Y +-12.7 around the rows, pin 1 at X 2.16; PRG button S2 at Y +7.91
+    "v4": dict(dy=2.54, button=(4.2, 15.56), envelope=(0.77, 52.46, 10.77, 36.17), out="v20-v4",
+               stem="universal-weather-node-v2.0-v4"),
+}
 
 
 def pcb_facts():
@@ -82,7 +95,7 @@ def pcb_facts():
         raise ValueError(f"Unexpected mounting pattern: {mounts}")
     expected = {"J1": (4.2, 32.36, 90), "J2": (4.2, 9.5, 90),
                 "J6": (83.1, 18.325, 90), "J4": (83.1, 41.325, 90),
-                "J14": (5, 38.8, -90), "J17": (94.5, 81, 90), "J18": (13.3, 79, 0)}
+                "J14": (5, 39.3, -90), "J17": (94.5, 81, 90), "J18": (13.3, 79, 0)}
     for ref, position in expected.items():
         if any(abs(a - b) > 0.001 for a, b in zip(footprints[ref], position)):
             raise ValueError(f"{ref} moved; revise enclosure openings: {footprints[ref]}")
@@ -100,7 +113,12 @@ def pcb_facts():
     return footprints, mounts
 
 
-def generate(output):
+def generate(output, heltec="v3"):
+    global USB_Y, DISPLAY, BUTTON
+    h = HELTEC[heltec]
+    USB_Y = USB_Y + h["dy"]
+    DISPLAY = (DISPLAY[0], DISPLAY[1], DISPLAY[2] + h["dy"], DISPLAY[3] + h["dy"])
+    BUTTON = h["button"]
     from build123d import (Align, Axis, Box, Compound, Cylinder, Location, Plane, RegularPolygon,
                           Text, export_step, export_stl, extrude, fillet)
     import trimesh
@@ -206,7 +224,8 @@ def generate(output):
     for x, y in mounts:
         pcb -= cylinder(x, y, 1.6, PCB_Z - 1, PCB_Z + PCB_T + 1)
 
-    envelopes = [pcb, block(1.5, 51.7, 8.18, 33.68, PCB_Z + PCB_T + 8.5, PCB_Z + 21)]
+    ex0, ex1, ey0, ey1 = h["envelope"]
+    envelopes = [pcb, block(ex0, ex1, ey0, ey1, PCB_Z + PCB_T + 8.5, PCB_Z + 21)]
     for ref in ("J6", "J4"):
         cy = footprints[ref][1] - 3.175
         envelopes.append(block(81.8, 100.1, cy - 6.65, cy + 6.65, PCB_Z + PCB_T, PCB_Z + PCB_T + 11.6))
@@ -254,12 +273,13 @@ def generate(output):
     report = {"pcb_mm": [100, 100, PCB_T], "pcb_bottom_z_mm": PCB_Z,
               "coordinates": "Opening/mount data: PCB-local Y down; STEP assembly: X=PCB X, Y=-PCB Y, Z up",
               "mounts_mm": mounts, "openings": openings, "parts": {},
+              "heltec": heltec, "button_xy_mm": BUTTON, "display_window_mm": DISPLAY, "usb_y_mm": USB_Y,
               "button_estimated_top_mm": BUTTON_TOP, "button_length_mm": pin_length,
               "qualification": "CAD checks only; physical fit and IP rating unverified"}
     for name, shape in printable.items():
         if not shape.is_valid or len(shape.solids()) != 1:
             raise ValueError(f"Invalid printable {name}")
-        stem = output / f"universal-weather-node-v2.0-{name}"
+        stem = output / f"{h['stem']}-{name}"
         step_path, stl_path = Path(str(stem) + ".step"), Path(str(stem) + ".stl")
         export_step(shape, str(step_path))
         export_stl(shape, str(stl_path), tolerance=0.03, angular_tolerance=0.15)
@@ -274,16 +294,16 @@ def generate(output):
                                 "watertight": True, "single_solid": True}
         print(f"PASS {name}: {mesh.extents.round(2)}, watertight, single solid")
     export_step(Compound([body, lid, button_assembled, *envelopes]),
-                str(output / "universal-weather-node-v2.0-assembly.step"))
+                str(output / f"{h['stem']}-assembly.step"))
     (output / "validation.json").write_text(json.dumps(report, indent=2) + "\n")
     (output / "display-cover.svg").write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="37mm" height="22mm" viewBox="0 0 37 22">\n'
         '  <rect x="0" y="0" width="37" height="22" fill="none" stroke="black" stroke-width="0.2"/>\n'
         '</svg>\n')
-    preview(output, assembled, envelopes)
+    preview(output, assembled, envelopes, heltec)
 
 
-def preview(output, parts, envelopes):
+def preview(output, parts, envelopes, heltec="v3"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -318,7 +338,7 @@ def preview(output, parts, envelopes):
         ax.set_proj_type("ortho")
         ax.view_init(elev=90, azim=-90)
         ax.set_axis_off()
-    fig.suptitle("Universal Weather Node v2.0 - indoor prototype enclosure\n"
+    fig.suptitle(f"Universal Weather Node v2.0 (Heltec {heltec.upper()}) - indoor prototype enclosure\n"
                  "PCB-derived XY; component heights/display/button fit require a first-print check")
     fig.tight_layout()
     fig.savefig(output / "preview.png", dpi=180)
@@ -327,6 +347,7 @@ def preview(output, parts, envelopes):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=OUT)
+    parser.add_argument("--heltec", choices=sorted(HELTEC), default="v3")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    generate(args.output)
+    generate(args.output or HERE / HELTEC[args.heltec]["out"], args.heltec)

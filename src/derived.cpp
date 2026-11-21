@@ -159,3 +159,8 @@ int compareVersions(const char* a, const char* b)
     if (c) return c < 0 ? -1 : 1;
     return x.preNum == y.preNum ? 0 : (x.preNum < y.preNum ? -1 : 1);
 }
+
+float seaLevelPressureHpa(float stationHpa, int altitudeM)
+{
+    return stationHpa / powf(1.0f - (float)altitudeM / 44330.0f, 5.255f);
+}

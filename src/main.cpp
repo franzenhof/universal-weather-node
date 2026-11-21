@@ -1,3 +1,4 @@
+#include "ota_upload.h"
 #include "davis_rx.h"
 #include "davis_diag.h"
 #include <Arduino.h>
@@ -87,6 +88,13 @@ extern SPIClass* hspi;
 #include "wind_window.h"
 #include "rf_sensors.h"
 #include "sources.h"
+#include "calibration.h"
+#include "records.h"
+#include "astro.h"
+#include "alarms.h"
+#include "oled_screens.h"
+#include "custom_upload.h"
+#include "out_status.h"
 #include "loxone.h"
 
 // ============================================================================
@@ -98,26 +106,61 @@ static bool          displayActive    = false;
 static unsigned long displayOnSinceMs = 0;
 static unsigned long displayOnForMs   = 0;
 
+static uint8_t       displayScreen    = 0;   // oled_screens.h OledScreen
+static unsigned long displayScreenMs  = 0;   // when the current screen was drawn (rotation)
+static int           displayContrast  = -1;
+
 static void drawDisplay();
 
 // Switches the display on and redraws the latest values - turning it on
 // alone would show whatever was drawn last (possibly hours-old data or the
-// "LoRaWAN Join..." screen).
+// "LoRaWAN Join..." screen). A PRG press: 20 s, or the configured minutes
+// in mode 2 (Settings → Display).
 static void activateDisplay(unsigned long durationMs = 20000)
 {
+    if (durationMs == 20000 && gCfg.dispMode == 2) durationMs = (unsigned long)gCfg.dispMinutes * 60000UL;
+    if (!displayActive || !(gCfg.dispScreens & (1 << displayScreen)))
+        displayScreen = oledNextScreen(OS_COUNT - 1, gCfg.dispScreens);   // the first enabled screen
     displayActive    = true;
     displayOnSinceMs = millis();
     displayOnForMs   = durationMs;
+    displayScreenMs  = millis();
     display.displayOn();
     drawDisplay();
     display.display();
 }
 
+static bool displayNight()
+{
+    struct tm lt;
+    return gCfg.dispNightFrom != gCfg.dispNightTo && localTimeNow(lt) &&
+           oledNightNow(gCfg.dispNightFrom, gCfg.dispNightTo, lt.tm_hour);
+}
+
 static void updateDisplayState()
 {
-    if (displayActive && millis() - displayOnSinceMs >= displayOnForMs) {
+    if (displayContrast != gCfg.dispContrast) { displayContrast = gCfg.dispContrast; display.setContrast((uint8_t)displayContrast); }
+    // mode 1: always on (outside the night hours)
+    if (gCfg.dispMode == 1 && !displayActive && !displayNight()) activateDisplay(0xFFFFFFFFUL);
+    if (gCfg.dispMode == 1 && displayActive && displayOnForMs == 0xFFFFFFFFUL && displayNight()) displayOnForMs = 0;
+    if (gCfg.dispMode != 1 && displayActive && displayOnForMs == 0xFFFFFFFFUL) {   // "always" switched off: the usual timeout
+        displayOnSinceMs = millis();
+        displayOnForMs = 20000;
+    }
+    if (displayActive && displayOnForMs != 0xFFFFFFFFUL && millis() - displayOnSinceMs >= displayOnForMs) {
         displayActive = false;
         display.displayOff();
+        return;
+    }
+    // rotation through the enabled screens
+    if (displayActive && millis() - displayScreenMs >= (unsigned long)gCfg.dispRotateSec * 1000UL) {
+        displayScreenMs = millis();
+        const uint8_t next = oledNextScreen(displayScreen, gCfg.dispScreens);
+        if (next != displayScreen || displayScreen != OS_CLASSIC) {   // the classic screen alone: redrawn per cycle as before
+            displayScreen = next;
+            drawDisplay();
+            display.display();
+        }
     }
 }
 
@@ -232,7 +275,19 @@ static void handleButton()
 
     // Both pending: a release older than the press belongs to the previous press.
     if (pressEvent && releaseEvent && (long)(releaseMs - pressMs) < 0) {
-        if (!longFired && (releaseMs - pressedAtMs) < 3000) activateDisplay(20000);
+        if (!longFired && (releaseMs - pressedAtMs) < 3000) {
+            // already on with several screens: the press shows the next one
+            const uint8_t mask = (uint8_t)gCfg.dispScreens;
+            if (displayActive && (mask & (mask - 1))) {
+                displayScreen = oledNextScreen(displayScreen, mask);
+                displayScreenMs = millis();
+                if (displayOnForMs != 0xFFFFFFFFUL) displayOnSinceMs = millis();   // and stays on a while longer
+                drawDisplay();
+                display.display();
+            } else {
+                activateDisplay(20000);
+            }
+        }
         releaseEvent = false;
     }
 
@@ -381,6 +436,7 @@ static PathValues pathValues(int idx, int aggMode, unsigned long now)
     // windValid stays false and the payloads leave wind out - not the
     // previous cycle's values as if they were current. Speed/gust 0 for the
     // globals; the vane keeps its last direction.
+    w = calWind(w);   // wind speed factor (calibration.h), board and wireless
     v.windValid  = w.valid;
     v.windDirDeg = (w.valid && w.dirValid) ? w.dirDeg : windDirection;
     if (w.valid) {
@@ -551,6 +607,8 @@ static bool sendLoRa()
         dbgSerial.println("LoRaWAN: failed to persist session/nonces.");
 
     // status-page diagnostics (read by the web task)
+    if (state >= RADIOLIB_ERR_NONE) outReport(OUT_LORAWAN, true);
+    else                            outReport(OUT_LORAWAN, false, state, "send failed");
     if (state >= RADIOLIB_ERR_NONE) {
         gLoraDiag.haveUplink = true;
         gLoraDiag.dataRate   = evUp.datarate;
@@ -613,6 +671,7 @@ static void drawDisplay()
 {
     char buf[64];
     display.clear();
+    if (displayScreen != OS_CLASSIC) { oledDrawScreen(display, displayScreen); return; }
 
     if (srcActive(SG_WIND)) {
         snprintf(buf, sizeof(buf), "D%03d S%.1f G%.1f %s",
@@ -630,11 +689,11 @@ static void drawDisplay()
         snprintf(buf, sizeof(buf), "#%d", loopCount);
     display.drawString(0, 11, buf);
 
-    if (gSrc.tempValid && bme280Present)
+    if (gSrc.tempValid && gSrc.pressValid)
         snprintf(buf, sizeof(buf), "%.1f%s  %.1f%%rH  %.0f%s",
                  temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg),
                  gSrc.humidity,
-                 pressureForOutput(bme280PressAbs, gCfg), pressureUnitLabel(gCfg));
+                 pressureForOutput(gSrc.pressAbsHpa, gCfg), pressureUnitLabel(gCfg));
     else if (gSrc.tempValid)
         snprintf(buf, sizeof(buf), "%.1f%s  %.1f%%rH (radio)",
                  temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg), gSrc.humidity);
@@ -648,7 +707,12 @@ static void drawDisplay()
         if (!isnan(gIo.ve.pvW)) n += snprintf(buf + n, sizeof(buf) - n, " PV %.0fW", gIo.ve.pvW);
         snprintf(buf + n, sizeof(buf) - n, "%s%s", gIo.heaterOn ? " H" : "", gIo.fanOn ? " F" : "");
     } else {
-        snprintf(buf, sizeof(buf), "Batt: %.3fV%s%s", batteryVolt, gIo.heaterOn ? " H" : "", gIo.fanOn ? " F" : "");
+        // LiPo measurement off: nothing to show (no more "Batt: 0.000V"); below 2.5 V: no battery, USB powered
+        int n = 0;
+        if (gCfg.lipoEn) n = batteryVolt < BATTERY_PRESENT_V ? snprintf(buf, sizeof(buf), "USB")
+                                                             : snprintf(buf, sizeof(buf), "Batt: %.2fV", batteryVolt);
+        else buf[0] = '\0';
+        snprintf(buf + n, sizeof(buf) - n, "%s%s", gIo.heaterOn ? " H" : "", gIo.fanOn ? " F" : "");
     }
     display.drawString(0, 33, buf);
 
@@ -719,14 +783,26 @@ void setup()
     // already has power when the RST pulse is issued.
     heltec_ve(true);
 
-    heltec_setup();
+    // heltec_setup() begins UART0 (Serial.begin) - only on a V3. On a V4 the
+    // same steps without it, and the log over the native USB (heltec_board.h
+    // boardUseUart0(): GPIO43/44 are 1-Wire / wind speed on PCB v2.0).
+    if (boardUseUart0(gBoard.detected)) {
+        heltec_setup();
+    } else {
+        serialLogUseUsb();
+        hspi->begin(SCK, MISO, MOSI, SS);
+        heltec_display_power(true);
+        display.init();
+        display.setContrast(255);
+        display.flipScreenVertically();
+    }
 
     // Button interrupt – must be registered early so no press is missed
     pinMode(BUTTON, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(BUTTON), buttonISR, CHANGE);
 
     display.init();
-    display.setContrast(200);
+    display.setContrast((uint8_t)gCfg.dispContrast);
     display.setTextAlignment(TEXT_ALIGN_LEFT);
     display.setFont(ArialMT_Plain_10);
     display.clear();
@@ -758,19 +834,20 @@ void setup()
     setCpuFrequencyMhz(gCfg.cpuFreqMhz);
 
     // Board in effect (setting or detection) and, on a V4, its RF front end -
-    // before anything uses the radio. A V4 runs without the custom PCB: its
-    // wind/rain inputs collide with the FEM pins (GPIO2/GPIO7), they stay off
-    // in RAM (the stored settings are not changed here).
+    // before anything uses the radio.
     boardApply(gCfg.boardSel);
     femInit();
-    if (!boardPcbAllowed()) { gCfg.windEn = 0; gCfg.rainEn = 0; }
 
-    // PCB v2.0 revision ID on GPIO20 (ADC2: before WiFi/the portal). A v2.0
-    // board always runs as v2.0; without an ID the stored revision applies
-    // (2.0 can also be set manually there).
-    if (boardPcbAllowed() && detectPcbV2()) gCfg.pcbVersion = PCB_REV_2_0;
-    else if (gCfg.pcbVersion == PCB_REV_2_0)
+    // PCB v2.0 revision ID (ADC2: before WiFi/the portal) - V3 GPIO20, V4
+    // GPIO15 (its V4 sockets). A v2.0 board always runs as v2.0; without an
+    // ID the stored revision applies on a V3 (2.0 can also be set manually),
+    // a V4 without it runs the PCB-less build: its wind/rain inputs would
+    // collide with the FEM pins, they stay off in RAM (the stored settings
+    // are not changed here).
+    if (detectPcbV2() && boardPcbAllowed()) gCfg.pcbVersion = PCB_REV_2_0;
+    else if (gCfg.pcbVersion == PCB_REV_2_0 && !boardIsV4())
         dbgSerial.println("PCB v2.0 set manually (no revision ID read).");
+    if (!boardPcbAllowed()) { gCfg.windEn = 0; gCfg.rainEn = 0; }
     // v2.0: R38 holds the vane supply off until the firmware switches it on -
     // before the first-boot portal, whose calibration wizard reads the vane.
     windVaneSupply(true);
@@ -806,10 +883,10 @@ void setup()
     // Revision-dependent pins
     PinSet pins = getPins(gCfg.pcbVersion);
     if (boardPcbAllowed())
-        dbgSerial.printf("PCB rev %d: Wind=GPIO%d, Rain=GPIO%d, 1-Wire=GPIO%d\n",
-                      gCfg.pcbVersion, pins.windSpeed, pins.rain, pins.oneWire);
+        dbgSerial.printf("Heltec %s on PCB rev %d: Wind=GPIO%d, Rain=GPIO%d, 1-Wire=GPIO%d, wind direction=GPIO%d\n",
+                      boardName(gBoard.kind), gCfg.pcbVersion, pins.windSpeed, pins.rain, pins.oneWire, windDirPin());
     else
-        dbgSerial.println("Heltec V4: wireless build only - PCB inputs (wind, rain, 1-Wire, I/O block) disabled.");
+        dbgSerial.println("Heltec V4 without PCB (no revision ID on GPIO15): wireless build - PCB inputs (wind, rain, 1-Wire, I/O block) disabled.");
 
     // BME280, 1-Wire, PCNT counters, bus1Temps[] init
     sensorsInit(pins);
@@ -827,6 +904,9 @@ void setup()
     loxoneSetup();   // before the web task: it takes the Loxone lock
     webApiSetup();
     wxUploadSetup();
+    recordsSetup();
+    alarmsSetup();
+    customUploadSetup();
 
     // Setup done - normal operation. Take a first sub-sample right away so
     // the 20 s boot display shows real readings instead of zeros (the first
@@ -851,6 +931,7 @@ void loop()
     ioPoll();         // PCB v2.0: VE.Direct, pulse counters, outputs
     timeSyncPoll();   // starts SNTP once WiFi is first up
     loxonePoll();     // Loxone host name: asynchronous DNS, no waiting
+    alarmsPoll();     // alarm rules, every 30 s (alarms.h)
     // Web server (handleClient()) now runs on its own FreeRTOS task on core
     // 0 (spawned by webApiSetup() in setup()) instead of being polled here —
     // see web_api.cpp's webApiTask for why (mainly: so an HTTP request isn't
@@ -913,7 +994,9 @@ void loop()
 
         // LoRaWAN: its own window, values as configured (interval / 10 min)
         // Davis (exclusive) owns the radio: LoRaWAN paused (davis_rx.h)
-        if (gCfg.loraEn && !davisLoraPaused() && pathDue(PATH_LORA, cycleEnd, loraEffMs, baseMs)) {
+        // Firmware upload (ota_upload.h): no uplink starts meanwhile; the
+        // window is kept, so the next uplink covers this cycle too.
+        if (gCfg.loraEn && !davisLoraPaused() && !otaUploadActive() && pathDue(PATH_LORA, cycleEnd, loraEffMs, baseMs)) {
             if (loraReady()) {
                 PathValues lv = pathValues(PATH_LORA, gCfg.loraWindAgg, cycleEnd);
                 // Largest payload the current data rate allows (ADR can switch to
@@ -933,7 +1016,10 @@ void loop()
             // the next uplink - RadioLib wakes it again on the next command.
             if (lowPowerActive()) loraSleep();
         }
-        if (displayActive) display.display();
+        if (displayActive) {
+            if (displayScreen != OS_CLASSIC) drawDisplay();   // the uplink lines belong to the classic screen only
+            display.display();
+        }
 
         // MQTT: its own window and interval
         if (mqttOn && pathDue(PATH_MQTT, cycleEnd, mqttMs, baseMs)) {
@@ -955,8 +1041,10 @@ void loop()
         if (!loxOn)       resetPath(PATH_LOX, cycleEnd);
 
         pushHistorySample();   // base cycle values for the dashboard history
-        wxUploadPushCycle(srcIsRadio(SG_WIND) ? srcRfWind(PATH_BASE, true)
-                                              : windRing.stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps));
+        recordsCycle();        // extremes (records.h)
+        astroCycle();          // sun / moon times of the day (astro.h)
+        wxUploadPushCycle(calWind(srcIsRadio(SG_WIND) ? srcRfWind(PATH_BASE, true)
+                                                      : windRing.stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps)));
         resetPath(PATH_BASE, cycleEnd);
         loopCount++;
 

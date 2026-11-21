@@ -47,6 +47,10 @@ static const char CHART_PAGE_HTML[] PROGMEM = R"HTML(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png"><meta name="theme-color" content="#f4f6f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#12161b" media="(prefers-color-scheme: dark)"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="WeatherNode">
 <title>WeatherNode</title>
 <style>
 :root{ --bg:#f4f6f8; --panel:#ffffff; --border:#dde3e9; --text:#1a2028; --dim:#5f6d79; --accent:#0f9d94; --ok:#1d7f46; --bad:#c0392b; --warn:#a86400; }
@@ -61,7 +65,8 @@ body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg)
 max-width:1120px;margin:0 auto;padding:0 1rem 2rem;}
 nav{display:flex;flex-wrap:wrap;gap:0.4rem 1.1rem;padding:0.9rem 0;border-bottom:1px solid var(--border);margin-bottom:1rem;}
 nav a{color:var(--dim);text-decoration:none;font-size:0.9rem;}
-nav a:hover,nav a:focus{color:var(--accent);}
+nav a:hover,nav a:focus,nav a.on{color:var(--accent);}
+nav select{width:auto;margin-left:auto;padding:0.15rem 0.3rem;font-size:0.8rem;}
 .head{display:flex;align-items:baseline;justify-content:space-between;gap:0.3rem 1rem;flex-wrap:wrap;margin-bottom:0.25rem;}
 .head h3{margin:0;}
 .head .sub{color:var(--dim);font-size:0.85rem;}
@@ -140,6 +145,7 @@ font-size:0.88rem;border-top:1px solid var(--border);}
 .st{text-decoration:line-through;color:var(--dim);}
 
 .record-row{padding:0.45rem 0;border-top:1px solid var(--border);}
+.xt{overflow-x:auto;}.xt table{border-collapse:collapse;width:100%;font-size:.9em;}.xt td,.xt th{padding:.2rem .45rem;text-align:right;white-space:nowrap;}.xt th:first-child,.xt td:first-child{text-align:left;}.xt tr+tr td{border-top:1px solid var(--grid,#8883);}
 #records{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));column-gap:1.5rem;}
 .record-head{display:flex;justify-content:space-between;font-size:0.85rem;}
 .record-head b{font-family:ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;}
@@ -164,17 +170,18 @@ box-shadow:0 6px 18px rgba(0,0,0,0.18);white-space:nowrap;}
 </head>
 <body>
 <nav>
-  <a href="/status" data-i18n="navStatus">Status</a><a href="/api/log" data-i18n="navLog">Log</a><a href="/api/settings" data-i18n="navSettings">Settings</a><a href="/help" data-i18n="navHelp">Help / Documentation</a>
+  <a href="/" class="on" data-i18n="navDashboard">Dashboard</a><a href="/status" data-i18n="navStatus">Status</a><a href="/api/log" data-i18n="navLog">Log</a><a href="/api/settings" data-i18n="navSettings">Settings</a><a href="/help" data-i18n="navHelp">Help / Documentation</a>
+  <select id="lang" aria-label="Language"></select>
 </nav>
 <div class="head"><h3 data-i18n="heading">Weather station</h3><span class="sub" id="updated"></span></div>
 <div class="toolbar">
-  <select id="lang" aria-label="Language"></select>
   <button id="range" data-i18n="range24h">24h</button>
   <button id="timeMode" data-i18n="timeAbsolute">Time: Absolute</button>
   <select id="autoRefresh" aria-label="Auto-refresh interval"></select>
   <button id="units" data-i18n="unitsMetric">Units: Metric</button>
   <button id="theme" data-i18n="toggleTheme">Toggle theme</button>
 </div>
+<div id="offline" class="alerts" role="status" style="display:none"></div>
 <div id="alerts" class="alerts" role="status" aria-live="polite" style="display:none"></div>
 <p id="empty" data-i18n="loading">Loading...</p>
 
@@ -187,9 +194,11 @@ box-shadow:0 6px 18px rgba(0,0,0,0.18);white-space:nowrap;}
     <div class="compass-readout" id="compassText"></div>
   </div>
   <div class="panel" id="rainPanel" style="display:none"><h4 data-i18n="rain">Rain</h4><div id="rainList"></div></div>
+  <div class="panel" id="astroPanel" style="display:none"><h4 data-i18n="astro">Sun &amp; moon</h4><div id="astroList"></div></div>
   <div class="panel" id="morePanel" style="display:none"><h4 data-i18n="more">Derived values</h4><div id="moreList"></div></div>
   <div class="panel" id="sysPanel" style="display:none"><h4 data-i18n="system">System</h4><div id="sysList"></div></div>
 </div>
+<div class="panel blk" id="xtPanel" style="display:none"><h4 data-i18n="xt">Records</h4><div class="xt" id="xtList"></div></div>
 <div class="panel blk" id="rfPanel" style="display:none">
   <h4 data-i18n="rfSensors">Wireless sensors</h4>
   <div id="rfList"></div><div id="rfBoard" class="rf-src"></div>
@@ -197,7 +206,7 @@ box-shadow:0 6px 18px rgba(0,0,0,0.18);white-space:nowrap;}
 
 <div class="head sec"><h3 data-i18n="history">Measurement history</h3><span class="sub" id="coverage"></span></div>
 <div class="panel blk" id="recPanel">
-  <h4 data-i18n="records">Records (min &middot; avg &middot; max)</h4>
+  <h4 data-i18n="records">Chart range (min &middot; avg &middot; max)</h4>
   <div id="records"></div>
 </div>
 <div id="charts"></div>
@@ -219,7 +228,7 @@ box-shadow:0 6px 18px rgba(0,0,0,0.18);white-space:nowrap;}
 
 // --- Localization (en/de/fr/es/pt): this page's own text only, the JSON stays language-neutral ---
 var I18N = {
-  en: { navStatus:'Status', navLog:'Log', navSettings:'Settings', navHelp:'Help / Documentation',
+  en: { navDashboard:'Dashboard', navStatus:'Status', navLog:'Log', navSettings:'Settings', navHelp:'Help / Documentation',
         heading:'Weather station', history:'Measurement history', buffered:'of history buffered', loading:'Loading...',
         noHistory:'No history yet — check back after the next measurement cycle.',
         toggleTheme:'Toggle theme', range24h:'24h', range7d:'7 days',
@@ -231,12 +240,12 @@ var I18N = {
         wind:'Wind', windChart:'Wind speed / gust', rainRate:'Rain rate', rainAmount:'Rain amount', battery:'Battery',
         ds18b20:'Ext. temp', ds18b20Chart:'External temperature sensors',
         probe0:'Sensor 1', probe1:'Sensor 2', probe2:'Sensor 3',
-        gust:'Gust', speed:'Speed', min:'Min', max:'Max', records:'Records (min · avg · max)',
+        gust:'Gust', speed:'Speed', min:'Min', max:'Max', records:'Chart range (min · avg · max)',
         noData:'No data yet', noDataShort:'no data', from:'from',
         failedLoad:'Failed to load history: ',
         feelsLike:'Feels like', dewPoint:'Dew point', today:'today', per3h:'/ 3 h',
         direction:'Direction', dirs:['N','E','S','W'] },
-  de: { navStatus:'Status', navLog:'Protokoll', navSettings:'Einstellungen', navHelp:'Hilfe / Dokumentation',
+  de: { navDashboard:'Dashboard', navStatus:'Status', navLog:'Protokoll', navSettings:'Einstellungen', navHelp:'Hilfe / Dokumentation',
         heading:'Wetterstation', history:'Messverlauf', buffered:'Verlauf gespeichert', loading:'Lädt...',
         noHistory:'Noch keine Daten — nach dem nächsten Messzyklus wieder vorbeischauen.',
         toggleTheme:'Darstellung wechseln', range24h:'24h', range7d:'7 Tage',
@@ -248,12 +257,12 @@ var I18N = {
         wind:'Wind', windChart:'Windgeschwindigkeit / Böen', rainRate:'Regenrate', rainAmount:'Niederschlag', battery:'Batterie',
         ds18b20:'Außentemp.', ds18b20Chart:'Externe Temperatursensoren',
         probe0:'Sensor 1', probe1:'Sensor 2', probe2:'Sensor 3',
-        gust:'Böe', speed:'Geschwindigkeit', min:'Min', max:'Max', records:'Rekorde (Min · Ø · Max)',
+        gust:'Böe', speed:'Geschwindigkeit', min:'Min', max:'Max', records:'Diagrammzeitraum (Min · Ø · Max)',
         noData:'Noch keine Daten', noDataShort:'keine Daten', from:'aus',
         failedLoad:'Verlauf konnte nicht geladen werden: ',
         feelsLike:'Gefühlt', dewPoint:'Taupunkt', today:'heute', per3h:'/ 3 h',
         direction:'Richtung', dirs:['N','O','S','W'] },
-  fr: { navStatus:'État', navLog:'Journal', navSettings:'Paramètres', navHelp:'Aide / Documentation',
+  fr: { navDashboard:'Tableau de bord', navStatus:'État', navLog:'Journal', navSettings:'Paramètres', navHelp:'Aide / Documentation',
         heading:'Station météo', history:'Historique des mesures', buffered:"d'historique en mémoire", loading:'Chargement...',
         noHistory:'Pas encore de données — revenez après le prochain cycle de mesure.',
         toggleTheme:'Changer le thème', range24h:'24h', range7d:'7 jours',
@@ -265,12 +274,12 @@ var I18N = {
         wind:'Vent', windChart:'Vitesse du vent / rafales', rainRate:'Intensité de pluie', rainAmount:'Quantité de pluie', battery:'Batterie',
         ds18b20:'Temp. ext.', ds18b20Chart:'Sondes de température externes',
         probe0:'Capteur 1', probe1:'Capteur 2', probe2:'Capteur 3',
-        gust:'Rafale', speed:'Vitesse', min:'Min', max:'Max', records:'Records (min · moy · max)',
+        gust:'Rafale', speed:'Vitesse', min:'Min', max:'Max', records:'Période du graphique (min · moy · max)',
         noData:'Pas encore de données', noDataShort:'aucune donnée', from:'de',
         failedLoad:"Échec du chargement de l'historique : ",
         feelsLike:'Ressenti', dewPoint:'Point de rosée', today:'aujourd\'hui', per3h:'/ 3 h',
         direction:'Direction', dirs:['N','E','S','O'] },
-  es: { navStatus:'Estado', navLog:'Registro', navSettings:'Ajustes', navHelp:'Ayuda / Documentación',
+  es: { navDashboard:'Panel', navStatus:'Estado', navLog:'Registro', navSettings:'Ajustes', navHelp:'Ayuda / Documentación',
         heading:'Estación meteorológica', history:'Historial de mediciones', buffered:'de historial almacenado', loading:'Cargando...',
         noHistory:'Aún no hay datos — vuelve después del próximo ciclo de medición.',
         toggleTheme:'Cambiar tema', range24h:'24h', range7d:'7 días',
@@ -282,12 +291,12 @@ var I18N = {
         wind:'Viento', windChart:'Velocidad del viento / rachas', rainRate:'Intensidad de lluvia', rainAmount:'Cantidad de lluvia', battery:'Batería',
         ds18b20:'Temp. ext.', ds18b20Chart:'Sensores de temperatura externos',
         probe0:'Sensor 1', probe1:'Sensor 2', probe2:'Sensor 3',
-        gust:'Racha', speed:'Velocidad', min:'Mín', max:'Máx', records:'Récords (mín · media · máx)',
+        gust:'Racha', speed:'Velocidad', min:'Mín', max:'Máx', records:'Periodo del gráfico (mín · media · máx)',
         noData:'Aún no hay datos', noDataShort:'sin datos', from:'desde',
         failedLoad:'No se pudo cargar el historial: ',
         feelsLike:'Sensación', dewPoint:'Punto de rocío', today:'hoy', per3h:'/ 3 h',
         direction:'Dirección', dirs:['N','E','S','O'] },
-  pt: { navStatus:'Estado', navLog:'Registro', navSettings:'Configurações', navHelp:'Ajuda / Documentação',
+  pt: { navDashboard:'Painel', navStatus:'Estado', navLog:'Registro', navSettings:'Configurações', navHelp:'Ajuda / Documentação',
         heading:'Estação meteorológica', history:'Histórico de medições', buffered:'de histórico armazenado', loading:'Carregando...',
         noHistory:'Ainda sem dados — volte após o próximo ciclo de medição.',
         toggleTheme:'Alternar tema', range24h:'24h', range7d:'7 dias',
@@ -299,7 +308,7 @@ var I18N = {
         wind:'Vento', windChart:'Velocidade do vento / rajadas', rainRate:'Intensidade de chuva', rainAmount:'Quantidade de chuva', battery:'Bateria',
         ds18b20:'Temp. ext.', ds18b20Chart:'Sensores de temperatura externos',
         probe0:'Sensor 1', probe1:'Sensor 2', probe2:'Sensor 3',
-        gust:'Rajada', speed:'Velocidade', min:'Mín', max:'Máx', records:'Registros (mín · média · máx)',
+        gust:'Rajada', speed:'Velocidade', min:'Mín', max:'Máx', records:'Período do gráfico (mín · média · máx)',
         noData:'Ainda sem dados', noDataShort:'sem dados', from:'de',
         failedLoad:'Falha ao carregar histórico: ',
         feelsLike:'Sensação', dewPoint:'Ponto de orvalho', today:'hoje', per3h:'/ 3 h',
@@ -316,7 +325,7 @@ Object.assign(I18N.en, { updated:'Updated', rain:'Rain', last1h:'Last hour', las
   supplies:'Provides', onBoard:'On-board sensors', channel:'Ch',
   stKinds:['Weather station','Thermo-hygro sensor','Pool thermometer','Soil sensor','Leak sensor','Lightning sensor','Rain gauge','Air quality sensor','Sensor','Temperature probe','Black globe thermometer','Leaf wetness sensor'],
   leak:'Leak!', dry:'Dry', leafWet:'Leaf wetness', usbPower:'USB power', est:'est.', soil:'Soil moisture', lightning:'Lightning', rainHour:'Rain per hour', rainDay:'Rain per day',
-  srcNames:{ tempHum:'Temp/Hum', wind:'Wind', rain:'Rain', uv:'UV', light:'Light' },
+  srcNames:{ tempHum:'Temp/Hum', wind:'Wind', rain:'Rain', uv:'UV', light:'Light', pressure:'Pressure' },
   system:'System', cpuTemp:'CPU temperature', solar:'Solar', victron:'Victron battery', yieldToday:'Yield today',
   heater:'Heater', fan:'Fan', on:'on', off:'off', stalled:'stalled', auxIn:'AUX input', auxPulses:'AUX pulses', wind2:'Wind 2',
   ptd:['falling very rapidly','falling quickly','falling','falling slowly','steady','rising slowly','rising','rising quickly','rising very rapidly'],
@@ -331,7 +340,7 @@ Object.assign(I18N.de, { updated:'Aktualisiert', rain:'Regen', last1h:'Letzte St
   supplies:'Liefert', onBoard:'Sensoren an der Platine', channel:'Kanal',
   stKinds:['Wetterstation','Thermo-Hygro-Sensor','Poolthermometer','Bodensensor','Leckagesensor','Blitzsensor','Regenmesser','Luftqualitätssensor','Sensor','Temperaturfühler','Schwarzkugelthermometer','Blattnässesensor'],
   leak:'Leck!', dry:'Trocken', leafWet:'Blattnässe', usbPower:'USB-Versorgung', est:'gesch.', soil:'Bodenfeuchte', lightning:'Blitze', rainHour:'Niederschlag pro Stunde', rainDay:'Niederschlag pro Tag',
-  srcNames:{ tempHum:'Temp./Feuchte', wind:'Wind', rain:'Regen', uv:'UV', light:'Licht' },
+  srcNames:{ tempHum:'Temp./Feuchte', wind:'Wind', rain:'Regen', uv:'UV', light:'Licht', pressure:'Luftdruck' },
   system:'System', cpuTemp:'CPU-Temperatur', solar:'Solar', victron:'Victron-Batterie', yieldToday:'Ertrag heute',
   heater:'Heizung', fan:'Lüfter', on:'an', off:'aus', stalled:'blockiert', auxIn:'AUX-Eingang', auxPulses:'AUX-Impulse', wind2:'Wind 2',
   ptd:['fällt sehr stark','fällt stark','fällt','fällt langsam','gleichbleibend','steigt langsam','steigt','steigt stark','steigt sehr stark'],
@@ -346,7 +355,7 @@ Object.assign(I18N.fr, { updated:'Mis à jour', rain:'Pluie', last1h:'Dernière 
   supplies:'Fournit', onBoard:'Capteurs de la carte', channel:'Canal',
   stKinds:['Station météo','Thermo-hygromètre','Thermomètre de piscine','Capteur de sol','Détecteur de fuite','Détecteur de foudre','Pluviomètre',"Capteur de qualité de l'air",'Capteur','Sonde de température','Thermomètre à globe noir',"Capteur d'humectation foliaire"],
   leak:'Fuite !', dry:'Sec', leafWet:'Humectation foliaire', usbPower:'Alimentation USB', est:'est.', soil:'Humidité du sol', lightning:'Foudre', rainHour:'Pluie par heure', rainDay:'Pluie par jour',
-  srcNames:{ tempHum:'Temp./Hum.', wind:'Vent', rain:'Pluie', uv:'UV', light:'Lumière' },
+  srcNames:{ tempHum:'Temp./Hum.', wind:'Vent', rain:'Pluie', uv:'UV', light:'Lumière', pressure:'Pression' },
   system:'Système', cpuTemp:'Température CPU', solar:'Solaire', victron:'Batterie Victron', yieldToday:"Production aujourd'hui",
   heater:'Chauffage', fan:'Ventilateur', on:'marche', off:'arrêt', stalled:'bloqué', auxIn:'Entrée AUX', auxPulses:'Impulsions AUX', wind2:'Vent 2',
   ptd:['baisse très rapide','baisse rapide','en baisse','baisse lente','stable','hausse lente','en hausse','hausse rapide','hausse très rapide'],
@@ -361,7 +370,7 @@ Object.assign(I18N.es, { updated:'Actualizado', rain:'Lluvia', last1h:'Última h
   supplies:'Aporta', onBoard:'Sensores de la placa', channel:'Canal',
   stKinds:['Estación meteorológica','Termohigrómetro','Termómetro de piscina','Sensor de suelo','Sensor de fugas','Sensor de rayos','Pluviómetro','Sensor de calidad del aire','Sensor','Sonda de temperatura','Termómetro de globo negro','Sensor de humectación foliar'],
   leak:'¡Fuga!', dry:'Seco', leafWet:'Humectación foliar', usbPower:'Alimentación USB', est:'est.', soil:'Humedad del suelo', lightning:'Rayos', rainHour:'Lluvia por hora', rainDay:'Lluvia por día',
-  srcNames:{ tempHum:'Temp./Hum.', wind:'Viento', rain:'Lluvia', uv:'UV', light:'Luz' },
+  srcNames:{ tempHum:'Temp./Hum.', wind:'Viento', rain:'Lluvia', uv:'UV', light:'Luz', pressure:'Presión' },
   system:'Sistema', cpuTemp:'Temperatura CPU', solar:'Solar', victron:'Batería Victron', yieldToday:'Producción hoy',
   heater:'Calefacción', fan:'Ventilador', on:'encendido', off:'apagado', stalled:'bloqueado', auxIn:'Entrada AUX', auxPulses:'Pulsos AUX', wind2:'Viento 2',
   ptd:['bajada muy rápida','bajada rápida','bajando','bajada lenta','estable','subida lenta','subiendo','subida rápida','subida muy rápida'],
@@ -376,17 +385,53 @@ Object.assign(I18N.pt, { updated:'Atualizado', rain:'Chuva', last1h:'Última hor
   supplies:'Fornece', onBoard:'Sensores da placa', channel:'Canal',
   stKinds:['Estação meteorológica','Termo-higrômetro','Termômetro de piscina','Sensor de solo','Sensor de vazamento','Sensor de raios','Pluviômetro','Sensor de qualidade do ar','Sensor','Sonda de temperatura','Termômetro de globo negro','Sensor de molhamento foliar'],
   leak:'Vazamento!', dry:'Seco', leafWet:'Molhamento foliar', usbPower:'Alimentação USB', est:'est.', soil:'Umidade do solo', lightning:'Raios', rainHour:'Chuva por hora', rainDay:'Chuva por dia',
-  srcNames:{ tempHum:'Temp./Umid.', wind:'Vento', rain:'Chuva', uv:'UV', light:'Luz' },
+  srcNames:{ tempHum:'Temp./Umid.', wind:'Vento', rain:'Chuva', uv:'UV', light:'Luz', pressure:'Pressão' },
   system:'Sistema', cpuTemp:'Temperatura da CPU', solar:'Solar', victron:'Bateria Victron', yieldToday:'Produção hoje',
   heater:'Aquecedor', fan:'Ventilador', on:'ligado', off:'desligado', stalled:'travado', auxIn:'Entrada AUX', auxPulses:'Pulsos AUX', wind2:'Vento 2',
   ptd:['queda muito rápida','queda rápida','caindo','queda lenta','estável','subida lenta','subindo','subida rápida','subida muito rápida'],
   wt:['melhorando','piorando','alerta de tempestade','estável','instável','sem mudança'] });
+Object.assign(I18N.en, { offline:'Offline – last data from {t}', counter:'Counter', lastStrike:'last', xt:'Records', allTime:'All time', astro:'Sun & moon', sunrise:'Sunrise', sunset:'Sunset', twilight:'Civil twilight',
+  dayLength:'Day length', solarNoon:'Solar noon', sunElev:'Sun elevation', moonrise:'Moonrise', moonset:'Moonset', moonTransit:'Moon highest',
+  moonPhase:'Moon', polarDay:'Sun up all day', polarNight:'Sun down all day', none:'none today',
+  astroHint:'Sun and moon times need the location: setup wizard step 3 or Settings → Basics.',
+  phases:['New moon','Waxing crescent','First quarter','Waxing gibbous','Full moon','Waning gibbous','Last quarter','Waning crescent'] });
+Object.assign(I18N.de, { offline:'Offline – letzte Daten von {t}', counter:'Zählerstand', lastStrike:'zuletzt', xt:'Rekorde', allTime:'Allzeit', astro:'Sonne & Mond', sunrise:'Sonnenaufgang', sunset:'Sonnenuntergang', twilight:'Bürgerliche Dämmerung',
+  dayLength:'Tageslänge', solarNoon:'Sonnenhöchststand', sunElev:'Sonnenhöhe', moonrise:'Mondaufgang', moonset:'Monduntergang', moonTransit:'Mondhöchststand',
+  moonPhase:'Mond', polarDay:'Sonne geht nicht unter', polarNight:'Sonne geht nicht auf', none:'heute keiner',
+  astroHint:'Sonnen- und Mondzeiten brauchen den Standort: Einrichtungsassistent Schritt 3 oder Einstellungen → Grundlagen.',
+  phases:['Neumond','Zunehmende Sichel','Erstes Viertel','Zunehmender Mond','Vollmond','Abnehmender Mond','Letztes Viertel','Abnehmende Sichel'] });
+Object.assign(I18N.fr, { offline:'Hors ligne – dernières données du {t}', counter:'Compteur', lastStrike:'dernier', xt:'Records', allTime:'Absolu', astro:'Soleil & lune', sunrise:'Lever du soleil', sunset:'Coucher du soleil', twilight:'Crépuscule civil',
+  dayLength:'Durée du jour', solarNoon:'Midi solaire', sunElev:'Hauteur du soleil', moonrise:'Lever de la lune', moonset:'Coucher de la lune', moonTransit:'Lune au plus haut',
+  moonPhase:'Lune', polarDay:'Soleil levé toute la journée', polarNight:'Soleil couché toute la journée', none:'aucun aujourd’hui',
+  astroHint:'Les heures du soleil et de la lune nécessitent l’emplacement : assistant de configuration étape 3 ou Paramètres → Bases.',
+  phases:['Nouvelle lune','Premier croissant','Premier quartier','Gibbeuse croissante','Pleine lune','Gibbeuse décroissante','Dernier quartier','Dernier croissant'] });
+Object.assign(I18N.es, { offline:'Sin conexión – últimos datos del {t}', counter:'Contador', lastStrike:'último', xt:'Récords', allTime:'Histórico', astro:'Sol y luna', sunrise:'Salida del sol', sunset:'Puesta del sol', twilight:'Crepúsculo civil',
+  dayLength:'Duración del día', solarNoon:'Mediodía solar', sunElev:'Altura del sol', moonrise:'Salida de la luna', moonset:'Puesta de la luna', moonTransit:'Luna en lo más alto',
+  moonPhase:'Luna', polarDay:'Sol todo el día', polarNight:'Sin sol todo el día', none:'ninguna hoy',
+  astroHint:'Las horas del sol y la luna necesitan la ubicación: asistente de configuración paso 3 o Ajustes → Básicos.',
+  phases:['Luna nueva','Luna creciente','Cuarto creciente','Gibosa creciente','Luna llena','Gibosa menguante','Cuarto menguante','Luna menguante'] });
+Object.assign(I18N.pt, { offline:'Offline – últimos dados de {t}', counter:'Contador', lastStrike:'último', xt:'Recordes', allTime:'Todos os tempos', astro:'Sol e lua', sunrise:'Nascer do sol', sunset:'Pôr do sol', twilight:'Crepúsculo civil',
+  dayLength:'Duração do dia', solarNoon:'Meio-dia solar', sunElev:'Altura do sol', moonrise:'Nascer da lua', moonset:'Pôr da lua', moonTransit:'Lua no ponto mais alto',
+  moonPhase:'Lua', polarDay:'Sol o dia todo', polarNight:'Sem sol o dia todo', none:'nenhum hoje',
+  astroHint:'Os horários do sol e da lua precisam da localização: assistente de configuração passo 3 ou Configurações → Básico.',
+  phases:['Lua nova','Lua crescente','Quarto crescente','Gibosa crescente','Lua cheia','Gibosa minguante','Quarto minguante','Lua minguante'] });
 var SUPPORTED_LANGS = ['en', 'de', 'fr', 'es', 'pt'];
 var LANG_NAMES = { en:'English', de:'Deutsch', fr:'Français', es:'Español', pt:'Português' };
 
+// The device's Language setting ('' = Auto): cookie wnDev, set by the web
+// server with the page (handleChartPage() - the page itself is a fixed,
+// gzip-compressed file). Order: this browser's own choice (localStorage /
+// cookie wnLang, shared with the status and settings pages), then the device
+// setting, then the browser language.
+var SERVER_LANG = (document.cookie.match(/(?:^|;\s*)wnDev=([a-z]{2})/) || [])[1] || '';
+function setLangCookie(v) {
+  try { document.cookie = 'wnLang=' + v + ';path=/;max-age=' + (v ? 31536000 : 0) + ';SameSite=Lax'; } catch (e) {}
+}
 function detectLang() {
-  var stored = localStorage.getItem('wnLang');
-  if (stored && SUPPORTED_LANGS.indexOf(stored) !== -1) return stored;
+  var stored = null;
+  try { stored = localStorage.getItem('wnLang'); } catch (e) {}
+  if (stored && SUPPORTED_LANGS.indexOf(stored) !== -1) { setLangCookie(stored); return stored; }
+  if (SUPPORTED_LANGS.indexOf(SERVER_LANG) !== -1) return SERVER_LANG;
   var browserLang = (navigator.language || 'en').slice(0, 2).toLowerCase();
   return SUPPORTED_LANGS.indexOf(browserLang) !== -1 ? browserLang : 'en';
 }
@@ -415,7 +460,8 @@ function translateStatic() {
   translateStatic();
   sel.addEventListener('change', function () {
     lang = sel.value;
-    localStorage.setItem('wnLang', lang);
+    try { localStorage.setItem('wnLang', lang); } catch (e) {}
+    setLangCookie(lang);   // the status and settings pages follow
     translateStatic();
     translateDynamicTitles();
     updateUnitsButtonLabel();
@@ -1042,6 +1088,9 @@ function renderAlerts(current) {
     if (w[x[0]]) al.push([x[0], x[1], t(x[0])]);
   });
   if (current.radioBatteryLow) al.push(['bad', '⚠', t('rfLow')]);
+  (current.alarms || []).forEach(function (x) {   // active alarm rules (Settings → Alarms)
+    al.push([x.priority >= 4 ? 'bad' : 'info', '🔔', esc(x.name)]);
+  });
   if (current.firmwareUpdate) al.push(['info', '⬆', t('fwUpdate').replace('{v}', esc(current.firmwareUpdate))]);
   var el = document.getElementById('alerts');
   el.innerHTML = al.map(function (a) {
@@ -1191,8 +1240,14 @@ function renderSensors(current) {
     function val(key, text) { vals.push(stale.indexOf(key) >= 0 ? '<span class="st" title="' + t('stale') + '">' + text + '</span>' : '<span>' + text + '</span>'); }
     if (has(s.temp)) val('temp', s.temp.toFixed(1) + ' °' + U.tempUnit);
     if (has(s.humidityPct)) val('humidity', Math.round(s.humidityPct) + ' %');
-    if (has(s.windSpeed)) val('wind', windArrow(s.windDirDeg || 0) + ' ' + s.windSpeed.toFixed(1) + ' / ' + (s.windGust || 0).toFixed(1) + ' ' + U.windUnit);
-    if (has(s.rainTotal)) val('rain', 'Σ ' + s.rainTotal.toFixed(isIn(U.rainUnit) ? 2 : 1) + ' ' + U.rainUnit);
+    // direction as compass point + degrees (an arrow alone was read as a trend)
+    if (has(s.windSpeed)) val('wind', s.windSpeed.toFixed(1) + ' / ' + (s.windGust || 0).toFixed(1) + ' ' + U.windUnit +
+      (has(s.windDirDeg) ? ' · ' + dirText(s.windDirDeg) + ' ' + Math.round(s.windDirDeg) + '°' : ''));
+    var rd = isIn(U.rainUnit) ? 2 : 1;
+    if (has(s.rainToday)) val('rain', t('todayCap') + ' ' + s.rainToday.toFixed(rd) + ' ' + U.rainUnit);
+    if (has(s.rain1h)) val('rain', '1 h ' + s.rain1h.toFixed(rd) + ' ' + U.rainUnit);
+    // the sensor's own counter since its last battery change / reset - not a total of this node
+    if (has(s.rainTotal)) val('rain', '<span class="dim">' + t('counter') + ' ' + s.rainTotal.toFixed(rd) + ' ' + U.rainUnit + '</span>');
     if (has(s.uvIndex)) val('uv', 'UV ' + s.uvIndex.toFixed(1));
     if (has(s.lightLux)) val('light', luxText(s.lightLux));
     if (has(s.soilMoisturePct)) val('soil', t('soil') + ' ' + s.soilMoisturePct + ' %');
@@ -1204,15 +1259,22 @@ function renderSensors(current) {
     [['pm1', 'PM1'], ['pm25', 'PM2.5'], ['pm4', 'PM4'], ['pm10', 'PM10']].forEach(function (p) {
       if (has(s[p[0]])) val('', p[1] + ' ' + s[p[0]].toFixed(1) + ' µg/m³' + (p[0] === 'pm10' && s.pm10Estimated ? ' (' + t('est') + ')' : ''));
     });
-    if (has(s.lightningCount)) val('lightning', '<span aria-hidden="true">⚡︎</span> ' + t('lightning') + ' ' + s.lightningCount +
-      (has(s.lightningDistKm) ? ' · ' + s.lightningDistKm + ' km' : ''));
+    if (has(s.lightningCount)) {   // strikes from the counter's increments; the counter itself only small
+      val('lightning', '<span aria-hidden="true">⚡︎</span> ' + t('lightning') + ' ' +
+        (has(s.lightningToday) ? t('todayCap') + ' ' + s.lightningToday : '') +
+        (has(s.lightning1h) ? ' · 1 h ' + s.lightning1h : '') +
+        (s.lastLightning ? ' · ' + t('lastStrike') + ' ' + new Date(s.lastLightning).toLocaleTimeString(LOCALES[lang] || 'en-US', { hour: '2-digit', minute: '2-digit' }) : '') +
+        (has(s.lightningDistKm) ? ' · ' + s.lightningDistKm + ' km' : ''));
+      val('', '<span class="dim">' + t('counter') + ' ' + s.lightningCount + '</span>');
+    }
     var provides = Object.keys(src).filter(function (g) { return src[g] === 'radio:' + s.id; });
     // slot = wireless sensor number 1-32 (ID-list order); 1-4 are the value-source choices
     var sub = (has(s.slot) ? '#' + s.slot + ' · ' : '') +
               [s.model, s.protocol].filter(Boolean).map(esc).join(' · ') + ' · ID ' + esc(s.id) +
+              (s.ecowittId ? ' (Ecowitt ' + esc(s.ecowittId) + ')' : '') +
               (s.channel ? ' · ' + t('channel') + ' ' + s.channel : '');
     var age = s.ageSec;
-    html += '<div class="rf"><div class="rf-head"><b>' + sensorKind(s) + '</b><span class="dim">' + sub + '</span></div>' +
+    html += '<div class="rf"><div class="rf-head"><b>' + (s.name ? esc(s.name) + ' <span class="dim">(' + sensorKind(s) + ')</span>' : sensorKind(s)) + '</b><span class="dim">' + sub + '</span></div>' +
       '<div class="rf-meta"><span>' + sigBars(s.rssi) + ' ' + s.rssi + ' dBm</span>' +
       (has(age) ? '<span class="' + (age > 300 ? 'warnc' : 'dim') + '">' + agoLabel(age) + '</span>' : '') +
       (has(s.batteryOk) ? '<span class="' + (s.batteryOk ? 'ok' : 'bad') + '">' + t(s.batteryOk ? 'batOk' : 'batLow') + '</span>' : '') +
@@ -1287,6 +1349,8 @@ function render(rawHist, rawCurrent) {
   });
   renderNow(data, current, nowMs);
   renderPanels(current);
+  renderAstro(current);
+  renderRecords();
   renderSensors(current);
 
   var hasWind = has(current.windSpeed) || (data.windDirDeg || []).some(has);
@@ -1322,6 +1386,64 @@ function render(rawHist, rawCurrent) {
   updateTooltip();
 }
 
+// --- Sun & moon (/api/data astro, computed on the node) ---
+function renderAstro(current) {
+  var a = current.astro;
+  if (!a) {   // no location (or clock not synced yet): a hint instead
+    document.getElementById('astroList').innerHTML = '<small class="dim">' + t('astroHint') + '</small>';
+    document.getElementById('astroPanel').style.display = '';
+    return;
+  }
+  function hm(iso) { return iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : t('none'); }
+  var dl = a.dayLengthMin;
+  fillKv('astroList', 'astroPanel', [
+    a.polar ? [t(a.polar === 'day' ? 'polarDay' : 'polarNight'), ''] : null,
+    a.polar ? null : [t('sunrise') + ' / ' + t('sunset'), hm(a.sunrise) + ' / ' + hm(a.sunset)],
+    (a.civilDawn || a.civilDusk) ? [t('twilight'), hm(a.civilDawn) + ' – ' + hm(a.civilDusk)] : null,
+    [t('dayLength'), Math.floor(dl / 60) + ' h ' + ('0' + dl % 60).slice(-2) + ' min'],
+    a.solarNoon ? [t('solarNoon'), hm(a.solarNoon)] : null,
+    [t('sunElev'), a.sunElevation.toFixed(1) + '°'],
+    [t('moonrise') + ' / ' + t('moonset'), hm(a.moonrise) + ' / ' + hm(a.moonset)],
+    a.moonTransit ? [t('moonTransit'), hm(a.moonTransit)] : null,
+    [t('moonPhase'), (t('phases')[a.moonPhaseIndex] || a.moonPhase) + ' · ' + a.moonIlluminationPct + ' %']
+  ]);
+}
+
+// --- Records (/api/records): min / max of today ... all time, converted like the cards ---
+var lastRecords = null;
+function renderRecords() {
+  var r = lastRecords, panel = document.getElementById('xtPanel');
+  if (!r || !r.valid) { panel.style.display = 'none'; return; }
+  var tg = UNIT_TARGETS[unitPref];
+  var P = ['today', 'yesterday', 'month', 'year', 'allTime'], PL = ['todayCap', 'yesterday', 'month', 'year', 'allTime'];
+  var Q = [
+    ['temperature', 'tempMin', 'tempMax', function (v) { return convTemp(v, r.tempUnit, tg.tempUnit).toFixed(1) + '°'; }],
+    ['humidity', 'humidityMin', 'humidityMax', function (v) { return Math.round(v) + '%'; }],
+    ['pressureQnh', 'pressureMin', 'pressureMax', function (v) { var x = convPressure(v, r.pressureUnit, tg.pressureUnit); return x.toFixed(tg.pressureUnit === 'inHg' ? 2 : 1); }],
+    ['gust', null, 'gustMax', function (v) { return convWind(v, r.windUnit, tg.windUnit).toFixed(1); }],
+    ['rainRate', null, 'rainRateMax', function (v) { return convMm(v, r.rainRateUnit, tg.rainRateUnit).toFixed(tg.rainUnit === 'in' ? 2 : 1); }],
+    ['rainDay', null, 'rainDayMax', function (v) { return convMm(v, r.rainUnit, tg.rainUnit).toFixed(tg.rainUnit === 'in' ? 2 : 1); }]
+  ];
+  var unit = { temperature: tg.tempUnit, pressureQnh: tg.pressureUnit, gust: tg.windUnit, rainRate: tg.rainRateUnit, rainDay: tg.rainUnit };
+  function cell(e, f) {
+    if (!e) return '–';
+    var when = e.time ? new Date(e.time).toLocaleString() : e.date;
+    return '<span title="' + when + '">' + f(e.value) + '</span>';
+  }
+  var h = '<table><tr><th></th>' + PL.map(function (k) { return '<th>' + t(k) + '</th>'; }).join('') + '</tr>', rows = 0;
+  Q.forEach(function (q) {
+    var any = P.some(function (p) { return r[p] && ((q[1] && r[p][q[1]]) || r[p][q[2]]); });
+    if (!any) return;
+    rows++;
+    h += '<tr><td>' + t(q[0]) + (unit[q[0]] ? ' <small>' + unit[q[0]] + '</small>' : '') + '</td>' + P.map(function (p) {
+      var o = r[p] || {};
+      return '<td>' + (q[1] ? cell(o[q[1]], q[3]) + ' / ' : '') + cell(o[q[2]], q[3]) + '</td>';
+    }).join('') + '</tr>';
+  });
+  document.getElementById('xtList').innerHTML = h + '</table>';
+  panel.style.display = rows ? '' : 'none';
+}
+
 // Skip re-rendering identical data (fast auto-refresh); ignore the per-second fields
 var lastRenderSig = null;
 function renderSignature(histText, current) {
@@ -1329,11 +1451,26 @@ function renderSignature(histText, current) {
   delete c.nextCycleInSec; delete c.cpuTemp; delete c.freeHeapKiB; delete c.uptimeH;
   return histText + '|' + JSON.stringify(c);
 }
+// Offline (installed app over https, the service worker answered from its cache)
+function showOffline(cachedAt) {
+  var el = document.getElementById('offline');
+  if (!cachedAt) { el.style.display = 'none'; return; }
+  el.innerHTML = '<span class="alert al-info">' + t('offline').replace('{t}',
+    new Date(cachedAt).toLocaleString(LOCALES[lang] || 'en-US')) + '</span>';
+  el.style.display = '';
+}
+// Service worker (web/sw.js): only in a secure context (https, e.g. behind a reverse proxy)
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('/sw.js').catch(function () {});
+}
 function refresh() {
+  // records separately: an older firmware without /api/records just hides the panel
+  fetch('/api/records').then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { lastRecords = j; renderRecords(); }).catch(function () {});
   var histUrl = '/api/history' + (timeRange === '7d' ? '?range=7d' : '');
   Promise.all([
     fetch(histUrl).then(function (r) { return r.text(); }),
-    fetch('/api/data').then(function (r) { return r.json(); })
+    fetch('/api/data').then(function (r) { showOffline(r.headers.get('X-UWN-Cached')); return r.json(); })
   ]).then(function (results) {
     lastFetchMs = Date.now();
     updateUpdatedLabel();

@@ -11,12 +11,19 @@
 // lists, no raw HTML passthrough (raw-HTML blocks in the source — picture
 // galleries, badges — sit between <!-- help:skip --> markers and are
 // stripped at build time, see tools/version.py).
-static const char HELP_PAGE_HTML[] PROGMEM = R"HELPPAGE(
+// One copy in flash: defined only where README_MD_DEFINE is set (web_api.cpp).
+extern const char HELP_PAGE_HTML[];
+#ifdef README_MD_DEFINE
+const char HELP_PAGE_HTML[] PROGMEM = R"HELPPAGE(
 <!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png"><meta name="theme-color" content="#f4f6f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#12161b" media="(prefers-color-scheme: dark)"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="WeatherNode">
 <title>WeatherNode Help</title>
 <style>
   body{font-family:sans-serif;max-width:800px;margin:1rem auto;padding:0 1rem;line-height:1.5;}
@@ -117,3 +124,4 @@ fetch('/help.md').then(function(r){return r.text();}).then(function(md){
 </body>
 </html>
 )HELPPAGE";
+#endif

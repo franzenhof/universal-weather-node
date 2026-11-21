@@ -21,7 +21,7 @@
     "rainMm": { "$ref": "#/$defs/series", "description": "Rain amount per bucket (sum — add them up for totals). Despite the name in rainUnit (in when imperial).", "x-unit-field": "rainUnit" },
     "temp": { "$ref": "#/$defs/series", "description": "Mean air temperature per bucket (selected source).", "x-unit-field": "tempUnit" },
     "humidityPct": { "$ref": "#/$defs/series", "description": "Mean relative humidity per bucket.", "x-unit": "%" },
-    "pressureQnh": { "$ref": "#/$defs/series", "description": "Mean sea-level pressure per bucket (BME280).", "x-unit-field": "pressureUnit" },
+    "pressureQnh": { "$ref": "#/$defs/series", "description": "Mean sea-level pressure per bucket (selected pressure source).", "x-unit-field": "pressureUnit" },
     "batteryVolt": { "$ref": "#/$defs/series", "description": "Mean LiPo voltage per bucket.", "x-unit": "V" },
     "uvSensorVolts": { "$ref": "#/$defs/series", "description": "Mean board UV sensor voltage per bucket (PCB v2.0).", "x-unit-field": "uvSensorVoltsUnit" },
     "uvIndex": { "$ref": "#/$defs/series", "description": "Mean UV index per bucket (wireless or calibrated board input).", "x-unit-field": "uvIndexUnit" },

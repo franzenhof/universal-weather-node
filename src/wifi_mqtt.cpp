@@ -1,4 +1,9 @@
 #include "wifi_mqtt.h"
+#include "out_status.h"
+#include "astro.h"
+#include "alarms.h"
+#include <memory>
+#include <new>
 #include "globals.h"
 #include "params.h"
 #include "board_io.h"
@@ -78,7 +83,7 @@ unsigned long changeRequestedMs  = 0;
 char          changeSsid[33]     = {};
 char          changePass[65]     = {};
 wifi_config_t prevConf           = {};      // driver config of the previous network (rollback)
-char          changeResult[256]  = {};
+WifiChangeOutcome changeResult;           // guarded by changeMux
 constexpr unsigned long WIFI_CHANGE_DELAY_MS = 1500;   // let the settings response go out first
 // After the test network connected: time for the reachability probe
 // (gateway ping / DNS lookup) before the change counts as failed.
@@ -137,6 +142,11 @@ const char* mqttClientId()
 // Publishes one Home Assistant MQTT-discovery config (retained) for a sensor
 // entity that reads `valueTemplate` out of the shared telemetry JSON on
 // topicData. All entities share one HA "device" so they group together.
+bool haDiscoveryFailed = false;
+bool alarmsMqttAll = true;   // one config of the current discovery run failed (out_status.h)
+
+const char* discoveryStateTopic = nullptr;   // != nullptr: the entity's own state topic, no value template
+
 void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
                              const char* deviceClass, const char* valueTemplate, bool binary = false,
                              const char* stateClass = nullptr)
@@ -151,8 +161,8 @@ void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
     JsonDocument doc;
     doc["name"]                 = name;
     doc["unique_id"]            = uniqueId;
-    doc["state_topic"]          = topicData;
-    doc["value_template"]       = valueTemplate;
+    doc["state_topic"]          = discoveryStateTopic ? discoveryStateTopic : topicData;
+    if (valueTemplate) doc["value_template"] = valueTemplate;
     doc["availability_topic"]   = topicAvail;
     doc["payload_available"]    = AVAIL_ONLINE;
     doc["payload_not_available"] = AVAIL_OFFLINE;
@@ -177,10 +187,15 @@ void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
     if (doc.overflowed() || len >= sizeof(payload) ||
         (packetSize > mqttClient.getBufferSize() && !mqttClient.setBufferSize((uint16_t)packetSize))) {
         dbgSerial.printf("MQTT discovery '%s': config too large (%u bytes), skipped\n", key, (unsigned)len);
+        outReport(OUT_HA, false, 0, "config too large");
+        haDiscoveryFailed = true;
         return;
     }
     size_t n = serializeJson(doc, payload, sizeof(payload));
-    mqttClient.publish(configTopic, (const uint8_t*)payload, n, /*retain=*/true);
+    if (!mqttClient.publish(configTopic, (const uint8_t*)payload, n, /*retain=*/true)) {
+        outReport(OUT_HA, false, mqttClient.state(), "publish failed");
+        haDiscoveryFailed = true;
+    }
 }
 
 // Publishes discovery configs for every entity whose backing sensor is
@@ -188,6 +203,7 @@ void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
 // present. Safe/idempotent to call again on every reconnect (retained).
 void publishHomeAssistantDiscovery()
 {
+    haDiscoveryFailed = false;
     // HA's unit_of_measurement wants the degree sign for temperature; the
     // JSON payload's own unit fields (tempUnit etc., see json_payload.cpp)
     // stay plain ASCII ("C"/"F") since they're just machine-readable labels.
@@ -222,14 +238,22 @@ void publishHomeAssistantDiscovery()
                                 "{{ value_json.temp | default(None) }}");
         publishDiscoveryEntity("humidity", "Humidity", "%", "humidity",
                                 "{{ value_json.humidityPct | default(None) }}");
+        // today's records (records.h); the complete set: GET /api/records
+        publishDiscoveryEntity("temp_min_today", "Temperature Min Today", tempUnit, "temperature",
+                                "{{ value_json.tempMinToday | default(None) }}");
+        publishDiscoveryEntity("temp_max_today", "Temperature Max Today", tempUnit, "temperature",
+                                "{{ value_json.tempMaxToday | default(None) }}");
     }
+    if (gCfg.windEn || rf)
+        publishDiscoveryEntity("gust_max_today", "Gust Max Today", windUnit, nullptr,
+                                "{{ value_json.gustMaxToday | default(None) }}");
     if (rf) {
         publishDiscoveryEntity("light", "Illuminance", "lx", "illuminance",
                                 "{{ value_json.lightLux | default(None) }}");
         publishDiscoveryEntity("uv_index", "UV Index", "index", nullptr,
                                 "{{ value_json.uvIndex | default(None) }}");
     }
-    if (bme280Present) {
+    if (bme280Present || rf) {   // the pressure source may be a wireless sensor (unavailable while none delivers)
         publishDiscoveryEntity("pressure_abs", "Pressure (absolute)", pressureUnit, "pressure",
                                 "{{ value_json.pressureAbs | default(None) }}");
         publishDiscoveryEntity("pressure_qnh", "Pressure (QNH)", pressureUnit, "pressure",
@@ -373,8 +397,41 @@ void publishHomeAssistantDiscovery()
         publishDiscoveryEntity("cycle", "Cycle Counter", nullptr, nullptr,
                                 "{{ value_json.cycle | default(None) }}");
     }
+    double lat, lon;
+    if (astroLocation(lat, lon)) {   // sun / moon (astro.h): /api/data "astro"
+        static const char* const ev[][2] = { { "sunrise", "Sunrise" }, { "sunset", "Sunset" },
+                                             { "moonrise", "Moonrise" }, { "moonset", "Moonset" } };
+        char tpl[64];
+        for (const auto& e : ev) {
+            snprintf(tpl, sizeof(tpl), "{{ value_json.astro.%s | default(None) }}", e[0]);
+            publishDiscoveryEntity(e[0], e[1], nullptr, "timestamp", tpl);
+        }
+        publishDiscoveryEntity("moon_phase", "Moon Phase", nullptr, nullptr,
+                                "{{ value_json.astro.moonPhase | default(None) }}");
+        publishDiscoveryEntity("moon_illumination", "Moon Illumination", "%", nullptr,
+                                "{{ value_json.astro.moonIlluminationPct | default(None) }}");
+    }
+    {   // one binary sensor per alarm rule (alarms.h): state <prefix>/alarm/<n> ON / OFF
+        std::unique_ptr<AlarmRule[]> rules(new (std::nothrow) AlarmRule[ALARM_RULES]);   // ~2 KB while announcing
+        if (rules) alarmsSnapshot(rules.get(), nullptr);
+        char key[16], name[40], topic[96];
+        for (int i = 0; rules && i < ALARM_RULES; i++) {
+            snprintf(key, sizeof(key), "alarm_%d", i + 1);
+            if (rules[i].src == AS_OFF) {   // a deleted rule: entity removed
+                snprintf(topic, sizeof(topic), "%s/binary_sensor/%s/%s/config", HA_DISCOVERY_PREFIX, mqttClientId(), key);
+                mqttClient.publish(topic, (const uint8_t*)"", 0, true);
+                continue;
+            }
+            snprintf(name, sizeof(name), "Alarm %s", rules[i].name[0] ? rules[i].name : alarmSrcKey(rules[i].src));
+            snprintf(topic, sizeof(topic), "%s/alarm/%d", topicPrefix(), i + 1);
+            discoveryStateTopic = topic;
+            publishDiscoveryEntity(key, name, nullptr, "problem", nullptr, true);
+            discoveryStateTopic = nullptr;
+        }
+    }
     publishDiscoveryEntity("send_fail_count", "Send Fail Count", nullptr, nullptr,
                             "{{ value_json.status.sendFailCount | default(None) }}");
+    if (!haDiscoveryFailed) outReport(OUT_HA, true);
 }
 
 // Payload writer for beginPublish(): collects ArduinoJson's many small
@@ -508,12 +565,14 @@ bool prepareSta(bool forceDhcp = false)
     return useStaticIp;
 }
 
-void setChangeResult(const char* fmt, const char* a, const char* b = "")
+void setChangeResult(WifiChangeKind kind, const char* ssid, const char* extra = "")
 {
-    char r[sizeof(changeResult)];
-    snprintf(r, sizeof(r), fmt, a, b);
+    WifiChangeOutcome r;
+    r.kind = kind;
+    strlcpy(r.ssid, ssid, sizeof(r.ssid));
+    strlcpy(r.extra, extra, sizeof(r.extra));
     portENTER_CRITICAL(&changeMux);
-    memcpy(changeResult, r, sizeof(r));
+    changeResult = r;
     portEXIT_CRITICAL(&changeMux);
 }
 
@@ -607,7 +666,7 @@ void startWifiTest(unsigned long now)
         prepareSta(dhcp);
         WiFi.begin(ssid, pass[0] ? pass : nullptr);
         dbgSerial.printf("WiFi: stored '%s' without a test (pre-provisioning), connecting...\n", ssid);
-        setChangeResult("Stored the WiFi network \u201c%s\u201d without a test%s.", ssid, "");
+        setChangeResult(WIFI_CHG_STORED_NO_TEST, ssid);
         wifiState     = WifiState::Connecting;
         wifiStateAtMs = now;
         return;
@@ -618,8 +677,7 @@ void startWifiTest(unsigned long now)
     // and a rollback to an empty config could never connect again.
     if (esp_wifi_get_config(WIFI_IF_STA, &prevConf) != ESP_OK || prevConf.sta.ssid[0] == 0) {
         dbgSerial.println("WiFi: change aborted - could not read the current network's config");
-        setChangeResult("Could not start the WiFi change to \u201c%s\u201d: the current network's settings could "
-                        "not be read, so there would be nothing to return to. Nothing was changed%s.", ssid, "");
+        setChangeResult(WIFI_CHG_ABORTED, ssid);
         changeTesting = false;
         return;
     }
@@ -643,6 +701,8 @@ void startWifiTest(unsigned long now)
 // ok: connected and reachable. reason: why not (log/result text).
 void finishWifiTest(bool ok, unsigned long now, const char* reason = nullptr)
 {
+    // "connected, but ..." = the network was joined, gateway/DNS silent (else: not reachable)
+    const bool reachable = reason && !strncmp(reason, "connected", 9);
     char ssid[33];
     portENTER_CRITICAL(&changeMux);
     memcpy(ssid, changeSsid, sizeof(ssid));
@@ -655,7 +715,7 @@ void finishWifiTest(bool ok, unsigned long now, const char* reason = nullptr)
         wifi_config_t conf;
         if (esp_wifi_get_config(WIFI_IF_STA, &conf) == ESP_OK) esp_wifi_set_config(WIFI_IF_STA, &conf);
         dbgSerial.printf("WiFi: connected to '%s', IP %s - stored\n", ssid, WiFi.localIP().toString().c_str());
-        setChangeResult("Switched to the WiFi network \u201c%s\u201d (IP %s).", ssid, WiFi.localIP().toString().c_str());
+        setChangeResult(WIFI_CHG_SWITCHED, ssid, WiFi.localIP().toString().c_str());
         wifiState = WifiState::Up;
     } else {
         char prevSsid[33];
@@ -665,9 +725,7 @@ void finishWifiTest(bool ok, unsigned long now, const char* reason = nullptr)
         prepareSta();
         WiFi.begin();
         dbgSerial.printf("WiFi: '%s' %s - back to '%s'\n", ssid, reason, prevSsid);
-        char msg[sizeof(changeResult)];
-        snprintf(msg, sizeof(msg), "Could not switch to \u201c%%s\u201d: %s \u2014 back on the previous network \u201c%%s\u201d.", reason);
-        setChangeResult(msg, ssid, prevSsid);
+        setChangeResult(reachable ? WIFI_CHG_FAIL_NO_NET : WIFI_CHG_FAIL_UNREACHABLE, ssid, prevSsid);
         wifiState     = WifiState::Connecting;
         wifiStateAtMs = now;
     }
@@ -759,6 +817,11 @@ void pollMqtt(unsigned long now)
 
     if (mqttClient.connected()) {
         mqttClient.loop();
+        // alarm states (retained) and events (alarms.h)
+        alarmsMqttService([](const char* t, const char* p, bool retain) {
+            return mqttClient.publish(t, (const uint8_t*)p, strlen(p), retain); }, topicPrefix(), alarmsMqttAll);
+        alarmsMqttAll = false;
+        if (alarmsConfigChanged()) publishHomeAssistantDiscovery();   // rules renamed / added / deleted
         if (now - lastHaRfPollMs >= HA_RF_POLL_MS) {
             lastHaRfPollMs = now;
             haRfPoll(haRfOut(), HA_RF_CONFIGS_PER_POLL);
@@ -807,9 +870,11 @@ void pollMqtt(unsigned long now)
         if (gCfg.mqttCtrlEn) mqttClient.subscribe(topicCmd);
         publishHomeAssistantDiscovery();
         haRfConnected();          // per-sensor devices: announced again by haRfPoll()
+        alarmsMqttAll = true;     // all alarm states again (retained)
         lastHaRfPollMs = now;
     } else {
         mqttRetryMs = mqttRetryMs ? min(mqttRetryMs * 2, MQTT_RETRY_MAX_MS) : MQTT_RETRY_MIN_MS;
+        outReport(OUT_MQTT, false, mqttClient.state(), "connect failed");
         dbgSerial.printf("MQTT connect failed, rc=%d (retry in %lus)\n",
                       mqttClient.state(), mqttRetryMs / 1000);
     }
@@ -837,7 +902,7 @@ bool wifiRequestChange(const char* ssid, const char* pass, bool test, bool dhcp)
     strlcpy(changePass, pass, sizeof(changePass));
     changeNoTest      = !test;
     changeDhcp        = dhcp;
-    changeResult[0]   = '\0';
+    changeResult      = WifiChangeOutcome();
     changeRequestedMs = millis();
     changePending     = true;
     portEXIT_CRITICAL(&changeMux);
@@ -846,13 +911,12 @@ bool wifiRequestChange(const char* ssid, const char* pass, bool test, bool dhcp)
 
 bool wifiChangeBusy() { return changePending || changeTesting; }
 
-String wifiChangeResult()
+WifiChangeOutcome wifiChangeResult()
 {
-    char r[sizeof(changeResult)];
     portENTER_CRITICAL(&changeMux);
-    memcpy(r, changeResult, sizeof(r));
+    WifiChangeOutcome r = changeResult;
     portEXIT_CRITICAL(&changeMux);
-    return String(r);
+    return r;
 }
 
 String wifiCurrentPassword()
@@ -896,6 +960,7 @@ void mqttPublishTelemetry(const PathValues* pv)
         if (!ok) mqttClient.disconnect();   // a cut-off packet: the stream is out of step, reconnect
     }
     dbgSerial.printf("MQTT publish to '%s' (%u bytes): %s\n", topicData, (unsigned)n, ok ? "OK" : "FAILED");
+    outReport(OUT_MQTT, ok, ok ? 0 : mqttClient.state(), "publish failed");
     doc.clear();   // free before the per-sensor documents
     if (!ok) return;
     // one topic per received wireless sensor: <prefix>/rf/<ID> (Home Assistant

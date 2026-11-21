@@ -107,6 +107,29 @@ struct Config {
     // portal.cpp-style "can't deduce a common type" fixup was needed here.
     volatile float rainMmPerTip = 0.2f;      // mm of rain per reed-switch pulse (Davis default: 0.2mm)
     volatile float windMsPerPps = 1.00584f;  // wind speed (m/s) per pulse-per-second (Davis default)
+    // Calibration of the main values (calibration.h), applied after the value
+    // source was chosen - for the board sensors and wireless sensors alike.
+    volatile int calTempDc     = 0;     // temperature offset, 0.1 K (-100..100)
+    volatile int calHumDpct    = 0;     // humidity offset, 0.1 % (-200..200)
+    volatile int calPressDhpa  = 0;     // station pressure offset before QNH, 0.1 hPa (-200..200)
+    volatile int calRainPermil = 1000;  // rain factor x1000 (500..2000)
+    volatile int calWindPermil = 1000;  // wind speed / gust factor x1000 (500..2000)
+    // Per wireless sensor: "ID:t:h,..." offsets in 0.1 K / 0.1 % (calibration.h)
+    // Per wireless sensor: "ID:name|..." (rf_names.h)
+    char     rfNames[1024]     = "";
+    char     rfCal[1024]       = "";      // stored "A1B2C3D4:5:-20[:gains]" (calibration.h), ~15-40 bytes per sensor
+    // Sunshine detection (derived.h): 0 = illuminance threshold, 1 = solar
+    // radiation >= 0.4 x clear-sky maximum (needs a W/m2 source and lat/lon)
+    volatile int sunMethod     = 0;
+    // Built-in OLED (oled_screens.h): 0 = on for 20 s after a PRG press (as
+    // before), 1 = always on, 2 = on for dispMinutes after a PRG press
+    volatile int dispMode      = 0;
+    volatile int dispMinutes   = 5;     // 1-120
+    volatile int dispScreens   = 1;     // bit n = screen n (0 classic, 1 temperature, 2 wind, 3 rain, 4 pressure, 5 status)
+    volatile int dispRotateSec = 5;     // 2-60
+    volatile int dispContrast  = 200;   // 1-255
+    volatile int dispNightFrom = 0;     // night off [from, to) local hours; equal = never
+    volatile int dispNightTo   = 0;
     volatile int windDirSensorType = 0;     // 0 = continuous potentiometer (linear map), 1 = calibrated lookup table (e.g. reed-switch/resistor-ladder vanes)
     int      windDirCalCount   = 0;         // number of valid entries in the calibration table below (0 = not calibrated)
     uint16_t windDirCalAdc[16] = {};        // raw ADC reading captured per calibration position
@@ -140,6 +163,9 @@ struct Config {
     volatile int davisOffsetHz = 0;      // frequency correction, -100000..100000 Hz
     volatile int davisWindowMs = 25;     // a packet may arrive this late (5-500 ms) ...
     volatile int davisGuardMs  = 40;     // ... or this early (5-500 ms) relative to the prediction
+    volatile int davisRainFilter = 1;    // phantom-rain filter for the tip counter (DavisRainFilter)
+    volatile int davisRainMaxPkt = 8;    // tips per counter packet accepted without confirmation (1-127)
+    volatile int davisRainMaxMin = 50;   // tips per minute a confirmed jump may have (1-127), else counter reset
     volatile int davisBucket   = 0;      // rain collector: 0 = 0.2 mm (EU), 1 = 0.01 in (US)
     volatile int davisModel    = 0;      // wind vane: 0 = Vantage Pro2 (potentiometer), 1 = Vantage Vue (Hall)
     volatile int davisSniffer  = 0;      // 1 = every packet to the web log
@@ -149,12 +175,31 @@ struct Config {
     volatile int davisAfc      = 0;      // 1 = AFC by shoulder probing while tracking
     volatile int davisTable    = 0;      // channel table: 0 = measured (2026), 1 = classic DavisRFM69
     volatile int davisRxBw     = 938;    // receiver bandwidth, kHz x 10 (davisRxBwValid())
-    uint8_t  srcSel[5]         = { 0, 0, 0, 0, 0 };   // value sources (sources.h): air, wind, rain, UV, light; 0 = auto
-    // Wireless sensor IDs to accept (hex, comma-separated, max RF_MAX_SENSORS = 32;
-    // 32 x 8 hex digits + 31 ", " separators = 318 characters); empty = any.
+    uint8_t  srcSel[6]         = { 0, 0, 0, 0, 0, 0 };   // value sources (sources.h SrcGroup): air, wind, rain, UV, light, pressure; 0 = auto
+                                                      // (keys src0..src5; a config without src5 = Auto, i.e. the BME280 as before)
+    // Wireless sensor IDs "Mine" (hex, comma-separated, max RF_MAX_SENSORS = 32;
+    // 32 x 8 hex digits + 31 ", " separators = 318 characters). With
+    // rfOnlyMine only these are accepted (empty list = any sensor).
     // Stored as the NVS string "rfids": a list saved by an older firmware
     // (buffer 48) loads unchanged into the larger buffer, no migration needed.
-    char     rfIds[320]        = "";
+    char     rfIds[320]        = "";  // "Mine" (settings: star): order = wireless 1..n, HA device per ID
+    // Hidden sensors (settings: cross): never stored in the sensor table, no
+    // slot, not output anywhere. Same format and size as rfIds. NVS "rfignore".
+    char     rfIgnore[320]     = "";
+    // 1 = accept only the IDs in rfIds (the behaviour of every firmware before
+    // this setting while a list was set); 0 = also the other received sensors
+    // (they follow the listed ones in reception order). NVS "rfonly"; missing
+    // key (older firmware): 1 with a non-empty rfIds, else 0 - same behaviour.
+    int      rfOnlyMine        = 0;
+    // Web interface / portal language (i18n.h): 0 = Auto (browser), 1 en, 2 de,
+    // 3 fr, 4 es, 5 pt. NVS "uilang"; missing key = Auto.
+    int      uiLang            = 0;
+    // Setup wizard (/setup) finished or dismissed. 0 = the dashboard opens the
+    // wizard once per browser session and it may be used without an admin
+    // password while none is set. NVS "setupdone"; missing key: 1 for a
+    // config stored by an older firmware (no wizard for existing nodes), 0
+    // for a new node / after a factory reset.
+    int      setupDone         = 0;
     char     webAdminPass[33]  = "";  // gates write access to the web settings page
 
     // Loxone UDP output (loxone.h): one datagram "name=value" per value.
@@ -196,8 +241,14 @@ struct Config {
     char     osemToken[81]     = "";   // box access token (Authorization header)
     char     osemSensors[321]  = "";   // "temp=<sensorId>,hum=<id>,..." (see wx_upload.cpp)
     int      osemIntervalSec   = 300;
+    char     wowSiteId[24]     = "";   // Met Office WOW site ID (wx_formats.h)
+    char     wowPin[24]        = "";   // WOW site authentication key (6-digit PIN)
+    int      wowIntervalSec    = 300;
+    char     cwopCall[12]      = "";   // CWOP ID (CW1234) or a ham callsign (APRS-IS)
+    int      cwopPasscode      = -1;   // -1 for CWOP IDs, the APRS-IS passcode for a callsign
+    int      cwopIntervalSec   = 600;
     bool     updateCheckEn     = false;   // daily check for newer firmware (tags/releases API)
-    char     updateUrl[161]    = "https://git.lb.franzenhof.com/api/v1/repos/esp32/universal-weather-node/tags?limit=20";
+    char     updateUrl[161]    = "https://api.github.com/repos/franzenhof/universal-weather-node/releases";
 
     // ------------------------------------------------------------------
     // PCB v2.0 I/O block (board_io.cpp) - all off by default, ignored on
@@ -240,6 +291,10 @@ struct Config {
 struct ConfigLegacyDefaults {
     int loraEn = 1, wifiEn = 0, webApiEn = 0, rfEn = RF_RADIO_OFF, rfProto = RF_PROTO_BRESSER, windEn = 1, rainEn = 1;
 };
+
+// "Only my sensors" for a config stored before the setting existed: on
+// exactly when an ID list is set (= the old filter behaviour).
+inline int rfOnlyMineDefault(const char* rfIds) { return rfIds && rfIds[0] ? 1 : 0; }
 
 Config loadConfig();
 void   saveConfig(const Config& c);

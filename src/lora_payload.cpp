@@ -59,13 +59,13 @@ static Measurements currentMeasurements(const PathValues* pv)
     m.rainSinceStart = rainForOutput(rainMMSinceStart, gCfg);
     m.hasBattery = gCfg.lipoEn;
     m.batteryV   = batteryVolt;
-    // temperature/humidity from the selected source; pressure only from the BME280
+    // temperature/humidity and pressure from the selected sources
     m.hasBme = gSrc.tempValid;
     m.hasHumidity = gSrc.humValid;
     m.humidityPct = gSrc.humidity;
-    m.hasPressure = bme280Present;
-    m.pressureQnh = pressureForOutput(bme280PressSea, gCfg);
-    m.pressureAbs = pressureForOutput(bme280PressAbs, gCfg);
+    m.hasPressure = gSrc.pressValid;
+    m.pressureQnh = pressureForOutput(gSrc.pressSeaHpa, gCfg);
+    m.pressureAbs = pressureForOutput(gSrc.pressAbsHpa, gCfg);
     m.bmeTemp     = temperatureForOutput(gSrc.tempC, gCfg);
     for (int i = 0; i < 3; i++) {
         m.hasDs18b20[i] = (i < bus1Count) && bus1Temps[i] != DEVICE_DISCONNECTED_C;

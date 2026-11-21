@@ -37,7 +37,7 @@ struct HaRfOut {
 };
 
 // Entities per sensor (bit n of a mask = entity n).
-constexpr int HA_RF_ENTITY_COUNT = 25;   // fits the 32-bit masks
+constexpr int HA_RF_ENTITY_COUNT = 28;   // fits the 32-bit masks
 
 // Bit mask of the entities gRfSensors[idx] has values for (0 = unused entry).
 uint32_t haRfEntityMask(int idx);
@@ -66,3 +66,7 @@ void loadHaRfIds(char* out, size_t len);
 void saveHaRfIds(const char* ids);
 constexpr size_t HA_RF_IDS_LEN = 32 * 9 + 1;   // RF_MAX_SENSORS (32) IDs "XXXXXXXX," + terminator
 // (a stored list of 16 IDs from an earlier build, 144 characters, fits)
+
+// The Home Assistant device name of r ("<name> (<model>)" or "<model> <ID>"), for tests
+struct RfSensorReading;
+void haRfDeviceNameForTest(char* out, size_t len, const RfSensorReading& r);

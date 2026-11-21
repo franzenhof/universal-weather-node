@@ -3,7 +3,14 @@
   "device": {
     "name": "Weather Mast",
     "hostname": "weather-mast",
-    "uptimeSec": 180064
+    "uptimeSec": 180064,
+    "language": "auto"
+  },
+  "system": {
+    "uptimeSec": 180064,
+    "heapFree": 150000,
+    "heapMin": 120000,
+    "heapLargest": 90000
   },
   "firmware": {
     "version": "2.0.0"
@@ -52,7 +59,25 @@
     "lorawan": true,
     "loxone": false,
     "updateCheck": false,
-    "weatherNetworks": ["windy"]
+    "weatherNetworks": ["windy"],
+    "status": {
+      "lorawan": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0
+      },
+      "mqtt": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0
+      },
+      "haDiscovery": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0
+      },
+      "windy": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0
+      }
+    }
   },
   "available": {
     "temp": true,
@@ -73,11 +98,18 @@
     "fan": true,
     "victron": true
   },
+  "wireless": {
+    "onlyMine": false,
+    "mine": 0,
+    "hidden": 0,
+    "hiddenInRange": 0
+  },
   "sources": {
     "tempHum": "board",
     "wind": "board",
     "rain": "board",
     "uv": "board",
-    "light": "none"
+    "light": "none",
+    "pressure": "board"
   }
 }

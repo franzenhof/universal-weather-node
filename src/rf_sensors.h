@@ -47,6 +47,7 @@ static_assert(RF_MAX_SENSORS >= RF_SOURCE_SLOTS, "the value-source slots must fi
 // the Bresser library's MSG_OK_* (checked in rf_sensors.cpp).
 constexpr uint8_t RF_VAL_TEMP = 0x01, RF_VAL_HUM = 0x02, RF_VAL_WIND = 0x04, RF_VAL_RAIN = 0x08,
                   RF_VAL_UV = 0x10, RF_VAL_LIGHT = 0x20,
+                  RF_VAL_PRESS = 0x40,   // station pressure (Fine Offset WS69, WN32P / WH25); not a Bresser MSG_OK_* bit
                   RF_VAL_ANY = 0x80;   // staleMask only: lastMs (no packet at all)
 
 struct RfSensorReading {
@@ -57,11 +58,12 @@ struct RfSensorReading {
     uint8_t       proto = 1;         // RF_PROTO_* (config.h) it was received with
     float         rssi = 0.0f;
     bool          batteryOk = true;
+    uint16_t      batteryMv = 0;     // Fine Offset sensors that send their battery voltage (WH51, WN34, WH40 ...), 0 = none
     unsigned long lastMs = 0;        // millis() of the last packet (any content)
     // millis() of the last packet that actually carried each value: a sensor
     // can keep sending (e.g. wind) while one of its measurements fails, so the
     // freshness of every value is judged on its own (sources.cpp)
-    unsigned long tempMs = 0, humMs = 0, windMs = 0, rainMs = 0, uvMs = 0, lightMs = 0;
+    unsigned long tempMs = 0, humMs = 0, windMs = 0, rainMs = 0, uvMs = 0, lightMs = 0, pressMs = 0;
     // RF_VAL_* whose timestamp was found older than SRC_RF_FRESH_MS
     // (rfExpireValues()): keeps them stale when millis() wraps after 49.7 days
     // and an old timestamp would look recent again. Cleared by the next packet
@@ -80,7 +82,8 @@ struct RfSensorReading {
     const char* model = nullptr;     // "WS90", "WH31", "Vantage Pro2", ... (static string); nullptr = none
     uint8_t channel = 0;             // WH31: 1-8; Davis: transmitter ID 1-8; 0 = none
     bool    hasMoisture = false;     // WH51 soil moisture
-    uint8_t moisturePct = 0;
+    uint8_t moisturePct = 0;         // as the sensor reports it, or from the two-point calibration (calibration.h)
+    uint16_t moistureAd = 0xFFFF;    // WH51: raw AD (9 bit), 0xFFFF = none
     bool    hasSolar = false;        // Davis: solar radiation (lightLux holds the lux approximation)
     float   solarWm2 = 0.0f;
     bool    hasSupercap = false;     // WS85 / WS90 / Davis Vue super capacitor (solar-charged)
@@ -111,6 +114,15 @@ extern RfSensorReading gRfSensors[RF_MAX_SENSORS];
 // empty = accept any)
 std::vector<uint32_t> rfParseIds(const char* s);
 
+// Ecowitt-style ID of a Fine Offset sensor as the Ecowitt app / console shows
+// it ("181A2" for our 900181A2; WH31 / WH25 / WH32: the 8-bit ID): false =
+// not a Fine Offset ID (family byte unknown).
+bool rfEcowittId(uint32_t id, uint32_t& shortId);
+// A short ID typed into the Mine / Hidden lists ("181A2") is replaced by the
+// full ID of the Fine Offset sensor it belongs to once that sensor is heard.
+// true = a list changed (gCfg.rfIds / rfIgnore, in RAM; saved with the next save).
+bool rfNormalizeShortId(uint32_t fullId);
+
 // ---- Table handling (rf_sensors_data.cpp, no RadioLib: host-tested) ----
 
 // The values of one decoded packet; only those flagged in ok are stored.
@@ -120,6 +132,7 @@ struct RfValues {
     uint8_t humidity = 0;
     float   windAvgMs = 0.0f, windGustMs = 0.0f, windDirDeg = 0.0f;
     float   rainTotalMm = 0.0f, uvIndex = 0.0f, lightLux = 0.0f;
+    float   pressureHpa = 0.0f;      // station (absolute) pressure
 };
 
 // Stores v in r with the packet time now (per value, see tempMs ...) and
@@ -134,13 +147,54 @@ float rfStoreValues(RfSensorReading& r, const RfValues& v, unsigned long now, un
 // of the sensor heard longest ago provided that was more than takeOverMs ago
 // (the slot is then cleared for the new sensor), else -1 (table full).
 // onlyProto != 0: take over only a sensor received with that RF_PROTO_*.
-int rfSlotFor(uint32_t id, unsigned long now, unsigned long takeOverMs = SRC_RF_FRESH_MS, int onlyProto = 0);
+// mine: a "Mine" sensor (rfIds) - if the table is full of others, it takes
+// the entry of the non-"Mine" sensor heard longest ago.
+int rfSlotFor(uint32_t id, unsigned long now, unsigned long takeOverMs = SRC_RF_FRESH_MS, int onlyProto = 0,
+              bool mine = false);
+
+// ---- Sensor states (settings: star / circle / cross) ----
+// MINE     in gCfg.rfIds: numbered first (wireless 1..n in list order; 1-4 =
+//          value sources), Home Assistant device
+// RECEIVED any other sensor: stored and output, numbered after the "Mine"
+//          ones in reception order; not accepted while rfOnlyMine and a list is set
+// HIDDEN   in gCfg.rfIgnore: never stored, no number, not output anywhere
+enum RfSensorState : uint8_t { RF_STATE_RECEIVED = 0, RF_STATE_MINE = 1, RF_STATE_HIDDEN = 2 };
+RfSensorState rfStateOf(uint32_t id);
+bool rfOnlyMineActive();                 // rfOnlyMine and a non-empty ID list
+bool rfIdAccepted(uint32_t id);          // may enter the table
+// Moves id into the state's list (out of the other); false = that list is
+// full (RF_MAX_SENSORS IDs), nothing changed.
+bool rfSetState(uint32_t id, RfSensorState st);
+// Moves a "Mine" ID one place up (dir < 0) or down in rfIds; false = not possible.
+bool rfMoveMine(uint32_t id, int dir);
+// "XXXXXXXX, YYYYYYYY"
+void rfFormatIds(const std::vector<uint32_t>& ids, char* out, size_t len);
+// Clears the table entries a changed list no longer accepts (the others keep
+// their data; a "Mine" change only renumbers).
+void rfRemoveRejected();
+
+// Hidden sensors still in range (status page "n hidden sensors in range",
+// settings "Hidden sensors in range"): noted when a frame of a hidden ID is
+// dropped. Not part of the sensor table.
+struct RfHiddenSeen { uint32_t id = 0; const char* model = nullptr; float rssi = 0; unsigned long lastMs = 0; uint32_t packets = 0; };
+constexpr int RF_HIDDEN_SEEN = 16;
+constexpr unsigned long RF_HIDDEN_RANGE_MS = 600000UL;   // "in range": heard within 10 min
+extern RfHiddenSeen gRfHidden[RF_HIDDEN_SEEN];
+void rfNoteHidden(uint32_t id, const char* model, float rssi, unsigned long now);
+int  rfHiddenInRange(unsigned long now);
 
 // Indoor sensors (Fine Offset WH45 / WH46 air quality, WN32P / WH25 indoor
 // thermo-hygro-barometer): never picked by the *Auto* value source for
 // temperature / humidity - without an ID list one could otherwise land in
 // wireless 1-4 and feed the outdoor temperature. "Wireless n" may still use them.
 bool rfIsIndoor(const RfSensorReading& r);
+// Nominal send interval (ms) of a sensor (Ecowitt wiki by Gyvate, section
+// "transmission intervals"; Fine Offset family by ID, 0 = unknown) and its
+// freshness window: max(SRC_RF_FRESH_MS, 2.5 x the interval) - the 10-minute
+// air quality sensors (WH41 / WH43 / WH45 / WH46 on battery) stay fresh
+// between their packets, everything else keeps the 5 minutes.
+unsigned long rfNominalIntervalMs(const RfSensorReading& r);
+unsigned long rfFreshMs(const RfSensorReading& r);
 
 // Forget all sensors (ID filter changed).
 void rfSensorsClear();
@@ -200,6 +254,10 @@ bool rfAutoShouldLock(int cfgProto, bool idAccepted);
 // Auto search: the type it stored since the start while that is still the
 // configured type (status page "detected: ..."), else 0.
 int rfSensorsDetectedProto();
+// Auto search progress (rf_autosearch.h) and whether the type was locked by the weak-signal fallback
+struct AutoSearch;
+const AutoSearch& rfAutoSearchState();
+bool rfAutoLockedWeak();
 
 // Davis transmitters appear as DA0000ii, ii = transmitter ID 1-8.
 constexpr uint32_t RF_ID_DAVIS = 0xDA000000UL;

@@ -1,0 +1,191 @@
+{
+  "apiVersion": 1,
+  "valid": true,
+  "tempUnit": "F",
+  "pressureUnit": "inHg",
+  "windUnit": "mph",
+  "rainUnit": "in",
+  "rainRateUnit": "in/h",
+  "today": {
+    "tempMin": {
+      "value": 45.6,
+      "time": "2026-06-15T04:03:57Z"
+    },
+    "tempMax": {
+      "value": 65,
+      "time": "2026-06-15T11:58:57Z"
+    },
+    "humidityMin": {
+      "value": 48,
+      "time": "2026-06-15T11:43:57Z"
+    },
+    "humidityMax": {
+      "value": 87,
+      "time": "2026-06-15T04:03:57Z"
+    },
+    "pressureMin": {
+      "value": 29.91,
+      "time": "2026-06-15T11:53:57Z"
+    },
+    "pressureMax": {
+      "value": 29.94,
+      "time": "2026-06-15T04:23:57Z"
+    },
+    "gustMax": {
+      "value": 20.1,
+      "time": "2026-06-15T11:33:57Z"
+    },
+    "rainRateMax": {
+      "value": 0.38,
+      "time": "2026-06-15T05:13:57Z"
+    }
+  },
+  "yesterday": {
+    "tempMin": {
+      "value": 41.6,
+      "time": "2026-06-15T01:08:57Z"
+    },
+    "tempMax": {
+      "value": 65.5,
+      "time": "2026-06-14T12:33:57Z"
+    },
+    "humidityMin": {
+      "value": 47,
+      "time": "2026-06-14T13:28:57Z"
+    },
+    "humidityMax": {
+      "value": 93,
+      "time": "2026-06-15T01:18:57Z"
+    },
+    "pressureMin": {
+      "value": 29.94,
+      "time": "2026-06-15T03:43:57Z"
+    },
+    "pressureMax": {
+      "value": 30.01,
+      "time": "2026-06-14T06:08:57Z"
+    },
+    "gustMax": {
+      "value": 21.1,
+      "time": "2026-06-14T13:43:57Z"
+    },
+    "rainRateMax": {
+      "value": 0,
+      "time": "2026-06-14T06:03:57Z"
+    }
+  },
+  "month": {
+    "tempMin": {
+      "value": 41.6,
+      "time": "2026-06-15T01:08:57Z"
+    },
+    "tempMax": {
+      "value": 65.5,
+      "time": "2026-06-14T12:33:57Z"
+    },
+    "humidityMin": {
+      "value": 47,
+      "time": "2026-06-14T13:28:57Z"
+    },
+    "humidityMax": {
+      "value": 93,
+      "time": "2026-06-15T01:18:57Z"
+    },
+    "pressureMin": {
+      "value": 29.91,
+      "time": "2026-06-15T11:53:57Z"
+    },
+    "pressureMax": {
+      "value": 30.01,
+      "time": "2026-06-14T06:08:57Z"
+    },
+    "gustMax": {
+      "value": 21.1,
+      "time": "2026-06-14T13:43:57Z"
+    },
+    "rainRateMax": {
+      "value": 0.38,
+      "time": "2026-06-15T05:13:57Z"
+    },
+    "rainDayMax": {
+      "value": 0.53,
+      "date": "2026-06-15"
+    }
+  },
+  "year": {
+    "tempMin": {
+      "value": 41.6,
+      "time": "2026-06-15T01:08:57Z"
+    },
+    "tempMax": {
+      "value": 65.5,
+      "time": "2026-06-14T12:33:57Z"
+    },
+    "humidityMin": {
+      "value": 47,
+      "time": "2026-06-14T13:28:57Z"
+    },
+    "humidityMax": {
+      "value": 93,
+      "time": "2026-06-15T01:18:57Z"
+    },
+    "pressureMin": {
+      "value": 29.91,
+      "time": "2026-06-15T11:53:57Z"
+    },
+    "pressureMax": {
+      "value": 30.01,
+      "time": "2026-06-14T06:08:57Z"
+    },
+    "gustMax": {
+      "value": 21.1,
+      "time": "2026-06-14T13:43:57Z"
+    },
+    "rainRateMax": {
+      "value": 0.38,
+      "time": "2026-06-15T05:13:57Z"
+    },
+    "rainDayMax": {
+      "value": 0.53,
+      "date": "2026-06-15"
+    }
+  },
+  "allTime": {
+    "tempMin": {
+      "value": 41.6,
+      "time": "2026-06-15T01:08:57Z"
+    },
+    "tempMax": {
+      "value": 65.5,
+      "time": "2026-06-14T12:33:57Z"
+    },
+    "humidityMin": {
+      "value": 47,
+      "time": "2026-06-14T13:28:57Z"
+    },
+    "humidityMax": {
+      "value": 93,
+      "time": "2026-06-15T01:18:57Z"
+    },
+    "pressureMin": {
+      "value": 29.91,
+      "time": "2026-06-15T11:53:57Z"
+    },
+    "pressureMax": {
+      "value": 30.01,
+      "time": "2026-06-14T06:08:57Z"
+    },
+    "gustMax": {
+      "value": 21.1,
+      "time": "2026-06-14T13:43:57Z"
+    },
+    "rainRateMax": {
+      "value": 0.38,
+      "time": "2026-06-15T05:13:57Z"
+    },
+    "rainDayMax": {
+      "value": 0.53,
+      "date": "2026-06-15"
+    }
+  }
+}

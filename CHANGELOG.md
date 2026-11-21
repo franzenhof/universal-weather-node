@@ -4,9 +4,127 @@ Release notes of the Universal Weather Node firmware, newest first. Binaries are
 
 [← back to README](README.md)
 
+## 2.0.0-rc.5
+
+Firmware: [`universal-weather-node-2.0.0-rc.5.bin`](firmware/universal-weather-node-2.0.0-rc.5.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.5-factory.bin`](firmware/universal-weather-node-2.0.0-rc.5-factory.bin) (first installation, USB at `0x0`).
+
+Payload format unchanged except two new bits in the value-source field; existing nodes keep their settings and behave as before (pressure source *Auto* = the BME280 when one is detected).
+
+**Portal-only functions in the web settings** (the config portal stays for the first setup and for nodes without Wi-Fi / web interface):
+* **Wind-direction calibration:** *Settings → Sensors → Sensor calibration → Calibrate (guided)* opens the portal's 8- / 16-position wizard (`/calibrate`, live ADC reading, saved without a restart). Admin login, same-origin save; only on boards with a wind-vane input. See [Settings](docs/settings.md#wind-direction-calibration).
+* **Payload decoder download** (ChirpStack / TTN, matching the firmware) in *Settings → Outputs → LoRaWAN* (`/decoder`, no login, as in the portal).
+* **Switch Wi-Fi or the web interface off** (LoRaWAN-only node) in *Settings → System* (advanced) with a warning and a confirmation checkbox; refused unless LoRaWAN is enabled and joined, so the node stays reachable via the config portal (PRG 3 s) or a LoRaWAN downlink. See [Settings](docs/settings.md#switching-wi-fi-or-the-web-interface-off).
+* New API routes in [OpenAPI](docs/api/openapi.yaml): `GET /decoder`, `GET /calibrate`, `GET /calibrate/sample`, `POST /calibrate/save`.
+* The *Firmware update* section shows no live / restart tag (it is an action, not a setting).
+
+**From the Ecowitt wiki (by Gyvate):**
+* **Freshness per sensor type:** sensors that send only every 10 minutes (WH41 / WH43, WH45 / WH46 on battery) stay valid for 25 minutes (2.5 × their interval) instead of 5 — values, stale marks, Home Assistant availability and their table place; they never end the *Auto* search.
+* **WS90 / WS80 on an external supply** (firmware ≥ 1.6.0 reports 0 V): *external power* instead of *battery low*.
+* **WH40 preset** (`…:wh40`, ×1.016: its 0.1016 mm tips are reported as 0.1 mm).
+* **Auto value sources** among wireless 1–4 follow Ecowitt's sensor order (e.g. wind WS90 > WS80 > WS85 > WS69 > WS68, rain WH40 > WN20 > WS69 > piezo).
+* **WH51 raw AD** (`soilMoistureAd`) and an optional two-point soil-moisture calibration per sensor (`…:ad=AD0-AD100`).
+
+**Easier forms:** fields that do not apply are hidden while you edit (static IP, MQTT, weather networks, Loxone, LoRaWAN, custom upload body, webhook body, display timing, wizard MQTT) — without JavaScript everything stays visible. The alarm form: *Monitor* / *Measurement* labels, a list of known sensors (name or model, Ecowitt ID) instead of typing the hex ID, measurements limited to what the sensor provides, no thresholds for yes/no values.
+
+**Firmware update in the web interface:** *Settings → System → Firmware update* uploads a firmware file (`universal-weather-node-<version>.bin`, or the `-factory.bin` from 2.0.0-rc.1 on) with a progress bar, then restarts with a countdown back to the status page — no detour through the config portal anymore. Same checks as the portal (wrong files, a different partition table or low memory are refused before anything is written); only with an admin password (Digest login, same-origin), otherwise the portal remains the way. HTTPS requests, notifications, uploads and LoRaWAN uplinks wait during the upload. The status page links there when a newer version is available. Behind a reverse proxy allow uploads of ~2.5 MB. See [Firmware Update](docs/installation.md#firmware-update-ota).
+
+**Install as an app (home screen):** app icons, a web app manifest (name = device name) and the head tags on every page — *Add to Home Screen* on iOS, *Install app* on Android / desktop. Over https (e.g. behind a reverse proxy) a small service worker keeps the last dashboard and its data available offline (*Offline – last data from …*); settings, setup, log, OTA and POSTs are never cached, and a firmware update renews the cache. See [Install as an App](docs/web-dashboard.md#install-as-an-app-home-screen).
+
+**Per-sensor factors and WN20 correction:** the per-sensor calibration (*Settings → Sensors → Sensor calibration*) also takes factors for rain, wind (mean and gust), UV index and illuminance (`ID:t:h:rain:wind:uv:light`; older `ID:t:h` entries keep working). The rain factor applies to the counter's increments, never to the raw counter shown. Optional **WN20 preset** (`…:wn20`) after the Ecowitt wiki: 0.908 up to 5 mm/h, 0.773 above (verified up to 10 mm/h).
+
+**Auto search no longer locks onto a neighbour's weak sensor:** the type is saved only after 3 valid packets from one sensor within 10 min with a mean signal ≥ −105 dBm (V4: −85 dBm); after 30 min with only weak sensors the best one is taken and marked *signal very weak*. The status page shows the search candidates; the wizard shows the type found with *Search again*. (A field node had saved the type after one packet of a neighbour's IT+ sensor at −114 dBm — the first confirmed real IT+ reception.)
+
+**HTTPS with a memory margin:** a field node fell to 21 KiB free while a Pushover test ran next to a settings save. HTTPS requests (notifications, https weather networks, custom uploads, update check) now start only with ≥ 70 KiB free and ≥ 24 KiB in one free block (the TLS record buffers are two separate ~16.7 KB allocations), and not while a heavy page (settings, status, wizard, backup / restore) is being built; meanwhile those pages answer *busy, try again* (503) when a TLS request runs with little memory. The debug log shows the heap before / after each HTTPS request. (The TLS buffers themselves are fixed at 16 KB in the prebuilt libraries of this toolchain.)
+
+**Heltec V4 on PCB v2.0 (firmware part):** pin map for the V4 sockets (wind direction GPIO6, wind speed GPIO44, rain GPIO16, 1-Wire GPIO43, vane supply GPIO34, VE.Direct RX 33 / TX 45), revision ID on GPIO15 (a V4 without it stays the wireless build), log over native USB (UART0 stays off on every V4). Status page: *v2.0 detected · Heltec V4 sockets*. Not yet tested on real hardware.
+
+**PCB v2.0: Heltec V3 or V4** — see [Heltec V3 or V4 on the PCB](docs/pcb.md). The board has a second socket set for the Heltec WiFi LoRa 32 V4 (J19 / J20, 2.54 mm toward J1, plus the 1×2 socket J21 for the V4's GPIO15 / 16); fit **one** set only. On a V4 the board uses GPIO6 (wind direction), 44 (wind speed), 16 (rain), 43 (1-Wire), 34 (vane supply), 15 (revision ID) and 45 (VE.Direct TX, 100k pull-down R65); the V4's RF-front-end and USB pins stay unconnected. The V4's 5V pin (its USB VBUS) is fed through two LM66100 ideal diodes (U8 / U9: ≈ 4.9 V at the V4, no reverse current into a running USB host, USB-only mode powers the board); keep "remove JP8 and VIN before USB" for switched-off computers and always on the V3. GPIO19 / J16 pin 5 is now labelled VANE. Moved: JP8, JP12, J14 and the VE.Direct isolation gap; U2 / U3 now use the UMW SN74LVC2G14DBVR second source (the TI part was nearly out of stock); new V4 enclosure variant `3dprint/v20-v4/`. DRC 0 errors. *Not yet built — verify the points in `pcb/v2.0/CHECKLIST.md` on the first prototype.*
+
+**Dashboard link stays visible in the navigation (GitHub #2):** the dashboard now has the same five links as the other pages (Dashboard highlighted) and the language menu at the same place.
+
+**Less static RAM (about 10 KB):** the device log keeps the last 4 KB (was 8 KB, the log page shows correspondingly fewer lines); the history rings use 32 instead of 36 bytes per bucket (same JSON); the config portal's CA-certificate buffers (4.4 KB) are taken from the heap only while the portal runs.
+
+**Smaller firmware:** the built-in help and the dashboard page are stored gzip-compressed and sent with `Content-Encoding: gzip` (the browser decompresses them; clients without gzip get them inflated on the node) — about 260 KB less flash.
+
+**From tester feedback (rc.4)**
+* **Rain per wireless sensor:** the sensor's own counter is now labelled *counter* (it counts since the sensor's last battery change, e.g. 6898.6 mm on a WH65); new **rain today** and **rain in the last hour** per sensor from the counter's increments (`rainToday`, `rain1h` in `rfSensors`, MQTT `<prefix>/rf/<ID>`, Home Assistant *Rain Today* `total_increasing`, Loxone `rfN_rainToday`). RAM only.
+* **Lightning (WH57):** strikes today / last hour and the time of the last strike from the counter's increments (`lightningToday`, `lightning1h`, `lastLightning`; HA *Lightning Strikes Today*, *Last Lightning*); the raw counter is only a diagnostic now (HA *Lightning Counter*).
+* **Wind direction** on the dashboard cards and the status page as compass point + degrees (*NE 45°*) instead of an arrow that was read as a trend.
+* **Ecowitt IDs:** shown next to ours (*ID 900181A2 (Ecowitt 181A2)*, JSON `ecowittId`); the short form is accepted in the Mine / Hidden lists and replaced by the full ID when the sensor is heard.
+* **Sensor names** (e.g. *Hochbeet*, 24 characters) in the sensor table and the setup wizard: dashboard, status page, JSON `name`, Home Assistant device *&lt;name&gt; (&lt;model&gt;)*; in the settings backup. The wizard's sensor list no longer reloads while you type.
+* **Sensor battery voltage** (`batteryV`) where the sensor sends it (WH51, WN34, WH40 …).
+* **Fix:** a save could be refused with "static IP (invalid address)" although static IP was not touched — a static IP stored without a valid gateway (config portal) failed every later save. Now an unchanged or switched-off static IP is never checked, an empty address means DHCP, and the portal only stores a complete static address.
+* **Battery on the display:** no more "Bat: 0.000V" — with LiPo measurement off nothing is shown, below 2.5 V *USB* (also on the status page).
+* **PCB v2.0 on a V3:** with VE.Direct off, its TX pin (GPIO34) is driven high — the ADuM121N isolator draws about 1 mA instead of 3.9 mA with a floating input.
+* **`/api/info` `system`:** uptime, free heap, minimum free heap and largest free block (bytes); the status page shows the largest block too — for watching a node over days.
+* Less static RAM: the config portal's firmware-upload buffers (6 KB) are allocated only when an upload starts.
+* Installation: tips for downloading the `.bin` (not the GitHub page), Chrome/Edge, the first DHCP and reopening the portal.
+
+**Davis phantom-rain filter** — see [Settings](docs/settings.md#settings-reference) (*Davis (diagnostics)*).
+* An implausible jump of the Davis tip counter (a corrupt packet that passed the CRC, a decrement that is not a 7-bit wrap, a counter reset) is held until the next counter packet confirms or contradicts it: a corrupt value is dropped, a confirmed jump is rain if it fits the per-minute limit, else the counter is re-based without counting it. Logged to the device log and the radio trace. Settings (advanced): filter on / off, tips per packet without confirmation (8), max. tips per minute (50). Heavy rain passes unchanged.
+
+**OLED weather screens** — see [Display](docs/settings.md#display).
+* New settings tab *Display*: on for 20 s after PRG (default, as before), always on, or N minutes after PRG; screens classic status, temperature, wind, rain, pressure (with tendency arrow and trend word), status (IP, `.local` name, RSSI, sensors, active alarms) with rotation; brightness; night-off hours. A short PRG press while the display is on shows the next screen. Texts in the device language.
+
+**Less static RAM:** the log download buffer (8 KB) and the settings handler's copy of the configuration (5 KB) are now taken from the heap only while needed.
+
+**Alarms and notifications** — see [Alarms and Notifications](docs/alarms.md).
+* Up to 12 alarm rules on any main or derived value, the frost / fog / sultry warnings or a value of a wireless sensor (leak, lightning distance, soil moisture, CO2, PM2.5, silent for N minutes, battery low …): above / below, raise and clear threshold (hysteresis), minimum duration, repeat interval, all clear, priority 1–5, message templates with placeholders in the device language. Ready-made rules: frost, fog / dew, sultry, storm (pressure falling ≥ 6 hPa / 3 h), rain starts. Unavailable (stale) values never raise or clear an alarm.
+* Channels: ntfy (server, topic, token, tags), Pushover (incl. emergency priority with retry / expire), Telegram, MQTT (retained `<prefix>/alarm/<n>` state per rule, events to `<prefix>/alarm`, one Home Assistant binary sensor per rule) and a webhook (GET / POST with a JSON body template). One request at a time on the upload task, waits for enough memory for TLS, retries with back-off; a test button per channel. Tokens are write-only, never logged, and only in a settings backup with *include passwords and keys*.
+* New settings tab *Alarms* (own form), parameter 66 (rules on / off), `GET /api/alarms` ([schema](docs/api/schemas/alarms.schema.json)), `/api/data` `alarms` (active rules, shown as dashboard badges), status-page box *Alarms*, send status per channel in `/api/info` `outputs.status`.
+
+**Custom uploads and more weather networks** — see [Weather Networks](docs/weather-networks.md).
+* Two custom HTTP uploads: URL template, GET / POST with a body template, interval; placeholders such as `{temp}`, `{wind:kmh}`, `{qnh:inhg}`, `{rain_day:in}`, `{temp:.1}`, `{time_utc}`, `{rf3_temp}` (URL-encoded in URLs, JSON-escaped in JSON bodies) — the same engine as the alarm messages and webhook.
+* **Met Office WOW** (WU-style, per its data-format page; WOW has announced its closure) and **CWOP** (APRS weather report over APRS-IS `cwop.aprs.net:14580`, passcode −1 for CWOP IDs, position from latitude / longitude). Not added, as no public upload specification could be verified: PWSWeather, Windguru, Windfinder.
+
+**Smaller firmware:** the built-in help (documentation) was stored twice in flash; now once (about 290 KB less).
+
+**Calibration** — see [Calibration](docs/settings.md#calibration).
+* Offsets for temperature (K), humidity (%) and the station pressure (hPa, before the QNH reduction), factors for rain and wind speed / gust — applied after the value source, for board and wireless sensors alike, so every output (status, dashboard, `/api/data`, MQTT / Home Assistant, LoRaWAN, Loxone, weather networks, records, derived values) sees the corrected value. Parameters 59–63, *Settings → Sensors → Sensor calibration*.
+* Per wireless sensor: temperature / humidity offsets by sensor ID (`ID:temperature:humidity`, up to 32), applied when a packet is stored — they also correct that sensor's own values (`rfSensors`, `<prefix>/rf/<ID>`, its HA device).
+
+**Records** — see [Records](docs/values.md#records).
+* Min / max with time of temperature, humidity, pressure (QNH), max gust and rain rate, and the largest daily rain — today, yesterday, this month, this year, all time; local-midnight roll-over; one flash record written at most hourly and before planned restarts. New `GET /api/records` ([schema](docs/api/schemas/records.schema.json)), dashboard panel *Records*, `/api/data` `tempMinToday` / `tempMaxToday` / `gustMaxToday` (also MQTT, three HA entities, Loxone). Reset in *Settings → System* (parameter 64, all-time separately). The dashboard's former *Records (min · avg · max)* panel is now called *Chart range*.
+
+**Send status per output** — status page and `/api/info` `outputs.status`: for LoRaWAN, MQTT, Home Assistant discovery, Loxone and each weather network the last success, the last error (time, code, short text — no URLs or keys) and the failures in a row.
+
+**Settings backup and restore** — see [Backup and Restore](docs/settings.md#backup-and-restore).
+* *Settings → System*: download all settings as `uwn-settings-<host>-<date>.json` (passwords and keys only when ticked, with a warning) and restore from such a file — validated like a manual save, the changes are listed, restart if needed; files of a newer major format are refused; the LoRaWAN session stays untouched. `GET /api/settings/backup`, `POST /api/settings/restore`.
+
+**Sun and moon** — see [Sun and Moon](docs/values.md#sun-and-moon).
+* Computed on the node from latitude / longitude, no internet: sunrise, sunset, civil twilight, solar noon, day length, sun elevation, clear-sky solar maximum, moonrise / moonset / transit, moon illumination and phase; polar day / night and days without moonrise or moonset handled. `/api/data` `astro`, dashboard panel *Sun & moon* (with a hint when the location is missing, also in the settings), HA timestamp entities *Sunrise / Sunset / Moonrise / Moonset*, *Moon Phase*, *Moon Illumination*, Loxone `astro…` (minutes since midnight). Tested against U.S. Naval Observatory values (sun ±1 min, moon ±3 min).
+* Sunshine duration optionally by solar radiation ≥ 0.4 × clear-sky maximum (WMO-like) for a W/m² sensor (Davis solar radiation); parameter 65.
+* Latitude / longitude are now used on the node (and still only sent to AWEKAS).
+
+**Setup wizard** — see [Setup Wizard](docs/installation.md#setup-wizard).
+* After the first start or a factory reset the dashboard opens a step-by-step wizard (`/setup`, five languages): language → wireless station (live list, mark ★ / hide ✕, "I have no wireless sensors") → location (name, altitude, optional position and time zone from the browser) → units → admin password (strongly recommended) → optional outputs (MQTT / Home Assistant, weather networks, Loxone) → summary. Skip, back and "later" on every step; it never blocks the dashboard (once per browser session, gone for good when finished or closed). Each step posts to the normal settings handler; restart fields are applied by one restart at the end. Open without login only while no admin password is set and the setup is not done; can be started again in *Settings → System*. New parameter 58 (setup done; existing nodes count as done), `POST /setup/done`. The portal's start text now points to the wizard.
+* The language step preselects *Auto* (follows the browser) instead of the detected language.
+* The Wi-Fi-change result banner and the radio-trace start errors are now translated; German "Freier Heap" → "Freier Arbeitsspeicher".
+
+**Web interface in five languages** — see [Language](docs/settings.md#web-settings-page) and [Translations](docs/development.md#translations-web-interface).
+* Status, settings (all tabs, hints, sensor table, messages after saving), log, radio-trace and firmware-update pages, the wind-calibration page and the setup portal's parameter labels in **English, German, French, Spanish and Portuguese**; technical names (JSON keys, topics, parameter names, units, sensor models) stay as they are. The help page (documentation) stays English; WiFiManager's built-in portal pages too.
+* New setting **Language** (*Settings → Basics*, parameter **57**, portal field `uilang`): *Auto* (each browser's `Accept-Language`, region tags such as `de-AT` count) or a fixed language. A language menu on every page (and the dashboard's) sets a per-browser choice (cookie `wnLang`), shared between the dashboard and the other pages; the dashboard otherwise follows the device setting. `/api/info` `device.language`.
+* One source for all texts: `i18n/*.json`, compiled into flash at build time (`tools/i18n_gen.py`); a test fails on missing keys or differing placeholders.
+* The settings, status and log pages are now streamed in small chunks instead of being built as one large string (the settings page needed ~36 KB of contiguous heap and answered 503 on a fragmented heap).
+
+**Settings in tabs, wireless sensors Mine / Received / Hidden** — see [Web Settings Page](docs/settings.md#web-settings-page) and [Mine, Received, Hidden](docs/wireless-sensors.md#mine-received-hidden).
+* The settings page has tabs **Basics**, **Sensors**, **Outputs**, **System** (deep links `#sensors` …; one *Save*, back on the same tab; without JavaScript all tabs are shown). **Show advanced options** (remembered in the browser) reveals the expert fields, hidden by default: Davis diagnostics, CPU frequency, debug mode, the sensor ID lists as text, I/O scale factors, the update version-list URL. All fields keep their meaning; the intervals of MQTT / LoRaWAN wind values moved to *Outputs*.
+* **Wireless sensor table** (tab Sensors): every sensor with number, ID, kind, signal, age and values, and its state — ★ **Mine** (the former ID list: numbered first in this order, wireless 1–4 = value sources, Home Assistant device; arrows change the order), ○ **Received** (output everywhere, numbered after the ★ ones, no HA device) or ✕ **Hidden** (new hidden list: never stored, numbered or output — REST, MQTT, HA, Loxone, sources). Hidden sensors still in range are listed collapsed, with *unhide*.
+* **Only my sensors** (new switch): on = only ★ sensors are received, like an ID list before; off = all except hidden, ★ first. **Existing nodes with an ID list start with it on (identical behaviour), without one off.** With it off and some ★ sensors, the others now get numbers after them (before, a list excluded them).
+* Status page: ★ / ✕ buttons per sensor and "*n* hidden sensors in range". New `POST /api/rf/sensor` (`id`, `action=mine|received|hide|up|down`), parameters **55** (only my sensors) and **56** (empty the hidden list), portal fields `rfignore` / `rfonly`, `rfSensors[].mine` in `/api/data` / MQTT, `/api/info` `wireless` (counts). A ★ sensor always gets a table place (it takes the one of the other sensor heard longest ago).
+
+**Pressure as a value source** — see [Value Sources](docs/wireless-sensors.md#value-sources).
+* New setting *Source: pressure* (web settings, portal field `srcs` as sixth value, **parameter 54**): *Auto* (BME280 first, then wireless 1–4 that send pressure — indoor sensors are fine here), *Board*, *Wireless 1–4*, *Off*. Wireless barometers: Ecowitt / Froggit **WS69** with pressure module and **WN32P / WH25 / WH32B**; Bresser, IT+ and Davis transmitters send none.
+* The sensors' station pressure is reduced to sea level with the configured altitude by the same formula as the BME280 path, so `pressureAbs` / `pressureQnh`, the 3-h tendency and weather trend, history, Home Assistant (pressure entities now also announced with wireless sensors on), weather networks, LoRaWAN and the display work with either source. Freshness per value as for the other groups (5 min); per-sensor `stale` can now list `pressure`.
+* JSON / `/api/info`: `sources.pressure`; `/api/info` `available.pressure` follows the source. LoRaWAN value-source field (CayenneLPP Ch 16 / binary field 33): bits 10–11 = pressure (existing bits unchanged; older firmware leaves them 0 → `none`); decoder updated.
+
+**AWEKAS: more fields** — see [Weather Networks](docs/weather-networks.md).
+* Now also sent (positions per the AWEKAS upload API): **UV index** (UV source), **brightness** in lux (light source), **sunshine hours today** (the node's sunshine statistics, with a light source), **pressure tendency** (−2…2 from the 3-h tendency classes) and **solar radiation** in W/m² — only measured (Davis solar radiation sensor as the light source; then no brightness, the Davis lux value is only an approximation). Soil temperature stays empty.
+
 ## 2.0.0-rc.4
 
 Firmware: [`universal-weather-node-2.0.0-rc.4.bin`](firmware/universal-weather-node-2.0.0-rc.4.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.4-factory.bin`](firmware/universal-weather-node-2.0.0-rc.4-factory.bin) (first installation, USB at `0x0`). Payload format unchanged; existing nodes keep their settings (also the sensor ID list and the *Wireless 1–4* value-source choices).
+
 **Up to 32 wireless sensors** — see [Wireless sensors](docs/wireless-sensors.md).
 * The node now receives up to **32** wireless sensors at the same time (was 4) and *Wireless sensor IDs* takes up to 32 IDs — a fixed table reserved at start, no per-sensor memory allocation at run time (no heap fragmentation). Each sensor has a number 1–32 (`rfSensors[].slot`): its position in the ID list, else the reception order. Only 1–4 can be value sources — *Wireless 1–4*, *Auto* and parameters 45–49 keep their meaning; sensors 5–32 are reported everywhere but never feed the main values.
 * All of them appear on the status page (*Wireless n · ID …*), as dashboard cards (with `#n`), in `/api/data` / MQTT `rfSensors[]` (`slot` 1–32, at most 32 items), on Loxone as `rf1_…` … `rf32_…` (was limited to slots 1–9 in the code, 1–4 in practice) and in the settings hint of received IDs.

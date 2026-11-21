@@ -58,6 +58,7 @@ struct FoFrame {
     uint8_t     channel = 0;         // WH31: 1..8 (DIP switches); 0 = sensor has no channel
     bool        batteryOk = true;
     uint16_t    batteryMv = 0;       // 0 = not reported
+    uint16_t    moistureAd = 0xFFFF; // WH51: raw 9-bit AD of the moisture probe, 0xFFFF = none
     bool  hasTemp = false;     float tempC = 0.0f;
     bool  hasHumidity = false; uint8_t humidity = 0;
     bool  hasWind = false;     float windAvgMs = 0.0f, windGustMs = 0.0f; uint16_t windDirDeg = 0;
@@ -78,7 +79,7 @@ struct FoFrame {
     bool  hasPm1 = false;      float pm1 = 0.0f;         // WH46
     bool  hasPm4 = false;      float pm4 = 0.0f;         // WH46
     bool  hasCo2 = false;      uint16_t co2Ppm = 0;      // WH45 / WH46
-    bool  extPower = false;                              // air quality sensors: battery level 6 = USB powered
+    bool  extPower = false;                              // air quality sensors: battery level 6 = USB powered; WS80 / WS90: 0 V = external supply
     // WH55 water leak
     bool  hasLeak = false;     bool leak = false;        // leak = alarm active (water detected)
     bool  leakHighSensitivity = false;

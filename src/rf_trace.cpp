@@ -457,10 +457,12 @@ void rfTraceWriteFile(RfTraceWriter w, void* ctx, const char* hostname, const ch
     if (pt) o.fmt("#   wireless:      %s, sensor type %s\n", gCfg.rfEn ? "on" : "off", pt);
     else    o.fmt("#   wireless:      %s, sensor type bit mask %d (1 Bresser, 2 IT+ 17.241k, 4 IT+ 9.579k, 8 Fine Offset)\n",
                   gCfg.rfEn ? "on" : "off", gCfg.rfProto);
-    o.fmt("#   ID list:       %s\n", gCfg.rfIds[0] ? gCfg.rfIds : "(empty = any sensor accepted)");
+    o.fmt("#   Mine:          %s\n", gCfg.rfIds[0] ? gCfg.rfIds : "(none)");
+    o.fmt("#   hidden:        %s\n", gCfg.rfIgnore[0] ? gCfg.rfIgnore : "(none)");
+    o.fmt("#   only mine:     %s\n", rfOnlyMineActive() ? "on (other sensors are dropped: IGNORED)" : "off");
     o.fmt("#   LoRaWAN:       %s (shares the radio: no reception during uplinks)\n", gCfg.loraEn ? "on" : "off");
-    o.fmt("#   sources:       air %u, wind %u, rain %u, UV %u, light %u (0 auto, 1 board, 2-5 wireless 1-4, 6 off)\n",
-          gCfg.srcSel[0], gCfg.srcSel[1], gCfg.srcSel[2], gCfg.srcSel[3], gCfg.srcSel[4]);
+    o.fmt("#   sources:       air %u, wind %u, rain %u, UV %u, light %u, pressure %u (0 auto, 1 board, 2-5 wireless 1-4, 6 off)\n",
+          gCfg.srcSel[0], gCfg.srcSel[1], gCfg.srcSel[2], gCfg.srcSel[3], gCfg.srcSel[4], gCfg.srcSel[5]);
     o.fmt("#   units:         %s, wind %s\n", gCfg.unitSystem == 1 ? "imperial" : "metric", gCfg.windUnitMs ? "m/s" : "km/h");
     if (gCfg.rfProto == RF_PROTO_DAVIS)
         o.fmt("#   Davis:         ID %d, offset %d Hz, window %d / guard %d ms, scan %d kHz, AFC %d, table %d, bw %d, "

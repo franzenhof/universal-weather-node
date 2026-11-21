@@ -62,6 +62,20 @@ enum ParamId : uint8_t {
     PARAM_RAIN_PERSIST          = 51,   // 1 = save rain statistics (daily + week/month/year) to flash (hourly + before restarts), 0 = RTC RAM only
     PARAM_LOX_EN                = 52,   // 1 = Loxone UDP output on (host/port/prefix: web settings / portal)
     PARAM_LOX_INTERVAL_SEC      = 53,   // Loxone interval: 0 = every base cycle, else 2..3600 s
+    PARAM_SRC_PRESSURE          = 54,   // value source of the pressure (like 45-49; Auto = BME280 first)
+    PARAM_RF_ONLY_MINE          = 55,   // 1 = accept only the "Mine" IDs (rfIds; no effect while the list is empty), 0 = all except hidden
+    PARAM_RF_HIDDEN_CLEAR       = 56,   // value 0: empty the hidden-sensor list (the IDs themselves: web settings / portal)
+    PARAM_UI_LANG               = 57,   // web interface / portal language: 0 Auto (browser), 1 en, 2 de, 3 fr, 4 es, 5 pt
+    PARAM_SETUP_DONE            = 58,   // 1 = setup wizard done, 0 = offer it again on the next dashboard visit
+    // calibration of the main values (calibration.h), after the value source
+    PARAM_CAL_TEMP_DC           = 59,   // temperature offset, 0.1 K (-100..100)
+    PARAM_CAL_HUM_DPCT          = 60,   // humidity offset, 0.1 % (-200..200)
+    PARAM_CAL_PRESS_DHPA        = 61,   // station pressure offset, 0.1 hPa (-200..200)
+    PARAM_CAL_RAIN_PERMIL       = 62,   // rain factor x1000 (500..2000)
+    PARAM_CAL_WIND_PERMIL       = 63,   // wind speed / gust factor x1000 (500..2000)
+    PARAM_RECORDS_RESET         = 64,   // 1 = reset today ... this year, 2 = also the all-time records
+    PARAM_SUN_METHOD            = 65,   // sunshine: 0 = illuminance threshold, 1 = solar radiation >= 0.4 x clear-sky maximum
+    PARAM_ALARM_ENABLED         = 66,   // alarm rules on / off: bit n = rule n+1 (0..4095), alarms.h
 };
 
 // Applies a single (paramId, value) pair to the live Config + hardware

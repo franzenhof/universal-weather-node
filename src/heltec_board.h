@@ -18,10 +18,13 @@
 //   sleep: CSD=0, CPS/CTX=0; KCT8103L also VFEM=0 (GC1109 keeps VFEM on)
 // The FEM type is read from GPIO2 as input with VFEM on: HIGH = KCT8103L.
 //
-// The custom PCBs are designed for the V3 and use GPIO2 (vane), GPIO5
-// (1-Wire) and GPIO7 (rain, Rev 1.3+): on a V4 only the PCB-less build is
-// supported (wireless sensors, optional BME280 on GPIO41/42) - every PCB
-// input/output is left unconfigured there (boardPcbAllowed()).
+// PCB Rev 1.2 / 1.3 and the V3 sockets of v2.0 use GPIO2 (vane), GPIO5
+// (1-Wire) and GPIO7 (rain), which the V4 needs for the FEM. PCB v2.0 has a
+// second socket set for the V4 with its own pin map (boardPins(), docs/pcb.md
+// "Heltec V3 or V4 on the PCB"), recognised by the revision ID on GPIO15. A
+// V4 without that ID runs the PCB-less build (wireless sensors, optional
+// BME280 on GPIO41/42) and leaves every PCB input / output unconfigured
+// (boardPcbAllowed()).
 //
 // This header is host-compiled (test/firmware_board.cpp): no RadioLib here.
 #include <stdint.h>
@@ -43,6 +46,7 @@ struct BoardInfo {
     uint32_t  flashBytes = 0;          // physical flash size (JEDEC ID), 0 = unknown
     int       psramCap   = -1;         // eFuse PSRAM_CAP, -1 = not read
     FemType   fem        = FEM_NONE;   // V4: detected front-end module
+    bool      pcbOnV4    = false;      // V4: PCB v2.0 revision ID found on GPIO15
 };
 extern BoardInfo gBoard;
 
@@ -64,9 +68,34 @@ inline BoardKind boardResolve(int sel, BoardKind detected)
 
 inline bool boardIsV4() { return gBoard.kind == BOARD_V4; }
 inline bool boardIsR8() { return gBoard.kind == BOARD_V4 && gBoard.psramCap == PSRAM_CAP_8MB; }
-// false on a V4: the custom PCB's GPIOs (vane GPIO2, 1-Wire GPIO5, rain
-// GPIO7, ...) collide with the FEM - never configure them there.
-inline bool boardPcbAllowed() { return !boardIsV4(); }
+// V3: always; V4: only on a PCB v2.0 (its V4 sockets; the revision ID on
+// GPIO15 was read) - otherwise the PCB pins would collide with the FEM.
+inline bool boardPcbAllowed() { return !boardIsV4() || gBoard.pcbOnV4; }
+
+// GPIOs of the PCB functions; -1 = not present on that board / revision.
+struct BoardPins {
+    int8_t windSpeed, rain, oneWire;   // pulse counters (falling edge via the Schmitt trigger on Rev 1.3+), 1-Wire DQ
+    int8_t windDir;                    // wind direction ADC (ADC1)
+    int8_t vaneEn;                     // v2.0 vane supply, LOW = on
+    int8_t veRx, veTx;                 // v2.0 VE.Direct
+};
+// kind = the board in effect, pcbOnV4 = V4 with the v2.0 ID, pcbRev = 12 / 13 / 20
+inline BoardPins boardPins(BoardKind kind, bool pcbOnV4, int pcbRev)
+{
+    if (kind == BOARD_V4) {
+        if (!pcbOnV4) return { -1, -1, -1, -1, -1, -1, -1 };
+        return { 44, 16, 43, 6, 34, 33, 45 };   // V4 sockets of PCB v2.0
+    }
+    if (pcbRev >= 20) return { 6, 7, 5, 2, 19, 33, 34 };
+    if (pcbRev >= 13) return { 6, 7, 5, 2, -1, -1, -1 };
+    return { 3, 4, 5, 2, -1, -1, -1 };
+}
+// Revision ID divider: V3 GPIO20 (USB D+ of the unused USB PHY), V4 GPIO15 (P4).
+inline int boardHwIdPin(BoardKind detected) { return detected == BOARD_V4 ? 15 : 20; }
+// UART0 (GPIO43/44) only on the V3 (CP2102 USB bridge): on a V4 these pins
+// are 1-Wire and wind speed on the PCB, the log goes over the native USB.
+// Decided by the hardware (flash size), before the board setting is known.
+inline bool boardUseUart0(BoardKind detected) { return detected != BOARD_V4; }
 
 inline const char* boardName(BoardKind k) { return k == BOARD_V4 ? "V4" : "V3"; }
 inline const char* femName(FemType f)

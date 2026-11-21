@@ -3,7 +3,14 @@
   "device": {
     "name": "Ecowitt Hub",
     "hostname": "ecowitt-hub",
-    "uptimeSec": 108064
+    "uptimeSec": 108064,
+    "language": "auto"
+  },
+  "system": {
+    "uptimeSec": 108064,
+    "heapFree": 150000,
+    "heapMin": 120000,
+    "heapLargest": 90000
   },
   "firmware": {
     "version": "2.0.0"
@@ -52,12 +59,18 @@
     "lorawan": false,
     "loxone": true,
     "updateCheck": false,
-    "weatherNetworks": []
+    "weatherNetworks": [],
+    "status": {
+      "loxone": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0
+      }
+    }
   },
   "available": {
     "temp": true,
     "humidity": true,
-    "pressure": false,
+    "pressure": true,
     "wind": true,
     "rain": true,
     "uvIndex": true,
@@ -73,11 +86,18 @@
     "fan": false,
     "victron": false
   },
+  "wireless": {
+    "onlyMine": false,
+    "mine": 12,
+    "hidden": 0,
+    "hiddenInRange": 0
+  },
   "sources": {
-    "tempHum": "radio:000C3A7F",
-    "wind": "radio:000C3A7F",
-    "rain": "radio:000C3A7F",
-    "uv": "radio:000C3A7F",
-    "light": "radio:000C3A7F"
+    "tempHum": "radio:900C3A7F",
+    "wind": "radio:900C3A7F",
+    "rain": "radio:900C3A7F",
+    "uv": "radio:900C3A7F",
+    "light": "radio:900C3A7F",
+    "pressure": "radio:25000050"
   }
 }

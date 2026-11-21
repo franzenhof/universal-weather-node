@@ -5,7 +5,9 @@
 // Per group the setting (gCfg.srcSel[]) is
 //   Auto      board sensor first, then wireless sensors 1-4 (like a PC boot
 //             order): the first one that currently delivers the value is used
-//             (temperature / humidity: indoor sensors excluded, rfIsIndoor())
+//             (temperature / humidity: indoor sensors excluded, rfIsIndoor();
+//             pressure: indoor sensors are fine - station pressure is the
+//             same indoors)
 //   Board     only the board's own sensor (BME280, anemometer, rain gauge, UV input)
 //   Wireless n  only wireless sensor n (1-4): the n-th ID in "Wireless sensor
 //             IDs", or - with an empty list - the n-th sensor received since
@@ -22,7 +24,9 @@
 #include <stdint.h>
 #include "wind_window.h"
 
-enum SrcGroup : uint8_t { SG_AIR = 0, SG_WIND, SG_RAIN, SG_UV, SG_LIGHT, SG_COUNT };
+// SG_PRESS (station pressure) came last so the stored settings src0..src4,
+// parameters 45-49 and the LoRaWAN source bits 0-9 keep their meaning.
+enum SrcGroup : uint8_t { SG_AIR = 0, SG_WIND, SG_RAIN, SG_UV, SG_LIGHT, SG_PRESS, SG_COUNT };
 enum SrcSel   : uint8_t { SRC_AUTO = 0, SRC_BOARD = 1, SRC_RF1 = 2, SRC_RF4 = 5, SRC_OFF = 6 };
 // Wireless slots selectable as value sources (Wireless 1-4 = slots 1-4;
 // stored settings and parameters 45-49 keep this meaning).
@@ -33,10 +37,12 @@ constexpr int SRC_IS_BOARD = -1;   // srcResolve(): board sensor; >= 0: gRfSenso
 constexpr unsigned long SRC_RF_FRESH_MS = 300000UL;
 
 int  srcResolve(SrcGroup g);
+struct RfSensorReading;
+int  srcHierarchyRank(const RfSensorReading& r, SrcGroup g);   // Auto: Ecowitt's sensor order (lower = first)
 inline bool srcActive(SrcGroup g)  { return srcResolve(g) != SRC_NONE; }
 inline bool srcIsRadio(SrcGroup g) { return srcResolve(g) >= 0; }
 
-// false = the value ("temp", "humidity", "wind", "rain", "uv", "light") of
+// false = the value ("temp", "humidity", "wind", "rain", "uv", "light", "pressure") of
 // gRfSensors[idx] was last received more than SRC_RF_FRESH_MS ago (stale).
 bool srcRfValueFresh(int idx, const char* value);
 
@@ -48,11 +54,11 @@ int rfSensorIndexForSlot(int slot);
 int rfSlotOfIndex(int idx);
 
 // "board", "radio:39582376" or "none" (JSON); short labels for the web pages
-const char* srcGroupKey(SrcGroup g);   // JSON key: tempHum, wind, rain, uv, light
+const char* srcGroupKey(SrcGroup g);   // JSON key: tempHum, wind, rain, uv, light, pressure
 void srcDescribe(SrcGroup g, char* out, int len);
 
-// Payload: 2 bits per group (0 none, 1 board, 2 wireless) at bit 2*g,
-// bit 15 = a wireless sensor in use reports a low battery.
+// Payload: 2 bits per group (0 none, 1 board, 2 wireless) at bit 2*g
+// (pressure: bits 10-11), bit 15 = a wireless sensor in use reports a low battery.
 uint16_t srcBits();
 
 // Called by rf_sensors.cpp for every decoded packet of gRfSensors[idx].
@@ -75,6 +81,10 @@ struct SrcValues {
     float uvIndexRadio = 0.0f;
     bool  lightValid = false;
     float lightLux = 0.0f;
+    // pressure: BME280 or a wireless sensor's station pressure; QNH with the
+    // configured altitude like the BME280 path (seaLevelPressureHpa())
+    bool  pressValid = false;
+    float pressAbsHpa = 0.0f, pressSeaHpa = 0.0f;
     bool  rfBatteryLow = false;     // a wireless sensor in use reports a low battery
 };
 extern SrcValues gSrc;
@@ -87,3 +97,6 @@ void srcBoardRain(float mm);
 constexpr int SRC_PATHS = 4;   // base, LoRaWAN, MQTT, Loxone
 WindStats srcRfWind(int path, bool tenMin);
 void      srcRfWindReset(int path);
+
+// Parameter ID (params.h) of a group's source setting: 45-49, pressure 54.
+int srcParamId(SrcGroup g);

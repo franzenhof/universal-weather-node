@@ -68,8 +68,8 @@
     [
       "J14",
       "left",
-      36.05,
-      52.05,
+      36.55,
+      52.55,
       9.5,
       21.4
     ],
@@ -145,7 +145,7 @@
         158.0,
         40.0
       ],
-      "volume_mm3": 85706.90250062241,
+      "volume_mm3": 85706.9025006225,
       "watertight": true,
       "single_solid": true
     },
@@ -180,6 +180,18 @@
       "single_solid": true
     }
   },
+  "heltec": "v3",
+  "button_xy_mm": [
+    4.0,
+    13.33
+  ],
+  "display_window_mm": [
+    15.0,
+    48.0,
+    11.93,
+    29.93
+  ],
+  "usb_y_mm": 20.93,
   "button_estimated_top_mm": 29.4,
   "button_length_mm": 14.0,
   "qualification": "CAD checks only; physical fit and IP rating unverified"

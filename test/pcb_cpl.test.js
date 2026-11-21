@@ -28,12 +28,14 @@ raw = [dict(r, **{"Mid Y": f"{float(r['Mid Y'][:-2]) + module.Q7_LEAD_SHIFT:.6f}
 with (base / "universal-weather-node-v2.0-bom-jlcpcb.csv").open() as f:
     bom = list(csv.DictReader(f))
 candidate, review = module.build(raw, bom)
-assert len(candidate) == len(review) == len(raw) == 135
+assert len(candidate) == len(review) == len(raw) == 139   # +U8, U9, C39, R65 (Heltec V4 socket set)
 by_ref = {r["Designator"]: r for r in candidate}
 assert by_ref["U1"]["Rotation"] == "270.000000"
 assert by_ref["U4"]["Rotation"] == "90.000000"
-assert by_ref["U2"]["Rotation"] == "0.000000"
-assert by_ref["U3"]["Rotation"] == "90.000000"
+assert by_ref["U2"]["Rotation"] == "270.000000"   # UMW C5375976: +180 after the 2026-11-21 preview
+assert by_ref["U3"]["Rotation"] == "0.000000"
+assert by_ref["U8"]["Rotation"] == "270.000000"   # LM66100 SC-70-6: +270 after the 2026-11-21 preview
+assert by_ref["U9"]["Rotation"] == "90.000000"
 assert by_ref["U5"]["Rotation"] == "180.000000"
 for before, after in zip(raw, candidate):
     for field in ("Designator", "Mid X", "Mid Y", "Layer"):
@@ -85,6 +87,6 @@ for ref in ("Q4", "C31"):
     must_fail(raw, changed)
 must_fail([dict(r, Rotation="0.000000") if r["Designator"] == "C31" else r for r in raw], bom)
 must_fail([dict(r, Rotation="270.000000") if r["Designator"] == "Q7" else r for r in raw], bom)
-print("PASS 135 placements, Q4 and C31 +180 preview matched, Q7 centroid -1.4 mm, other XY unchanged, identity/angle guards")
+print("PASS 139 placements, Q4 and C31 +180 preview matched, Q7 centroid -1.4 mm, other XY unchanged, identity/angle guards")
 `], {cwd: path.join(__dirname, '..'), stdio: 'inherit'});
 });

@@ -11,6 +11,10 @@
 #include <cmath>
 #include <cstring>
 
+#include "config.h"
+Config gCfg;   // rf_sensors_data.cpp reads the sensor lists (runtime.cpp is not linked here)
+unsigned long hostNow = 0;   // millis() of rf_stats.cpp
+
 static bool near(float a, float b, float eps = 0.001f) { return std::fabs(a - b) < eps; }
 
 // CRC-8 at n-2 and sum at n-1 for a frame of n bytes
@@ -185,6 +189,15 @@ int main()
     seal(ws90r, sizeof(ws90r));
     assert(foDecode(ws90r, sizeof(ws90r), f) && near(f.rainMm, 123.4f, 0.01f) && near(f.tempC, -40.0f));
     assert(near(f.windAvgMs, 30.0f) && f.windDirDeg == 267 && near(f.windGustMs, 40.0f));
+    assert(!f.extPower && f.batteryOk);
+    // WS90 firmware >= 1.6.0 on an external supply: battery 0 V = external power, not a flat battery
+    ws90r[6] = 0x00; seal(ws90r, sizeof(ws90r));
+    assert(foDecode(ws90r, sizeof(ws90r), f) && f.batteryMv == 0 && f.extPower && f.batteryOk);
+    {
+        RfSensorReading x;
+        rfFineOffsetExtras(x, f);
+        assert(x.extPower);
+    }
 
     // ---- WS85 ----
     const uint8_t ws85[] = {0x85, 0x00, 0x28, 0xEB, 0x87, 0x82, 0x6F, 0x00, 0x83, 0x00, 0x3F, 0xFF, 0x00, 0x00, 0x00, 0x00,
@@ -310,7 +323,7 @@ int main()
     // ---- WH25 / WH32 family: type nibble, sum + plausibility (no CRC) ----
     assert(dec("e50272282721c9bb", f) && f.family == FO_FAMILY_WH25 && !strcmp(f.model, "WN32P") && f.id == 0x50);
     assert(f.batteryOk && near(f.tempC, 22.6f) && f.humidity == 40 && f.hasPressure && near(f.pressureHpa, 1001.7f, 0.01f));
-    assert(rfFineOffsetId(f) == 0x25000050UL && rfFineOffsetValues(f).ok == (RF_VAL_TEMP | RF_VAL_HUM));
+    assert(rfFineOffsetId(f) == 0x25000050UL && rfFineOffsetValues(f).ok == (RF_VAL_TEMP | RF_VAL_HUM | RF_VAL_PRESS));   // pressure: value source group
     assert(dec("e50272282721c900", f));                    // XOR missing (WH32B / WN32B): accepted
     assert(!dec("e50272282721c8bb", f));                   // sum
     {
@@ -368,7 +381,10 @@ int main()
         assert(e.hasLeak && e.leak && e.leakHighSensitivity && e.leakRaw == 0x010b);
         assert(dec("e50272282721c9bb", f));
         rfFineOffsetExtras(e, f);
-        assert(e.hasPressure && near(e.pressureHpa, 1001.7f, 0.01f));
+        assert(!e.hasPressure);                            // pressure is a value group now: via rfStoreValues()
+        unsigned long gap;
+        rfStoreValues(e, rfFineOffsetValues(f), 1000, gap);
+        assert(e.hasPressure && near(e.pressureHpa, 1001.7f, 0.01f) && e.pressMs == 1000);
     }
 
     // ---- rejections ----

@@ -62,7 +62,12 @@ MOUNTING_COPPER_RADIUS = 3.75
 # Two 2-pin headers, with one empty 2.54 mm grid row between the jumper rows.
 FIXED["JP1"] = (63.09, 73.20, 90)
 FIXED["JP11"] = (63.09, 78.28, 90)
-FIXED["JP8"] = (23.5, 37.6, 0)
+FIXED["JP8"] = (23.5, 38.6, 0)                  # 1 mm lower: clear of the V4 row J19
+# Heltec V4 socket set (dual_socket.py): rows 2.54 mm towards J1, P4 socket at the STEP position
+FIXED.update({"J19": (X0, ROW_BOT + 2.54, 90), "J20": (X0, ROW_TOP + 2.54, 90),
+              "J21": (round(47.429 - 2.16 + X0, 3), round(ROW_TOP + 2.54 + 11.43 - 5.842, 3), 0),
+              "U8": (9.6, 28.6, 0), "U9": (9.6, 25.8, 180), "C39": (12.9, 28.6, 90), "R65": (25.0, 16.6, 0),
+              "C37": (6.0, 16.9, -90), "C36": (9.4, 16.45, -90), "R1": (45.6, 27.2, 90)})
 FIXED["J18"] = (13.3, 79.0, 0)        # DC jack (THT, optional), opening at the left edge
 FIXED["F7"] = (17.3, 81.5, 90)        # moved right of J18 for the jack
 FIXED["D1"] = (21.6, 84.0, -90)
@@ -75,12 +80,12 @@ FIXED.update({
     "Q4": (38.32, 70.21, 90), "Q5": (44.52, 67.43, 270),
     "R33": (22.8, 61.7, 0), "R62": (27.6, 61.7, 0),
     "R63": (22.8, 64.8, 0), "R64": (27.6, 64.8, 0),
-    "JP12": (28.5, 38.5, 90), "R61": (25.5, 59.0, 0),
+    "JP12": (28.5, 38.9, 90), "R61": (25.5, 59.0, 0),
 })
 # isolated VE.Direct domain at the left edge below the module (terminal J14 + JST-PH J15)
-VIC_X1, VIC_Y0, VIC_Y1 = 18.0, 35.9, 58.0      # domain: x 0..VIC_X1, y VIC_Y0..VIC_Y1
+VIC_X1, VIC_Y0, VIC_Y1 = 18.0, 37.55, 58.0     # domain: x 0..VIC_X1, y VIC_Y0..VIC_Y1 (top 1.65 mm lower for the V4 row J19)
 MOAT_W = 1.5
-J14_Y = VIC_Y0 + 2.9                            # pin 1 (GND) at the top, wire entry from the left edge
+J14_Y = VIC_Y0 + 1.75                           # pin 1 (GND) at the top, wire entry from the left edge
 FIXED["J14"] = (5.0, J14_Y, 270)
 FIXED["J15"] = (3.0, VIC_Y1 - 3.2, 0)
 FIXED["U4"] = (VIC_X1 + MOAT_W / 2, 47.5, 180)   # side 2 (pins 5-8) left in the domain, side 1 right
@@ -96,7 +101,7 @@ ZONES = [   # order = placement priority; ANCHORS below pull critical pads toget
         "F7", "D1", "Q7", "D31", "R45", "F1",
         "U1", "C1", "C2", "C3", "C26", "L1", "C4", "C5", "C33", "C34", "R46", "R47", "R48", "C31",
         "JP8", "C7", "TP2", "TP3", "TP1",                           # buck disconnect, test points
-        "R1", "R2", "C10"]),                                        # HW revision ID at J1.17 (GPIO20)
+        "R2", "C10"]),                                              # HW revision ID at J1.17 (V3 GPIO20; V4 GPIO15 at J21)
     ("CLOW", 70.0, 88.0, 47.0, 64.0, ["C6"]),                      # bulk 5 V output capacitor
     ("I2C2", MOD[2] + 1.3, RJ_L - 0.3, 37.0, C_BOT, [
         "R15", "R16", "D12", "D13", "JP1", "JP11", "R17", "R18", "C8"]),   # I2C conditioning near J9
@@ -114,7 +119,7 @@ ZONES = [   # order = placement priority; ANCHORS below pull critical pads toget
     ("WX", MOD[2] + 1.3, RJ_L - 0.3, 8.6, C_BOT, [
         "R11", "R12", "D11", "R13", "C13",                          # rain conditioning
         "R4", "D8", "R5", "C11", "D9", "R8", "JP2", "R9", "C12", "R10",    # wind conditioning
-        "Q6", "R38", "C23", "D29",                                  # switched vane supply (GPIO19)
+        "Q6", "R38", "C23", "D29",                                  # switched vane supply (VANE_EN)
         "U2", "C14", "R6", "R14",                                   # Schmitt trigger at the Heltec GPIO6/7 pins
         ]),
 ]
@@ -186,7 +191,7 @@ ISOLATORS = ("U4",)
 ISO_ZONES = ("VIC",)
 M = MOD[0] + 25.1
 # module title shifted right / USB-C left: U7, C35-C37 (sensor LDO, Heltec bulk) sit under the module near J2
-TEXTS = (("Heltec WiFi LoRa 32 V3.2", M + 3.5, ROW_TOP + 7.5, 1.5), ("(pin-compatible V3 / V3.1)", M + 3.5, ROW_TOP + 10.0, 1.0), ("USB-C", MOD[0] + 2.9, ROW_TOP + 11.4, 1.2),
+TEXTS = (("Heltec WiFi LoRa 32 V3 or V4", M + 3.5, ROW_TOP + 7.5, 1.5), ("POPULATE ONE SOCKET SET ONLY", M + 3.5, ROW_TOP + 10.0, 1.0), ("USB-C", MOD[0] + 2.9, ROW_TOP + 11.4, 1.2),
          ("ANT", MOD[0] + 46.5, ROW_TOP + 11.4, 1.2), ("Universal Weather Node v2.0", M, ROW_TOP + 15.0, 1.0), ("franzenhof.com", M, ROW_TOP + 17.5, 1.0))
 BRAND = (("Universal Weather Node v2.0", 1.6), ("franzenhof.com", 1.6))
 # bottom-side terminal labels (left->right as seen from the top) and back title block
@@ -200,7 +205,7 @@ BACK_DOCUMENTATION = True
 BACK_TEXTS = (("Universal Weather Node v2.0", 26.0, 17.0, 2.0), ("franzenhof.com", 26.0, 21.5, 1.6), ("CERN-OHL-P v2", 26.0, 25.0, 1.2),
               ("JP8 FITTED: VIN BUCK\nREMOVE BEFORE USB\nUSB ONLY: DISCONNECT VIN\nCHANGE JUMPERS ONLY UNPOWERED", 31.0, 40.0, 0.9))
 
-POWER_NETS = ["GND", "FAN", "FAN_SW", "FAN_SUPPLY", "VIN_IN", "VIN_F", "+VLOAD", "VIN_BUCK", "+5V_BUCK", "BUCK_SW", "BUCK_BST", "BUCK_VCC", "+5V", "3V3_HELTEC", "3V3_LDO"]
+POWER_NETS = ["GND", "FAN", "FAN_SW", "FAN_SUPPLY", "VIN_IN", "VIN_F", "+VLOAD", "VIN_BUCK", "+5V_BUCK", "BUCK_SW", "BUCK_BST", "BUCK_VCC", "+5V", "+5V_V4", "3V3_HELTEC", "3V3_LDO"]
 MEDIUM_NETS, MEDIUM_W = ["+3V3", "OW_SW", "OW_VCC"], 0.4      # sensor supplies (<= 250 mA, PTC-limited)
 HEAVY_NETS, HEAVY_W = ["VIN_IN", "VIN_F", "+VLOAD", "HEAT", "HEAT_D"], 1.5   # conservative width; temperature rise is not validated
 POWER_W = 0.6
@@ -281,7 +286,7 @@ BUCK_PRE_ROUTE = [
 # silkscreen labels next to the pins of unpopulated headers
 ROW_LABELS = {"JP1": [("1", "2", "SDA")], "JP11": [("1", "2", "SCL")],
               "JP10": [("1", "2", "3V3"), ("2", "3", "5V")]}
-PIN_LABELS = {"TP1": ["GND"], "TP2": ["VIN"], "TP3": ["5V"], "TP4": ["3V3"], "TP5": ["GND"], "J16": ["GND", "3V3", "SDA", "SCL", "IO19", "5V"], "JP2": ["R8", "DIR"], "JP9": ["5V", "COM", "VIN"],
+PIN_LABELS = {"TP1": ["GND"], "TP2": ["VIN"], "TP3": ["5V"], "TP4": ["3V3"], "TP5": ["GND"], "J16": ["GND", "3V3", "SDA", "SCL", "VANE", "5V"], "JP2": ["R8", "DIR"], "JP9": ["5V", "COM", "VIN"],
               }
 REFINE = ["C1", "C2", "C3", "L1", "C4", "C5", "C7", "C9", "C11", "C12", "C13", "C14", "C16", "C17", "C18", "C19", "R3", "R7", "R11", "R15", "R16"]
 SOLID_GND = ("J1", "J2", "J15", "J4", "J6", "J7", "J5", "J16", "TP1", "TP5")

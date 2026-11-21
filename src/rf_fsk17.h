@@ -47,20 +47,20 @@ inline RfValues rfFineOffsetValues(const FoFrame& f)
     if (f.hasRain)     { v.ok |= RF_VAL_RAIN;  v.rainTotalMm = f.rainMm; }
     if (f.hasUv)       { v.ok |= RF_VAL_UV;    v.uvIndex = f.uvIndex; }
     if (f.hasLight)    { v.ok |= RF_VAL_LIGHT; v.lightLux = f.lightLux; }
+    if (f.hasPressure) { v.ok |= RF_VAL_PRESS; v.pressureHpa = f.pressureHpa; }   // station pressure: value source "pressure"
     return v;
 }
 
 // The per-sensor values of a Fine Offset frame outside the value-source groups
-// (air quality, leak, leaf wetness, EC, pressure) into the table entry.
+// (air quality, leak, leaf wetness, EC) into the table entry.
 inline void rfFineOffsetExtras(RfSensorReading& r, const FoFrame& f)
 {
-    if (f.hasPressure)  { r.hasPressure = true;  r.pressureHpa = f.pressureHpa; }
     if (f.hasPm25)      { r.hasPm25 = true;      r.pm25 = f.pm25; }
     if (f.hasPm10)      { r.hasPm10 = true;      r.pm10 = f.pm10; r.pm10Estimated = f.pm10Estimated; }
     if (f.hasPm1)       { r.hasPm1 = true;       r.pm1 = f.pm1; }
     if (f.hasPm4)       { r.hasPm4 = true;       r.pm4 = f.pm4; }
     if (f.hasCo2)       { r.hasCo2 = true;       r.co2Ppm = f.co2Ppm; }
-    if (f.hasPm25)      r.extPower = f.extPower;
+    if (f.hasPm25 || f.family == FO_FAMILY_WS80 || f.family == FO_FAMILY_WS90) r.extPower = f.extPower;   // USB / external supply
     if (f.hasLeak) {
         r.hasLeak = true;  r.leak = f.leak;  r.leakHighSensitivity = f.leakHighSensitivity;  r.leakRaw = f.leakRaw;
     }

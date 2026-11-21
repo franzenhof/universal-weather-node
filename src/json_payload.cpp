@@ -11,6 +11,11 @@
 #include "derived_now.h"
 #include "sensors.h"
 #include "api_info.h"
+#include "records.h"
+#include "astro.h"
+#include "alarms.h"
+#include "rf_stats.h"
+#include "rf_names.h"
 #include <esp_timer.h>
 #include <time.h>
 
@@ -84,11 +89,20 @@ void addRfSensorJson(JsonObject o, int i)
     char id[11];
     snprintf(id, sizeof(id), "%08lX", (unsigned long)r.id);
     o["id"]        = id;
+    uint32_t eco;
+    if (r.proto == RF_PROTO_FINEOFFSET && rfEcowittId(r.id, eco)) {   // as the Ecowitt app / console shows it
+        char e[8];
+        snprintf(e, sizeof(e), "%lX", (unsigned long)eco);
+        o["ecowittId"] = e;
+    }
+    const char* nm = rfNameOf(r.id);
+    if (nm[0]) o["name"] = nm;   // user-defined (Settings → wireless sensor table)
     // wireless sensor number 1-32 (ID list order, else reception order); 1-4
     // are the value-source slots. Missing = not in the ID list (not possible
     // while the list filters the reception).
     int slot = rfSlotOfIndex(i);
     if (slot >= 0) o["slot"] = slot + 1;
+    o["mine"] = rfStateOf(r.id) == RF_STATE_MINE;   // in the "Mine" list: numbered first, Home Assistant device
     o["type"]      = r.type;
     o["protocol"]  = rfProtoName(r.proto);
     if (r.model)   o["model"]   = r.model;      // Fine Offset: "WS90", "WH31", ...
@@ -96,9 +110,10 @@ void addRfSensorJson(JsonObject o, int i)
     o["rssi"]      = (int)lroundf(r.rssi);
     // after a millis() wrap the raw difference is meaningless once the sensor is stale
     unsigned long age = (millis() - r.lastMs) / 1000;
-    if ((r.staleMask & RF_VAL_ANY) && age < SRC_RF_FRESH_MS / 1000) age = SRC_RF_FRESH_MS / 1000;
+    if ((r.staleMask & RF_VAL_ANY) && age < rfFreshMs(r) / 1000) age = rfFreshMs(r) / 1000;
     o["ageSec"]    = age;
     o["batteryOk"] = r.batteryOk;
+    if (r.batteryMv) o["batteryV"] = roundf(r.batteryMv / 10.0f) / 100.0f;   // the voltage the sensor reports (diagnostic)
     if (r.hasTemp)     o["temp"]     = temperatureForOutput(r.tempC, gCfg);
     if (r.hasHumidity) o["humidityPct"] = r.humidity;
     if (r.hasWind) {
@@ -106,15 +121,37 @@ void addRfSensorJson(JsonObject o, int i)
         o["windGust"]   = windSpeedForOutput(r.windGustMs, gCfg);
         o["windDirDeg"] = (int)lroundf(r.windDirDeg);
     }
-    if (r.hasRain)  o["rainTotal"] = rainForOutput(r.rainTotalMm, gCfg);
+    if (r.hasRain)  o["rainTotal"] = rainForOutput(r.rainTotalMm, gCfg);   // the sensor's own counter (since battery change)
+    RfStat* st = (r.hasRain || r.hasLightning) ? rfStatFor(r.id, false) : nullptr;
+    uint32_t t = 0, ymd = 0;
+    if (st) rfStatsClock(t, ymd);
+    if (st && r.hasRain) {   // from the counter's increments since the node started (rf_stats.h)
+        rfStatRoll(*st, t, ymd);
+        const int dec = gCfg.unitSystem == 1 ? 2 : 1;
+        const float k = dec == 2 ? 100.0f : 10.0f;
+        if (st->ymd) o["rainToday"] = roundf(rainForOutput(st->rainTodayMm, gCfg) * k) / k;
+        o["rain1h"] = roundf(rainForOutput(rfStatRain1h(*st, t), gCfg) * k) / k;
+    }
     if (r.hasUv)    o["uvIndex"]   = r.uvIndex;
     if (r.hasLight) o["lightLux"]  = (long)lroundf(r.lightLux);
     if (r.hasMoisture) o["soilMoisturePct"] = r.moisturePct;
+    if (r.hasMoisture && r.moistureAd != 0xFFFF) o["soilMoistureAd"] = r.moistureAd;   // WH51 raw AD (calibration)
     if (r.hasSolar) o["solarWm2"] = (long)lroundf(r.solarWm2);       // Davis: solar radiation
     if (r.hasSupercap) o["supercapV"] = roundf(r.supercapV * 10.0f) / 10.0f;   // only stations with one (WS85/WS90, Davis Vue)
     if (r.hasLightning) {
-        o["lightningCount"] = r.lightningCount;   // the sensor's 8-bit counter (wraps)
+        o["lightningCount"] = r.lightningCount;   // the sensor's 8-bit counter (wraps): diagnostic
         if (r.lightningKm) o["lightningDistKm"] = r.lightningKm;
+        if (st) {
+            rfStatRoll(*st, t, ymd);
+            if (st->ymd) o["lightningToday"] = st->strikesToday;
+            o["lightning1h"] = rfStatStrikes1h(*st, t);
+            if (st->lastStrike) {
+                time_t tt = (time_t)st->lastStrike;
+                struct tm u; gmtime_r(&tt, &u);
+                char iso[24]; strftime(iso, sizeof(iso), "%Y-%m-%dT%H:%M:%SZ", &u);
+                o["lastLightning"] = iso;
+            }
+        }
     }
     // Fine Offset per-sensor values (latest packet; no value-source groups)
     if (r.hasPressure) {   // station pressure (not reduced to sea level), in the node's pressure unit
@@ -138,15 +175,23 @@ void addRfSensorJson(JsonObject o, int i)
     if (r.hasLeafWetness) o["leafWetnessPct"] = r.leafWetnessPct;
     if (r.hasConductivity) o["conductivityUsCm"] = (long)lroundf(r.conductivityUsCm);
     // values not received for more than 5 min (the sensor still sends others)
-    const bool has[6] = { r.hasTemp, r.hasHumidity, r.hasWind, r.hasRain, r.hasUv, r.hasLight };
-    static const char* const keys[6] = { "temp", "humidity", "wind", "rain", "uv", "light" };
+    const bool has[7] = { r.hasTemp, r.hasHumidity, r.hasWind, r.hasRain, r.hasUv, r.hasLight, r.hasPressure };
+    static const char* const keys[7] = { "temp", "humidity", "wind", "rain", "uv", "light", "pressure" };
     JsonArray stale;
-    for (int k = 0; k < 6; k++)
+    for (int k = 0; k < 7; k++)
         if (has[k] && !srcRfValueFresh(i, keys[k])) {
             if (stale.isNull()) stale = o["stale"].to<JsonArray>();
             stale.add(keys[k]);
         }
 }
+
+// astro_store.cpp: weak default (host builds without it) = no location
+__attribute__((weak)) bool astroJson(JsonObject) { return false; }
+// alarms_run.cpp: weak defaults (host builds without it) = no alarms
+__attribute__((weak)) int alarmsActiveCount() { return 0; }
+__attribute__((weak)) void alarmsActiveJson(JsonArray) {}
+// Today's records (records_store.cpp; this weak default = none, for host builds without it)
+__attribute__((weak)) bool recordsToday(Records&) { return false; }
 
 void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
 {
@@ -178,9 +223,25 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
         doc["tempUnit"]     = temperatureUnitLabel(gCfg);
         if (gSrc.humValid) doc["humidityPct"] = gSrc.humidity;
     }
-    if (bme280Present) {
-        doc["pressureAbs"]  = pressureForOutput(bme280PressAbs, gCfg);
-        doc["pressureQnh"]  = pressureForOutput(bme280PressSea, gCfg);
+    if (alarmsActiveCount()) alarmsActiveJson(doc["alarms"].to<JsonArray>());   // active alarm rules (alarms.h)
+    {   // sun and moon (astro.h): only with latitude / longitude and the clock
+        JsonObject a = doc["astro"].to<JsonObject>();
+        if (!astroJson(a)) doc.remove("astro");
+    }
+    {   // today's extremes (records.h) - the complete set: GET /api/records
+        static Records today;   // static: ~430 bytes, not on the loop task's stack
+        if (recordsToday(today)) {
+            const RecVal& tn = today.mn[RQ_TEMP][RP_TODAY];
+            const RecVal& tx = today.mx[RQ_TEMP][RP_TODAY];
+            const RecVal& gx = today.mx[RQ_GUST][RP_TODAY];
+            if (tn.t) doc["tempMinToday"] = roundf(temperatureForOutput(tn.v, gCfg) * 10.0f) / 10.0f;
+            if (tx.t) doc["tempMaxToday"] = roundf(temperatureForOutput(tx.v, gCfg) * 10.0f) / 10.0f;
+            if (gx.t) doc["gustMaxToday"] = roundf(windSpeedForOutput(gx.v, gCfg) * 10.0f) / 10.0f;
+        }
+    }
+    if (gSrc.pressValid) {   // selected source: BME280 or a wireless sensor's station pressure (sources.pressure)
+        doc["pressureAbs"]  = pressureForOutput(gSrc.pressAbsHpa, gCfg);
+        doc["pressureQnh"]  = pressureForOutput(gSrc.pressSeaHpa, gCfg);
         doc["pressureUnit"] = pressureUnitLabel(gCfg);
     }
     if (bus1Count > 0) {

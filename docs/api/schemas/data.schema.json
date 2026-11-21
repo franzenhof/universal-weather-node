@@ -64,6 +64,57 @@
       "description": "Air temperature from the selected source (sources.tempHum: board BME280 or a wireless sensor).",
       "x-unit-field": "tempUnit", "x-present": "a temperature source delivers (sources.tempHum not \"none\")"
     },
+    "alarms": {
+      "type": "array", "x-present": "at least one alarm rule is active",
+      "description": "Active alarm rules (Settings → Alarms, docs/alarms.md); the full list: GET /api/alarms.",
+      "items": {
+        "type": "object", "required": ["n", "name", "priority"], "additionalProperties": false,
+        "description": "One active rule.",
+        "properties": {
+          "n": { "type": "integer", "minimum": 1, "maximum": 12, "description": "Rule slot." },
+          "name": { "type": "string", "description": "Rule name (or the value key when unnamed)." },
+          "priority": { "type": "integer", "minimum": 1, "maximum": 5, "description": "1 lowest … 5 urgent." }
+        }
+      }
+    },
+    "astro": {
+      "type": "object", "additionalProperties": false,
+      "x-present": "latitude and longitude set and the clock synced",
+      "description": "Sun and moon for today (local day, setting Time zone), computed on the node from latitude / longitude (no internet). Times of events that do not happen that day are left out (polar day / night, days without moonrise or moonset).",
+      "required": ["dayLengthMin", "sunElevation", "clearSkyWm2", "moonIlluminationPct", "moonPhase", "moonPhaseIndex"],
+      "properties": {
+        "sunrise": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "Sunrise (upper limb, refraction: -0.833 deg) (UTC; absent: none on this local day)." },
+        "sunset": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "Sunset (UTC; absent: none on this local day)." },
+        "civilDawn": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "Begin of civil twilight (sun -6 deg) (UTC; absent: none on this local day)." },
+        "civilDusk": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "End of civil twilight (UTC; absent: none on this local day)." },
+        "solarNoon": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "Solar noon (sun on the meridian) (UTC; absent: none on this local day)." },
+        "polar": { "type": "string", "enum": ["day", "night"], "description": "Sun up all day (day) or down all day (night); absent on normal days." },
+        "dayLengthMin": { "type": "integer", "minimum": 0, "maximum": 1500, "description": "Minutes the sun is up today.", "x-unit": "min" },
+        "sunElevation": { "type": "number", "minimum": -90, "maximum": 90, "description": "Current sun elevation (geometric, deg).", "x-unit": "deg" },
+        "clearSkyWm2": { "type": "integer", "minimum": 0, "description": "Clear-sky global radiation now (Haurwitz model) - the reference of the radiation-based sunshine detection.", "x-unit": "W/m2" },
+        "moonrise": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "Moonrise (UTC; absent: none on this local day)." },
+        "moonset": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "Moonset (UTC; absent: none on this local day)." },
+        "moonTransit": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "Moon transit (highest point) (UTC; absent: none on this local day)." },
+        "moonIlluminationPct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Illuminated fraction of the moon now.", "x-unit": "%" },
+        "moonPhase": { "type": "string", "enum": ["new", "waxingCrescent", "firstQuarter", "waxingGibbous", "full", "waningGibbous", "lastQuarter", "waningCrescent"], "description": "Moon phase now (eight 45-degree sectors of the sun-moon elongation)." },
+        "moonPhaseIndex": { "type": "integer", "minimum": 0, "maximum": 7, "description": "moonPhase as a number: 0 new ... 4 full ... 7 waning crescent." }
+      }
+    },
+    "tempMinToday": {
+      "type": "number",
+      "description": "Lowest temperature since local midnight (records, see /api/records).",
+      "x-unit-field": "tempUnit", "x-present": "clock synced and a temperature recorded today"
+    },
+    "tempMaxToday": {
+      "type": "number",
+      "description": "Highest temperature since local midnight (records).",
+      "x-unit-field": "tempUnit", "x-present": "like tempMinToday"
+    },
+    "gustMaxToday": {
+      "type": "number", "minimum": 0,
+      "description": "Highest gust since local midnight (records).",
+      "x-unit-field": "windUnit", "x-present": "clock synced and wind recorded today"
+    },
     "tempUnit": {
       "type": "string", "enum": ["C", "F"],
       "description": "Unit of temp, dewPoint, feelsLike and tempTrend1h (C → K, F → °F difference). Not present without a temperature source — use /api/info units.temp for rfSensors[] temperatures.",
@@ -77,8 +128,8 @@
 
     "pressureAbs": {
       "type": "number", "minimum": 0,
-      "description": "Station (absolute) air pressure, BME280.",
-      "x-unit-field": "pressureUnit", "x-present": "a BME280 is detected (status.bme280Present)"
+      "description": "Station (absolute) air pressure from the selected source (sources.pressure: the BME280, or a wireless sensor with a barometer, e.g. Ecowitt WS69 pressure module, WN32P / WH25).",
+      "x-unit-field": "pressureUnit", "x-present": "a pressure source delivers (BME280 detected, or a wireless pressure value not older than 5 min)"
     },
     "pressureQnh": {
       "type": "number", "minimum": 0,
@@ -222,10 +273,11 @@
       "type": "object",
       "description": "Which sensor currently feeds each value group: \"board\", \"radio:<8-hex-digit sensor id>\" (see rfSensors[].id) or \"none\".",
       "x-present": "wireless sensors enabled (setting rfEn); /api/info sources is always present",
-      "required": ["tempHum", "wind", "rain", "uv", "light"],
+      "required": ["tempHum", "wind", "rain", "uv", "light", "pressure"],
       "additionalProperties": true,
       "properties": {
         "tempHum": { "$ref": "#/$defs/source", "description": "Source of temp/humidityPct." },
+        "pressure": { "$ref": "#/$defs/source", "description": "Source of pressureAbs/pressureQnh (BME280 or a wireless sensor's station pressure)." },
         "wind": { "$ref": "#/$defs/source", "description": "Source of windSpeed/windGust/windDirDeg." },
         "rain": { "$ref": "#/$defs/source", "description": "Source of the rain values." },
         "uv": { "$ref": "#/$defs/source", "description": "Source of uvIndex." },
@@ -370,7 +422,7 @@
         "bme280Present": { "type": "boolean", "description": "A BME280 was detected.", "x-present": "always" },
         "bus1Present": { "type": "boolean", "description": "At least one DS18B20 probe was found.", "x-present": "always" },
         "sendFailCount": { "type": "integer", "minimum": 0, "description": "Consecutive failed LoRaWAN uplinks (0 without LoRaWAN).", "x-present": "always" },
-        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20], "description": "PCB revision: 12 = Rev 1.2, 13 = Rev 1.3 (also the default of a board without PCB), 20 = v2.0, 0 = none possible (Heltec V4).", "x-present": "always" },
+        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20], "description": "PCB revision: 12 = Rev 1.2, 13 = Rev 1.3 (also the default of a board without PCB), 20 = v2.0 (also a Heltec V4 on PCB v2.0), 0 = Heltec V4 without PCB.", "x-present": "always" },
         "board": { "type": "string", "enum": ["V3", "V4", "V4-R8"], "description": "Heltec WiFi LoRa 32 board in effect (V4-R8 = unsupported PSRAM variant).", "x-present": "always" },
         "boardFem": { "type": "string", "enum": ["GC1109", "KCT8103L"], "description": "RF front-end module detected on a V4.", "x-present": "Heltec V4 with a detected front end" },
         "uvEnabled": { "type": "boolean", "description": "PCB v2.0 UV input enabled.", "x-present": "always" },
@@ -401,7 +453,7 @@
     "rfSensors": {
       "type": "array",
       "maxItems": 32,
-      "description": "Every wireless sensor received since the start (at most 32; with an ID list only the listed IDs), in reception order — slot gives its number. Values in the configured units: temperatures in /api/info units.temp, wind in windUnit/units.wind, rain in rainUnit/units.rain. The same object is published per sensor on the MQTT topic <prefix>/rf/<id>.",
+      "description": "Every wireless sensor received since the start (at most 32; never hidden sensors; with Only my sensors only the \"Mine\" IDs), in table (reception) order — slot gives its number. Values in the configured units: temperatures in /api/info units.temp, wind in windUnit/units.wind, rain in rainUnit/units.rain. The same object is published per sensor on the MQTT topic <prefix>/rf/<id>.",
       "x-present": "wireless sensors enabled (setting rfEn); may be empty",
       "items": { "$ref": "#/$defs/rfSensor" }
     },
@@ -481,11 +533,15 @@
     "rfSensor": {
       "type": "object",
       "description": "One wireless sensor. Value fields exist only for what the sensor sends.",
-      "required": ["id", "type", "protocol", "rssi", "ageSec", "batteryOk"],
+      "required": ["id", "type", "protocol", "rssi", "ageSec", "batteryOk", "mine"],
       "additionalProperties": true,
       "properties": {
         "id": { "type": "string", "pattern": "^[0-9A-F]{8}$", "description": "Sensor ID, 8 upper-case hex digits (Bresser IDs change with a battery change).", "x-present": "always" },
-        "slot": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Wireless sensor number 1–32: position in the Wireless sensor IDs list, else reception order (= table position). Slots 1–4 are the Wireless 1–4 choices of the value-source settings; Loxone names rf<slot>_….", "x-present": "always, except a Davis transmitter whose ID is not in a set ID list" },
+        "batteryV": { "type": "number", "minimum": 0, "description": "Battery voltage as the sensor reports it (diagnostic; batteryOk applies the model's threshold).", "x-unit": "V", "x-present": "Fine Offset sensors that send a voltage (WH51, WN34 / WN38, WH40, WN20, WS80 / WS90 ...)" },
+        "ecowittId": { "type": "string", "pattern": "^[0-9A-F]{1,6}$", "description": "The ID as the Ecowitt app / console shows it (Fine Offset sensors: the low 24 bits, WH31 / WH25 / WH32 the 8-bit ID); accepted in the Mine / Hidden lists.", "x-present": "Fine Offset sensors" },
+        "name": { "type": "string", "maxLength": 24, "description": "User-defined name (Settings → wireless sensor table).", "x-present": "a name is set" },
+        "slot": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Wireless sensor number 1–32: the \"Mine\" sensors first in list order, then the other received sensors in reception order (table position). Slots 1–4 are the Wireless 1–4 choices of the value-source settings; Loxone names rf<slot>_….", "x-present": "always, except beyond number 32 (many listed but not received IDs plus many others)" },
+        "mine": { "type": "boolean", "description": "The sensor is in the \"Mine\" list (settings star): numbered first, gets a Home Assistant device. Hidden sensors never appear here.", "x-present": "always" },
         "type": { "type": "integer", "minimum": 0, "maximum": 15, "description": "Bresser sensor type number: 0/1/12/13 weather station, 2 thermo-hygro, 3 pool thermometer, 4 soil, 5 leakage, 8 air quality PM, 9 rain gauge or lightning, 10 CO2, 11 HCHO/VOC. Fine Offset and IT+ sensors are mapped to the same numbers; the Fine Offset temperature probes WN34 and WN38 (black globe) also use 3, the WN35 leaf wetness sensor 4 (like the WH51/WH52 soil sensors) — tell them apart by model.", "x-present": "always" },
         "protocol": { "type": "string", "enum": ["Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset", "Davis"], "description": "Radio protocol it was received with.", "x-present": "always" },
         "model": { "type": "string", "description": "Fine Offset model, e.g. WS90, WS85, WS80, WS69, WH65, WH24, WH31, WH31B, WH40, WN20, WN34, WN38, WH51, WH57, WS68, WN32 (WH32 outdoor family), WN32P (WH25 / WH32B indoor family), WN35, WH41, WH0290, WH43, WH45, WH46, WH52, WH55; Davis: \"Vantage Pro2\" or \"Vantage Vue\" (the station setting, not detected).", "x-present": "Fine Offset and Davis sensors" },
@@ -498,15 +554,21 @@
         "windSpeed": { "type": "number", "minimum": 0, "description": "Wind mean speed of the last packet.", "x-unit-field": "windUnit / /api/info units.wind", "x-present": "the sensor sends wind" },
         "windGust": { "type": "number", "minimum": 0, "description": "Wind gust of the last packet.", "x-unit-field": "windUnit / /api/info units.wind", "x-present": "the sensor sends wind" },
         "windDirDeg": { "type": "integer", "minimum": 0, "maximum": 360, "description": "Wind direction of the last packet.", "x-unit": "deg", "x-present": "the sensor sends wind" },
-        "rainTotal": { "type": "number", "minimum": 0, "description": "The sensor's own rain counter (resets with a battery change) — use the top-level rain values for display.", "x-unit-field": "rainUnit / /api/info units.rain", "x-present": "the sensor sends rain" },
+        "rainTotal": { "type": "number", "minimum": 0, "description": "The sensor's own rain counter since its last battery change / reset (not a total of this node; shown as \"counter\") — use rainToday or the top-level rain values for display.", "x-unit-field": "rainUnit / /api/info units.rain", "x-present": "the sensor sends rain" },
+        "soilMoistureAd": { "type": "integer", "minimum": 0, "maximum": 511, "description": "Raw AD value of the WH51 moisture probe (9 bit) - for the two-point calibration (soilMoisturePct then uses it).", "x-present": "WH51" },
+        "rainToday": { "type": "number", "minimum": 0, "description": "Rain since local midnight from this sensor's counter increments (counter resets handled like the main rain path; RAM only: since the node started if that was today).", "x-unit-field": "rainUnit", "x-present": "the sensor sends rain and the clock is synced" },
+        "rain1h": { "type": "number", "minimum": 0, "description": "Rain of the last hour (six 10-minute buckets) from this sensor's counter increments.", "x-unit-field": "rainUnit", "x-present": "the sensor sends rain" },
         "uvIndex": { "type": "number", "minimum": 0, "description": "UV index.", "x-unit": "index", "x-present": "the sensor sends UV" },
         "lightLux": { "type": "integer", "minimum": 0, "description": "Illuminance.", "x-unit": "lx", "x-present": "the sensor sends light" },
         "soilMoisturePct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Soil moisture (Fine Offset WH51, WH52).", "x-unit": "%", "x-present": "WH51, WH52" },
         "solarWm2": { "type": "integer", "minimum": 0, "description": "Solar radiation (Davis solar radiation sensor); lightLux carries it converted with 126.7 lx per W/m² (an approximation).", "x-unit": "W/m²", "x-present": "Davis with solar radiation sensor" },
         "supercapV": { "type": "number", "minimum": 0, "description": "Super-capacitor voltage, rounded to 0.1 (WS85/WS90; Davis Vue: raw/300, scaling not verified).", "x-unit": "V", "x-present": "WS85, WS90, Davis transmitters that send it (Vue)" },
-        "lightningCount": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Strikes counted by the sensor (8 bit, wraps; difference it yourself).", "x-present": "lightning sensor (WH57)" },
+        "lightningCount": { "type": "integer", "minimum": 0, "maximum": 255, "description": "The sensor's raw strike counter (8 bit, wraps) - diagnostic; use lightningToday / lightning1h.", "x-present": "lightning sensor (WH57)" },
+        "lightningToday": { "type": "integer", "minimum": 0, "description": "Strikes since local midnight from the counter's increments (the first packet after a start is the baseline; a jump > 50 in one packet = counter reset, not counted).", "x-present": "lightning sensor and the clock synced" },
+        "lightning1h": { "type": "integer", "minimum": 0, "description": "Strikes in the last hour.", "x-present": "lightning sensor" },
+        "lastLightning": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "Time of the packet with the last counted strike (UTC).", "x-present": "a strike was counted since the node started (clock synced)" },
         "lightningDistKm": { "type": "integer", "minimum": 1, "description": "Distance to the storm front.", "x-unit": "km", "x-present": "lightning sensor with a detected storm" },
-        "pressure": { "type": "number", "minimum": 0, "description": "Station pressure measured by the sensor (not reduced to sea level), latest packet; rounded to 0.1 hPa / 0.01 inHg. Per sensor only (the node's pressureQnh/pressureAbs always come from the BME280).", "x-unit-field": "/api/info units.pressure (hPa or inHg)", "x-present": "Fine Offset WN32P / WH25 / WH32B indoor sensor, WS69 with pressure module" },
+        "pressure": { "type": "number", "minimum": 0, "description": "Station pressure measured by the sensor (not reduced to sea level), latest packet; rounded to 0.1 hPa / 0.01 inHg. Also usable as the node's pressure source (sources.pressure), then pressureAbs = this value and pressureQnh reduced with the configured altitude.", "x-unit-field": "/api/info units.pressure (hPa or inHg)", "x-present": "Fine Offset WN32P / WH25 / WH32B indoor sensor, WS69 with pressure module" },
         "pm25": { "type": "number", "minimum": 0, "description": "PM2.5 particulate matter, 0.1 resolution.", "x-unit": "µg/m³", "x-present": "Fine Offset air quality sensor (WH41, WH0290, WH43, WH45, WH46)" },
         "pm10": { "type": "number", "minimum": 0, "description": "PM10 particulate matter, 0.1 resolution (see pm10Estimated).", "x-unit": "µg/m³", "x-present": "Fine Offset air quality sensor (WH41, WH0290, WH43, WH45, WH46)" },
         "pm10Estimated": { "type": "boolean", "const": true, "description": "true: pm10 is not measured but derived from PM2.5 by the sensor's particle counter (Honeywell HPM; the Ecowitt consoles do not show it).", "x-present": "WH41, WH0290, WH43" },
@@ -521,7 +583,7 @@
         "conductivityUsCm": { "type": "integer", "minimum": 0, "description": "Soil electrical conductivity (EC); empirical scaling from the published analysis (within about 1 %).", "x-unit": "µS/cm", "x-present": "Fine Offset WH52 soil sensor" },
         "stale": {
           "type": "array",
-          "items": { "type": "string", "enum": ["temp", "humidity", "wind", "rain", "uv", "light"], "description": "Value group." },
+          "items": { "type": "string", "enum": ["temp", "humidity", "wind", "rain", "uv", "light", "pressure"], "description": "Value group." },
           "description": "Value groups not received for more than 5 minutes (shown values are old; the node no longer uses them).",
           "x-present": "at least one value is stale"
         }

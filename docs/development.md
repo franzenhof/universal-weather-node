@@ -31,6 +31,8 @@ Or everything in one go with the factory image: `esptool.py --chip esp32s3 write
 
 - **Versioning:** [`tools/version.py`](../tools/version.py) stamps the build with `git describe` and generates `include/generated_version.h`, `include/decoder_js.h` and `include/readme_md.h` (git-ignored). Only release builds — an exact tag on a clean tree, or `FW_VERSION=1.2.3 pio run` — are copied to `firmware/`. Tags are written without a leading `v` (e.g. `2.0.0-beta.1`); a leading `v` is stripped from the version anyway.
 - **Documentation in the firmware:** `tools/version.py` combines README.md, the `docs/` pages and CHANGELOG.md into one Markdown page for the built-in help (`include/readme_md.h`). Links between the files become in-page anchors, links to other repository files become absolute GitHub URLs. Blocks between `<!-- help:skip -->` and `<!-- /help:skip -->` (pictures, badges) are left out — the renderer supports plain Markdown only.
+- **App icons and service worker:** the home-screen icons in `pictures/icon/` (`icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png` 180 px opaque, `favicon-32.png`; palette PNGs, ~14 KB) are made by `tools/make_icon.py`; `tools/version.py` embeds them unchanged (no gzip) together with the service worker `web/sw.js` (its cache name gets the firmware version) into the git-ignored `include/web_assets.h`. The manifest is built at run time (`src/web_manifest.cpp`, device name and language). Tests: `test/pwa.test.js`, `test/firmware_manifest.cpp`.
+- **Compressed web assets:** the help Markdown and the dashboard page (`include/chart_page.h`, a raw string you edit as usual) are stored **gzip-compressed** in flash: `tools/version.py` writes `include/readme_md.h` and `include/chart_page_gz.h` (git-ignored) with `tools/gz_embed.py` (level 9, mtime 0, no file name — the same source always gives the same bytes). `src/gz_send.cpp` sends them with `Content-Encoding: gzip`, `Vary: Accept-Encoding` and the compressed `Content-Length`; every browser decompresses them. A client without `Accept-Encoding: gzip` (e.g. `curl` without `--compressed`) gets the plain bytes, inflated on the fly by the ESP32-S3 ROM inflater (`tinfl`, about 43 KB of heap only while sending; `406` if that much is not free). The dashboard gets the device language from the cookie `wnDev` set with the page, so the page itself stays a fixed file. Check: `curl -s --compressed http://<node>/help.md | head` and `curl -sI http://<node>/` (shows `Content-Encoding: gzip` only when asked with `-H 'Accept-Encoding: gzip'`). `test/gz_embed.test.js` checks that the bytes decompress to exactly the source.
 
 ## Tests
 
@@ -40,7 +42,7 @@ Host-side, no hardware needed: Node.js and a C++11 compiler (`c++`, `g++` or `cl
 node --test test/*.test.js           # all test files: firmware runtime regressions, API contract, doc links, PCB v2.0 BOM/CPL checks
 ```
 
-The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 design/BOM/CPL consistency (needs python3), and five real-module C++ regression programs with deterministic hardware fakes (sensors, I/O, LoRa transport, telemetry and payloads). The **API contract test** (`test/api_contract.test.js`) regenerates the [example responses](api.md#example-responses) of `/api/data`, `/api/history` and `/api/info` with the real serializers, compares them with `docs/api/examples/`, validates them against `docs/api/schemas/` and fails on any JSON key the schemas don't describe — after an intended change: `UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js`. The **link check** (`test/doc_links.test.js`) resolves every relative link and `#anchor` in the Markdown files. See [test/README](../test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
+The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 design/BOM/CPL consistency (needs python3), and five real-module C++ regression programs with deterministic hardware fakes (sensors, I/O, LoRa transport, telemetry and payloads). The **API contract test** (`test/api_contract.test.js`) regenerates the [example responses](api.md#example-responses) of `/api/data`, `/api/history` and `/api/info` with the real serializers, compares them with `docs/api/examples/`, validates them against `docs/api/schemas/` and fails on any JSON key the schemas don't describe — after an intended change: `UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js`. The **translation check** (`test/i18n.test.js`) fails if a key is missing in a language, placeholders or HTML tags differ from English, an ASCII apostrophe would break an attribute, or the sources use an unknown / leave an unused key. The **link check** (`test/doc_links.test.js`) resolves every relative link and `#anchor` in the Markdown files. See [test/README](../test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
 
 ## Robustness
 
@@ -57,6 +59,16 @@ The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 desig
 ## Debug Mode
 
 For bench tests and diagnostics. Adds cycle counter, CPU temperature, send failure counter, free heap and uptime to the LoRaWAN payload (channels 200+) and to the MQTT/REST JSON. `sendFailCount` is always included in the JSON. Off by default to save airtime.
+
+## Translations (web interface)
+
+All user-visible texts of the node's own pages (settings, status, log, radio trace, firmware update) and of the setup portal live in **`i18n/<lang>.json`** — `en.json` is the master (key → English text), `de`, `fr`, `es`, `pt` carry the same keys. `tools/i18n_gen.py` (run by `tools/version.py` before every build and by the host tests) turns them into `include/i18n_keys.h` (`enum TextId`: `T_<key>`) and `include/i18n_table.h` (the strings in flash, a missing translation falls back to English); both are generated and not in git.
+
+- In C++: `T(T_key)` returns the text in the request's language (`selectLanguage()` in each web handler; `src/i18n.h`), `TF(T_key, a, b, …)` fills placeholders `{0}`, `{1}`, … — write whole sentences with placeholders instead of gluing fragments, so every language can use its own word order.
+- **Add a text:** add the key to `en.json` and to the four other files, use it in the code; `python3 tools/i18n_gen.py` and `node --test test/i18n.test.js` check it.
+- Keys are grouped by prefix: `c_` common, `set_`/`opt_` settings, `st_` status, `tr_` radio trace, `pt_` portal, `cal_` calibration page, `ota_` firmware update, `log_` log page, `dv_` pressure tendency / weather trend words.
+- Keep HTML tags, entities and placeholders as in English; use ’ instead of `'` in translations; never translate JSON keys, topics, parameter names, units or model names.
+- The dashboard (`include/chart_page.h`) keeps its own `I18N` object for its client-side texts, with the same five languages and the shared language selection (cookie `wnLang`, device setting `SERVER_LANG`).
 
 ## Config Storage and the cfgdata Partition
 
@@ -109,7 +121,9 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 ├── docs/api/                # OpenAPI file, JSON Schemas, generated example responses
 ├── examples/simple-display/ # Minimal third-party display (one HTML file)
 ├── tools/api-mock/          # Mock node for UI development (Python stdlib)
-├── tools/version.py         # Pre-build script: version, decoder, help (README + docs) headers
+├── tools/version.py         # Pre-build script: version, decoder, help (README + docs), translation headers
+├── tools/i18n_gen.py        # i18n/*.json -> include/i18n_keys.h, i18n_table.h
+├── i18n/                    # Web interface texts: en.json (master), de, fr, es, pt
 ├── partitions.csv           # Partition table (with cfgdata)
 ├── firmware/                # Release binaries (OTA)
 ├── pictures/                # Photos, screenshots, badges; overview.png is rendered from tools/overview/ (render.sh, headless Chrome)

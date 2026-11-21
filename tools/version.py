@@ -62,6 +62,14 @@ if decoder_src.exists():
     )
 
 
+# Web interface translations (i18n/*.json -> include/i18n_keys.h, i18n_table.h);
+# see tools/i18n_gen.py.
+sys.path.insert(0, str(Path(env.get("PROJECT_DIR")) / "tools"))
+sys.dont_write_bytecode = True
+import i18n_gen  # noqa: E402
+i18n_gen.generate(env.get("PROJECT_DIR"))
+
+
 # Embed the documentation (README.md + docs/*.md + CHANGELOG.md, combined
 # into one page by tools/help_md.py) into a PROGMEM string so it can be
 # served as a rendered help page from the WiFi config portal and the
@@ -75,18 +83,27 @@ import help_md  # noqa: E402
 
 readme_hdr = Path(env.get("PROJECT_DIR")) / "include" / "readme_md.h"
 md = help_md.build(env.get("PROJECT_DIR"))
+import gz_embed  # noqa: E402
 if md is not None:
-    md = md.rstrip("\n")
-    delim = "READMEMD"
-    if f"){delim}\"" in md:
-        raise RuntimeError("Documentation contains the raw-string delimiter )" + delim)
-    write_if_changed(
-        readme_hdr,
-        "#pragma once\n"
-        f'static const char README_MD[] PROGMEM = R"{delim}(\n'
-        + md
-        + f'\n){delim}";\n',
-    )
+    # gzip-compressed (served with Content-Encoding: gzip, src/gz_send.h); one
+    # definition in flash, where README_MD_DEFINE is set (web_api.cpp)
+    write_if_changed(readme_hdr, gz_embed.c_header("README_MD", md.rstrip("\n").encode("utf-8"), "README_MD_DEFINE"))
+
+# Home-screen icons (pictures/icon, made by tools/make_icon.py; PNGs: no gzip)
+# and the service worker (web/sw.js, cache name with the firmware version)
+_proj = Path(env.get("PROJECT_DIR"))
+_icons = [("ICON_192", "icon-192.png"), ("ICON_512", "icon-512.png"), ("ICON_MASKABLE_512", "icon-maskable-512.png"),
+          ("APPLE_TOUCH_ICON", "apple-touch-icon.png"), ("FAVICON_32", "favicon-32.png")]
+_assets = [(n, (_proj / "pictures" / "icon" / f).read_bytes()) for n, f in _icons]
+_sw = (_proj / "web" / "sw.js").read_text(encoding="utf-8").replace("@@VERSION@@", version_string)
+_assets.append(("SW_JS", _sw.encode("utf-8")))
+write_if_changed(_proj / "include" / "web_assets.h", gz_embed.bin_header(_assets, "README_MD_DEFINE"))
+
+# The dashboard (include/chart_page.h, a raw string) the same way
+chart_src = Path(env.get("PROJECT_DIR")) / "include" / "chart_page.h"
+chart_hdr = Path(env.get("PROJECT_DIR")) / "include" / "chart_page_gz.h"
+write_if_changed(chart_hdr, gz_embed.c_header(
+    "CHART_PAGE", gz_embed.raw_string_body(chart_src.read_text(encoding="utf-8"), "HTML").encode("utf-8"), "README_MD_DEFINE"))
 
 
 # Only release builds go to firmware/: an exact tag (e.g. "1.0.5", no

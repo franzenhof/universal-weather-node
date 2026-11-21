@@ -119,8 +119,8 @@ New nodes start with the binary format; nodes that already have a stored setting
 | Ch 204 | Generic Sensor | Uptime (0.1 h) | h | debug |
 | Ch 1 | Voltage | LiPo voltage | V | LiPo on |
 | Ch 1 | Rel. Humidity | Humidity (selected [source](wireless-sensors.md#value-sources)) | % | source delivers humidity |
-| Ch 1 | Baro. Pressure | Pressure QNH | hPa / inHg ×10 | BME280 |
-| Ch 2 | Baro. Pressure | Pressure absolute | hPa / inHg ×10 | BME280 |
+| Ch 1 | Baro. Pressure | Pressure QNH (selected [source](wireless-sensors.md#value-sources): BME280 or wireless) | hPa / inHg ×10 | source delivers pressure |
+| Ch 2 | Baro. Pressure | Pressure absolute (station pressure of the selected source) | hPa / inHg ×10 | source delivers pressure |
 | Ch 1 | Temperature | Temperature (selected source: BME280 or wireless) | °C / °F | source delivers temperature |
 | Ch 2–4 | Temperature | DS18B20 probe 0–2 | °C / °F | probe found |
 | Ch 3 | Digital Input | I/O status bits (see below) | bitfield | any v2.0 function on |
@@ -132,7 +132,7 @@ New nodes start with the binary format; nodes that already have a stored setting
 | Ch 13 | Analog Input | UV index (calibrated board index or wireless sensor) | index, resolution 0.01 | index available |
 | Ch 14 | Digital Input | UV flags: bit 0 board voltage present, bit 1 index present | bitfield | UV group present |
 | Ch 15 | Generic Sensor | Illuminance | lx | light source delivers |
-| Ch 16 | Generic Sensor | Value sources: 2 bits per group (temp/hum, wind, rain, UV, light: 0 none, 1 board, 2 wireless), bit 15 wireless battery low | bitfield | wireless sensors on |
+| Ch 16 | Generic Sensor | Value sources: 2 bits per group (bits 0–1 temp/hum, 2–3 wind, 4–5 rain, 6–7 UV, 8–9 light, 10–11 pressure: 0 none, 1 board, 2 wireless), bit 15 wireless battery low. Older firmware sends 0 in bits 10–11 (decoded as `none`) | bitfield | wireless sensors on |
 | Ch 20 / 21 | Digital Output | Heater / fan power | % | heater or fan not off |
 | Ch 22 | Generic Sensor | Fan speed | rpm | tacho on |
 | Ch 30 | Voltage | Victron battery voltage | V | VE.Direct data |
@@ -146,6 +146,7 @@ New nodes start with the binary format; nodes that already have a stored setting
 
 - Rain uses the CayenneLPP *Distance* type, but the values are **mm (or in), not meters** — use the provided decoder.
 - In imperial mode the pressure field carries inHg ×10 (0.01 inHg resolution); the decoder divides by 10 again.
+- The decoder keeps the field names `bme280_pressure_qnh_hpa` / `bme280_pressure_abs_hpa` (and `bme280_temperature_c` …) for compatibility; the values come from the selected [pressure source](wireless-sensors.md#value-sources), which may be a wireless sensor (`sources.pressure`).
 - All values are rounded and clamped to the field's range (never wrapped). Analog Input covers ±327.67.
 - Sizes: minimal 7–15 bytes, full 62 bytes, full with debug 84 bytes. The v2.0 I/O block adds up to 62 bytes (every function on, all Victron fields), wireless sensors add up to 12 bytes (Ch 15 light, Ch 16 sources) — use the binary format on slow data rates.
 - **I/O status bits** (Ch 3 / binary bit 20): bit 0 heater on, bit 1 fan on, bit 2 fan stalled, bit 3 battery lockout active, bit 4 VE.Direct on but no data. The decoder returns them as `io_status.*`; the Victron charge state additionally as text (`victron_charge_state_text`: off, fault, bulk, absorption, float, …).
@@ -165,8 +166,8 @@ Layout (version 4): `[version: 1 byte][presence mask: 1–6 bytes][fields...]`. 
 | 6 | Status byte | `u8`, same bits as CayenneLPP | always |
 | 7 | Battery voltage | `u16`, ×100, V | LiPo on |
 | 8 | Humidity | `u8`, ×2, % | selected source delivers humidity |
-| 9 | Pressure QNH | `u16`, ×10 hPa / ×100 inHg | BME280 |
-| 10 | Pressure absolute | `u16`, ×10 hPa / ×100 inHg | BME280 |
+| 9 | Pressure QNH | `u16`, ×10 hPa / ×100 inHg | pressure source delivers |
+| 10 | Pressure absolute | `u16`, ×10 hPa / ×100 inHg | pressure source delivers |
 | 11 | Temperature (selected source) | `i16`, ×10, °C or °F | source delivers temperature |
 | 12–14 | DS18B20 probe 0–2 | `i16`, ×10, °C or °F | probe found |
 | 15 | Cycle counter | `u8` | debug |

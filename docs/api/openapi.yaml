@@ -80,6 +80,63 @@ paths:
       responses:
         "204": { $ref: "#/components/responses/Preflight" }
 
+  /api/records:
+    get:
+      tags: [data]
+      operationId: getRecords
+      summary: Records (extremes) of today, yesterday, month, year, all time
+      description: |
+        Minimum / maximum with time of temperature, humidity, pressure (QNH),
+        and maximum gust and rain rate, plus the largest daily rain - per
+        period, in the configured units. Periods roll over at local midnight;
+        `valid` is false before the first clock sync. Today's min/max
+        temperature and max gust are also in `/api/data` (`tempMinToday`, …).
+      responses:
+        "200":
+          description: Records.
+          headers:
+            Access-Control-Allow-Origin: { $ref: "#/components/headers/AllowOrigin" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema: { $ref: "./schemas/records.schema.json" }
+              examples:
+                bresser: { externalValue: "./examples/bresser-7in1-bme280/records.json" }
+        "500": { $ref: "#/components/responses/AllocationFailed" }
+    options:
+      tags: [data]
+      operationId: preflightRecords
+      summary: CORS preflight
+      responses:
+        "204": { $ref: "#/components/responses/Preflight" }
+
+  /api/alarms:
+    get:
+      tags: [data]
+      operationId: getAlarms
+      summary: Alarm rules and their state
+      description: |
+        The defined alarm rules with thresholds (configured units), channels,
+        and whether each is raised now. No addresses, tokens or keys.
+      responses:
+        "200":
+          description: Alarm rules.
+          headers:
+            Access-Control-Allow-Origin: { $ref: "#/components/headers/AllowOrigin" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema: { $ref: "./schemas/alarms.schema.json" }
+              examples:
+                bresser: { externalValue: "./examples/bresser-7in1-bme280/alarms.json" }
+        "500": { $ref: "#/components/responses/AllocationFailed" }
+    options:
+      tags: [data]
+      operationId: preflightAlarms
+      summary: CORS preflight
+      responses:
+        "204": { $ref: "#/components/responses/Preflight" }
+
   /api/data:
     get:
       tags: [data]
@@ -204,6 +261,158 @@ paths:
             text/plain:
               schema: { type: string }
 
+  /manifest.webmanifest:
+    get:
+      tags: [pages]
+      operationId: getManifest
+      summary: Web app manifest (home screen / installed app)
+      description: Name = device name, icons, dashboard colours; URLs relative to the manifest (works behind a reverse proxy).
+      responses:
+        "200":
+          description: Manifest.
+          content:
+            application/manifest+json:
+              schema: { type: object }
+
+  /sw.js:
+    get:
+      tags: [pages]
+      operationId: getServiceWorker
+      summary: Service worker (offline dashboard, registered only in a secure context)
+      description: "`Service-Worker-Allowed: /`, `Cache-Control: no-cache`. Never caches settings, setup, log, OTA or POSTs."
+      responses:
+        "200":
+          description: JavaScript.
+          content:
+            application/javascript:
+              schema: { type: string }
+
+  /icon-192.png:
+    get:
+      tags: [pages]
+      operationId: getIcon192
+      summary: App icon 192 px
+      description: "`Cache-Control: public, max-age=604800`."
+      responses:
+        "200":
+          description: PNG.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+
+  /icon-512.png:
+    get:
+      tags: [pages]
+      operationId: getIcon512
+      summary: App icon 512 px
+      description: "`Cache-Control: public, max-age=604800`."
+      responses:
+        "200":
+          description: PNG.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+
+  /icon-maskable-512.png:
+    get:
+      tags: [pages]
+      operationId: getIconMaskable
+      summary: Maskable app icon 512 px
+      description: "`Cache-Control: public, max-age=604800`."
+      responses:
+        "200":
+          description: PNG.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+
+  /apple-touch-icon.png:
+    get:
+      tags: [pages]
+      operationId: getAppleTouchIcon
+      summary: Apple touch icon 180 px (opaque)
+      description: "`Cache-Control: public, max-age=604800`."
+      responses:
+        "200":
+          description: PNG.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+
+  /apple-touch-icon-precomposed.png:
+    get:
+      tags: [pages]
+      operationId: getAppleTouchIconPrecomposed
+      summary: Same as /apple-touch-icon.png
+      description: "`Cache-Control: public, max-age=604800`."
+      responses:
+        "200":
+          description: PNG.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+
+  /favicon-32.png:
+    get:
+      tags: [pages]
+      operationId: getFavicon32
+      summary: Favicon 32 px
+      description: "`Cache-Control: public, max-age=604800`."
+      responses:
+        "200":
+          description: PNG.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+
+  /favicon.ico:
+    get:
+      tags: [pages]
+      operationId: getFavicon
+      summary: Favicon (the 32-px PNG, image/png)
+      description: "`Cache-Control: public, max-age=604800`."
+      responses:
+        "200":
+          description: PNG.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+
+  /setup:
+    get:
+      tags: [pages]
+      operationId: getSetupWizard
+      summary: Setup wizard (HTML), step 1-7
+      description: >-
+        First-run guide: language, wireless station (mark sensors), location, units, admin password, outputs, summary.
+        Each step posts its fields to `POST /api/settings` with `wizard=1` (and `wstep`), which saves them with the
+        normal validation and redirects to the next step; restart-requiring fields are applied by one restart at the end
+        (`POST /setup/done`). The dashboard (`/`) redirects here once per browser session while the setup is not done.
+        Open without login while no admin password is set and the setup is not done; otherwise Digest like the settings.
+      parameters:
+        - { name: step, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 7, default: 1 }, description: Wizard step. }
+      security: [{ digest: [] }, {}]
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+  /setup/done:
+    post:
+      tags: [pages]
+      operationId: finishSetupWizard
+      summary: End the setup wizard (same-origin only)
+      description: >-
+        `action=finish` or `action=dismiss` ("Later"): sets the setup-done flag (parameter 58) so the dashboard no
+        longer opens the wizard. `finish` restarts the node once if a step saved a restart-requiring setting.
+      parameters:
+        - { name: action, in: query, required: true, schema: { type: string, enum: [finish, dismiss] }, description: How the wizard ends. }
+      security: [{ digest: [] }, {}]
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "303": { description: "Redirect to the dashboard." }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { description: "No admin password configured after the setup, or a cross-site request." }
+
   /api/settings:
     get:
       tags: [admin]
@@ -231,6 +440,9 @@ paths:
         field `form` must be present. Same-origin only: a request carrying an
         `Origin` or `Referer` whose host differs from `Host` is refused (403);
         requests with neither header (curl, scripts) are accepted.
+        `wifien=0` / `webapien=0` (Wi-Fi / web interface off, applied by a
+        restart) are only accepted with `radiooffok=1` and while LoRaWAN is
+        enabled and joined; otherwise they are rejected and stay on.
       security: [{ digest: [] }]
       requestBody:
         required: true
@@ -264,6 +476,182 @@ paths:
             text/plain:
               schema: { type: string }
         "503": { $ref: "#/components/responses/LowMemory" }
+
+  /api/alarms/save:
+    post:
+      tags: [admin]
+      operationId: postAlarms
+      summary: Save the Alarms tab
+      description: |
+        Form fields of the settings page's Alarms tab (`a<n>_<field>` per rule,
+        channel fields; docs/alarms.md). Only fields present change. Same-origin.
+      security: [{ digest: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: { type: object, additionalProperties: { type: string } }
+      responses:
+        "303": { description: "Saved; redirect to `/api/settings?saved=1#alarms`." }
+        "400": { description: "Some values rejected (HTML page names them; the rest was saved).", content: { text/html: { schema: { type: string } } } }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { description: "No admin password configured, or a cross-site request.", content: { text/plain: { schema: { type: string } } } }
+
+  /api/alarms/test:
+    post:
+      tags: [admin]
+      operationId: postAlarmTest
+      summary: Save the Alarms tab and send a test notification
+      description: |
+        Like `/api/alarms/save`, then queues one test message for the channel
+        `testch` (0 ntfy, 1 Pushover, 2 Telegram, 3 MQTT, 4 webhook); the
+        result appears on the status page. Same-origin.
+      security: [{ digest: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [testch]
+              properties:
+                testch: { type: string, description: "Channel number 0-4." }
+              additionalProperties: { type: string }
+      responses:
+        "303": { description: "Queued; redirect to `/api/settings?test=1#alarms`." }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { description: "No admin password configured, or a cross-site request.", content: { text/plain: { schema: { type: string } } } }
+
+  /api/settings/backup:
+    get:
+      tags: [admin]
+      operationId: getSettingsBackup
+      summary: Download all settings as JSON
+      description: |
+        Every field of the settings page (`settings`: form name -> value as
+        the form sends it), plus `format` ("uwn-settings"), `version` (1),
+        `firmware`, `host`, `date`, `secrets`. Passwords and keys (Wi-Fi,
+        admin, MQTT, weather networks, LoRaWAN AppKey) only with
+        `secrets=1`. Sent as `uwn-settings-<host>-<date>.json`. Same-origin.
+      security: [{ digest: [] }]
+      parameters:
+        - name: secrets
+          in: query
+          required: false
+          description: "1 = include passwords and keys (plain text)."
+          schema: { type: string, enum: ["1"] }
+      responses:
+        "200":
+          description: The backup file (Content-Disposition attachment).
+          content:
+            application/json:
+              schema: { type: object }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403":
+          description: No admin password configured, or a cross-site request.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /api/settings/restore:
+    post:
+      tags: [admin]
+      operationId: postSettingsRestore
+      summary: Restore settings from a backup
+      description: |
+        Field `backup`: the backup file's text. Refused (400, nothing
+        changed) if it is not a settings backup or from a newer major
+        version. Fields this node's settings page does not have are ignored;
+        the rest goes through `POST /api/settings` (same checks, restart if a
+        restart field changed). The changes are listed on the next settings
+        page. LoRaWAN session / DevNonces are not part of a backup.
+        Same-origin.
+      security: [{ digest: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [backup]
+              properties:
+                backup: { type: string, description: "The backup JSON." }
+      responses:
+        "200":
+          description: Restored; the node restarts or switches Wi-Fi (HTML notice page).
+          content:
+            text/html:
+              schema: { type: string }
+        "303":
+          description: Restored without restart; redirect to `/api/settings?saved=1`.
+        "400":
+          description: Not a valid backup / newer version (nothing changed), or some values rejected.
+          content:
+            text/html:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403":
+          description: No admin password configured, or a cross-site request.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /api/ota:
+    post:
+      tags: [admin]
+      operationId: postFirmwareUpload
+      summary: Firmware update (upload a firmware image)
+      description: |
+        Multipart field `firmware`: `universal-weather-node-<version>.bin`,
+        or (from 2.0.0-rc.1 on) the `-factory.bin`, of which only the
+        application part is written. Other files, a factory image with a
+        different partition table, or too little free memory are refused
+        before anything is written. Streamed to the inactive OTA partition;
+        on success the node restarts about 1 s after the answer (rain
+        statistics and records are saved first). Only with an admin password
+        (Digest) and same-origin; without one, use the config portal.
+        `?js=1` (the settings page's progress-bar upload): plain-text answer,
+        otherwise an HTML result page. Behind a reverse proxy, allow request
+        bodies of at least ~2.5 MB.
+      security: [{ digest: [] }]
+      parameters:
+        - name: js
+          in: query
+          required: false
+          schema: { type: string }
+          description: Present = plain-text answer instead of an HTML page.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [firmware]
+              properties:
+                firmware: { type: string, format: binary, description: "The firmware image." }
+      responses:
+        "200":
+          description: Written and verified; the node restarts.
+          content:
+            text/html:
+              schema: { type: string }
+            text/plain:
+              schema: { type: string }
+        "400":
+          description: Refused (not a matching firmware image, low memory, no file) or the update failed; nothing is activated.
+          content:
+            text/html:
+              schema: { type: string }
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403":
+          description: No admin password configured (hint to set one or use the config portal), or a cross-site request.
+          content:
+            text/html:
+              schema: { type: string }
+            text/plain:
+              schema: { type: string }
 
   /api/log:
     get:
@@ -370,6 +758,36 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RadioTraceStatus" }
+  /api/rf/sensor:
+    post:
+      tags: [admin]
+      operationId: setWirelessSensorState
+      summary: Mark a wireless sensor Mine / Received / Hidden or move it in the Mine order (same-origin only)
+      description: >-
+        Form or query parameters `id` (sensor ID, hex) and `action`: `mine` (append to the "Mine" list: numbered
+        first, Home Assistant device), `received` (remove from both lists), `hide` (hidden list: never stored,
+        numbered or output), `up` / `down` (move within the "Mine" list = change its number). Saved at once.
+        With `redirect=1` (status page buttons) the answer is a 303 to `/status`.
+      security: [{ digest: [] }]
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: string, pattern: "^[0-9A-Fa-f]{1,8}$" }, description: Sensor ID. }
+        - { name: action, in: query, required: true, schema: { type: string, enum: [mine, received, hide, up, down] }, description: What to do. }
+        - { name: redirect, in: query, required: false, schema: { type: string }, description: Present = redirect to the status page. }
+      responses:
+        "200":
+          description: Done.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, state]
+                properties:
+                  ok: { type: boolean, description: "true." }
+                  state: { type: string, enum: [mine, received, hidden], description: "The sensor's state now." }
+        "303": { description: "Redirect to /status (redirect=1)." }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { description: "No admin password configured, or a cross-site request." }
+        "409": { description: "Not done: unknown action, invalid ID, a list full (32 IDs), or no move possible." }
   /api/log/clear:
     post:
       tags: [admin]
@@ -388,6 +806,91 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+
+  /decoder:
+    get:
+      tags: [pages]
+      operationId: getDecoder
+      summary: Payload decoder for ChirpStack / TTN (JavaScript download)
+      description: >-
+        The decoder matching this firmware (`chirpstack/decoder.js`, embedded at build time) as an attachment
+        `weather-node-decoder.js` — the same file as the config portal's `/decoder`. No login (no secrets in it).
+      responses:
+        "200":
+          description: JavaScript source (`Content-Disposition: attachment`).
+          content:
+            application/javascript:
+              schema: { type: string }
+  /calibrate:
+    get:
+      tags: [admin]
+      operationId: getCalibratePage
+      summary: Guided wind-direction calibration (HTML)
+      description: >-
+        The config portal's calibration page: rotate the vane through 8 or 16 positions, each one captured from
+        `GET /calibrate/sample`, then saved with `POST /calibrate/save`. Only on a board with a wind-vane input
+        (404 on the Heltec V4 wireless build).
+      security: [{ digest: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+        "404": { description: "No wind-vane input on this board." }
+  /calibrate/sample:
+    get:
+      tags: [admin]
+      operationId: getCalibrateSample
+      summary: Live wind-vane ADC reading
+      security: [{ digest: [] }]
+      responses:
+        "200":
+          description: The averaged raw ADC value of the vane input.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [adc]
+                properties:
+                  adc: { type: integer, minimum: 0, maximum: 4095, description: "Raw 12-bit ADC reading." }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+        "404": { description: "No wind-vane input on this board." }
+  /calibrate/save:
+    post:
+      tags: [admin]
+      operationId: saveCalibration
+      summary: Store the wind-direction calibration table (same-origin only)
+      description: >-
+        Stores up to 16 positions (more are ignored), applies them immediately and switches the wind-direction
+        sensor type to the calibrated table (setting `winddirtyp` = 1).
+      security: [{ digest: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [positions]
+              properties:
+                positions:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [deg, adc]
+                    properties:
+                      deg: { type: integer, description: "Direction in degrees (taken modulo 360)." }
+                      adc: { type: integer, minimum: 0, maximum: 4095, description: "ADC reading at that direction (clamped)." }
+      responses:
+        "200":
+          description: Saved (localised confirmation text).
+          content:
+            text/plain:
+              schema: { type: string }
+        "400": { description: "Invalid JSON or no positions." }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { description: "No admin password configured, or a cross-site request." }
+        "404": { description: "No wind-vane input on this board." }
 
 components:
   securitySchemes:

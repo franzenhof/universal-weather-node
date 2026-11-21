@@ -3,7 +3,14 @@
   "device": {
     "name": "",
     "hostname": "weathernode-123456",
-    "uptimeSec": 108064
+    "uptimeSec": 108064,
+    "language": "auto"
+  },
+  "system": {
+    "uptimeSec": 108064,
+    "heapFree": 150000,
+    "heapMin": 120000,
+    "heapLargest": 90000
   },
   "firmware": {
     "version": "2.0.0",
@@ -53,7 +60,8 @@
     "lorawan": false,
     "loxone": false,
     "updateCheck": true,
-    "weatherNetworks": []
+    "weatherNetworks": [],
+    "status": {}
   },
   "available": {
     "temp": true,
@@ -74,11 +82,18 @@
     "fan": false,
     "victron": false
   },
+  "wireless": {
+    "onlyMine": false,
+    "mine": 0,
+    "hidden": 0,
+    "hiddenInRange": 0
+  },
   "sources": {
     "tempHum": "board",
     "wind": "board",
     "rain": "board",
     "uv": "none",
-    "light": "none"
+    "light": "none",
+    "pressure": "board"
   }
 }

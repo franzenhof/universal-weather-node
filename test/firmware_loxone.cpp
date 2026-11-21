@@ -137,6 +137,23 @@ int main()
     m = run(doc, "", lines);
     assert(m["rain"] == "0.08" && m["pressureQnh"] == "30.00" && m["temp"] == "6.6");
 
+    // sun / moon: times as minutes since local midnight, numbers as they are, texts skipped
+    {
+        setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+        tzset();
+        JsonDocument a;
+        a["astro"]["sunrise"] = "2024-06-21T02:43:20Z";      // 04:43 CEST
+        a["astro"]["moonset"] = "2024-12-21T10:48:00Z";      // 11:48 CET
+        a["astro"]["dayLengthMin"] = 1010;
+        a["astro"]["sunElevation"] = -3.25;
+        a["astro"]["moonPhase"] = "full";
+        a["astro"]["moonPhaseIndex"] = 4;
+        m = run(a, "", lines);
+        assert(m["astroSunrise"] == "283" && m["astroMoonset"] == "708" && m["astroDayLengthMin"] == "1010");
+        assert(m["astroSunElevation"] == "-3.2" || m["astroSunElevation"] == "-3.3");
+        assert(m["astroMoonPhaseIndex"] == "4" && !m.count("astroMoonPhase") && lines.size() == 5);
+    }
+
     // empty document: nothing
     JsonDocument empty;
     assert(loxoneLines(empty, "", collect, &lines) == 0);

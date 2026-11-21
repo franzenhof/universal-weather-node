@@ -193,7 +193,7 @@ uint32_t       suppressedLines = 0;
 DavisDiag      atMinuteStart;               // counters for the summary
 unsigned long  lastSummaryMs = 0;
 uint8_t        lastState = 0xFF;
-DavisRainCounter rainCounter;
+DavisRainFilter rainCounter;
 float          rainTotalMm = 0.0f;
 uint32_t       lastQueueDrops = 0;
 
@@ -263,6 +263,7 @@ void storeValues(const DavisPacket& p, float rssi)
 {
     const uint32_t id = RF_ID_DAVIS | p.txId;
     unsigned long now = millis();
+    if (rfStateOf(id) == RF_STATE_HIDDEN) { rfNoteHidden(id, nullptr, rssi, now); return; }
     int idx = rfSlotFor(id, now);
     if (idx < 0) return;
     RfSensorReading& r = gRfSensors[idx];
@@ -284,8 +285,16 @@ void storeValues(const DavisPacket& p, float rssi)
     if (p.hasTemp)     { v.ok |= RF_VAL_TEMP; v.tempC = p.tempC; }
     if (p.hasHumidity) { v.ok |= RF_VAL_HUM;  v.humidity = (uint8_t)lroundf(p.humidity); }
     if (p.hasRainCount) {
-        uint8_t tips = rainCounter.update(p.rainCount);
-        rainTotalMm += tips * bucketMm();
+        rainCounter.configure(gCfg.davisRainFilter, (uint8_t)gCfg.davisRainMaxPkt, (uint8_t)gCfg.davisRainMaxMin);
+        const DavisRainStep st = rainCounter.update(p.rainCount, now);
+        if (st.event >= DRE_HELD) {   // phantom-rain filter: always to the log and the radio trace
+            static const char* const what[] = { "", "", "held for confirmation", "confirmed as rain", "counter reset, not counted", "corrupt value dropped" };
+            char line[112];
+            snprintf(line, sizeof(line), "Davis rain counter %u: jump of %u tips (%.1f mm) %s", p.rainCount & 0x7F, st.jump,
+                     st.jump * bucketMm(), what[st.event]);
+            logLine(line, true, false, RF_TR_EVENT, true, id);
+        }
+        rainTotalMm += st.tips * bucketMm();
         v.ok |= RF_VAL_RAIN;
         v.rainTotalMm = rainTotalMm;
     }

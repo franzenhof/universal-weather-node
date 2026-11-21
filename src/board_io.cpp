@@ -246,10 +246,13 @@ void updateOutputs()
 
 bool detectPcbV2()
 {
-    // GPIO20 is USB D+ of the internal USB-Serial-JTAG PHY, which has its own
-    // D+ pull-up. The Heltec V3 uses the CP2102 for USB, so detach the PHY
-    // from the pads before measuring.
-    CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
+    // V3: GPIO20 is USB D+ of the internal USB-Serial-JTAG PHY, which has its
+    // own D+ pull-up. The Heltec V3 uses the CP2102 for USB, so detach the PHY
+    // from the pads before measuring. Never on a V4: GPIO19/20 are its only
+    // USB port; its ID is on GPIO15 (P4) instead.
+    const bool v4 = gBoard.detected == BOARD_V4;
+    const int PIN_HW_ID = boardHwIdPin(gBoard.detected);
+    if (!v4) CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
 
     // Discharge first: on Rev 1.x the pin floats and would read whatever
     // charge is left on it. On v2.0 the divider recharges C10 (1M || 1M x
@@ -265,7 +268,9 @@ bool detectPcbV2()
     mv /= 8;
 
     bool v2 = (mv >= HW_ID_V2_MIN_MV && mv <= HW_ID_V2_MAX_MV);
-    dbgSerial.printf("HW revision ID (GPIO20): %u mV -> %s\n", (unsigned)mv, v2 ? "PCB v2.0" : "no ID (Rev 1.x)");
+    dbgSerial.printf("HW revision ID (GPIO%d): %u mV -> %s\n", PIN_HW_ID, (unsigned)mv,
+                     v2 ? "PCB v2.0" : v4 ? "no PCB (wireless build)" : "no ID (Rev 1.x)");
+    if (v4) gBoard.pcbOnV4 = v2;
     if (!v2 && mv > 300)
         dbgSerial.println("HW revision ID: unknown voltage - treated as Rev 1.x");
     gIo.hwIdDetected = v2;
@@ -278,15 +283,21 @@ bool ioWind2DirActive() { return gCfg.wind2Mode == 2; }
 
 bool ioV2()
 {
-    // Heltec V4: no PCB support (the I/O block's GPIO38-40 go to the GNSS connector there)
+    // Heltec V4 only on the PCB's V4 sockets (revision ID on GPIO15); a bare
+    // V4's GPIO38-40 go to the GNSS connector
     return boardPcbAllowed() && gCfg.pcbVersion >= PCB_REV_2_0;
 }
 
-static constexpr int PIN_WDIR_EN = 19;  // PCB v2.0 Q6 gate, LOW = vane supply on
+// PCB v2.0 Q6 gate, LOW = vane supply on: V3 GPIO19, V4 GPIO34 (boardPins())
+static int vanePin() { return boardPins(gBoard.kind, gBoard.pcbOnV4, gCfg.pcbVersion).vaneEn; }
+static int veTxPin() { return boardPins(gBoard.kind, gBoard.pcbOnV4, gCfg.pcbVersion).veTx; }
+static int veRxPin() { return boardPins(gBoard.kind, gBoard.pcbOnV4, gCfg.pcbVersion).veRx; }
 
 void windVaneSupply(bool on)
 {
     if (!ioV2()) return;
+    const int PIN_WDIR_EN = vanePin();
+    if (PIN_WDIR_EN < 0) return;
     // Pad hold: the level must survive the light sleep in lowPowerSleep()
     // (the vane filter settles while the chip sleeps).
     gpio_hold_dis((gpio_num_t)PIN_WDIR_EN);
@@ -348,21 +359,35 @@ void ioSuspendOutputs()
     dbgSerial.println("Heater/fan suspended until restart (config/OTA).");
 }
 
+static bool veTxIdle = false;   // VE.Direct TX held high while VE.Direct is off
+
 void ioPoll()
 {
     if (!ioV2()) return;
 
     // ---- VE.Direct ----
+    // Not in use: TX (V3 GPIO34, V4 GPIO45) driven high - the ADuM121N
+    // isolator draws about 3.9 mA with its input low (floating) and about 1 mA
+    // with it high. Only here, after setup: ioV2() = PCB v2.0 (a V4 only with
+    // its revision ID). GPIO45 is a V4 strapping pin - never driven before
+    // setup and never held across a reset.
+    if (!gCfg.veDirectEn && !veRunning && !veTxIdle) {
+        pinMode(veTxPin(), OUTPUT);
+        digitalWrite(veTxPin(), HIGH);
+        veTxIdle = true;
+    }
     if (gCfg.veDirectEn && !veRunning) {
+        veTxIdle = false;
         veParser.reset();
         Serial1.setRxBufferSize(1024);   // a blocking LoRa send takes a few seconds (1920 B/s)
-        Serial1.begin(19200, SERIAL_8N1, PIN_VE_RX, PIN_VE_TX);
+        Serial1.begin(19200, SERIAL_8N1, veRxPin(), veTxPin());
         veRunning = true;
         veLastBlockMs = 0;
-        dbgSerial.println("VE.Direct: started (GPIO33 RX, 19200 Bd).");
+        dbgSerial.printf("VE.Direct: started (GPIO%d RX, GPIO%d TX, 19200 Bd).\n", veRxPin(), veTxPin());
     } else if (!gCfg.veDirectEn && veRunning) {
         Serial1.end();
         veRunning = false;
+        veTxIdle = false;   // driven high again below
         gIo.ve = VeDirectValues{ NAN, NAN, NAN, NAN, NAN, NAN, NAN, -1, -1 };
         dbgSerial.println("VE.Direct: stopped.");
     }

@@ -83,6 +83,7 @@ int main()
     gCfg.rainEn = 1; gCfg.windEn = 0; gCfg.rfEn = 0;   // rain from the board gauge
     gSrc.tempValid = true; gSrc.tempC = 10.0f;
     bme280Present = true; bme280PressSea = 1013.0f;
+    gSrc.pressValid = true; gSrc.pressSeaHpa = 1013.0f;   // the selected pressure source (srcUpdateCycle())
     assert(srcActive(SG_RAIN));
 
     // 1-min cycles, 0.1 mm each: 1 h = 60 cycles = 6.0 mm at most

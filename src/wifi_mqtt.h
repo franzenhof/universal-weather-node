@@ -29,7 +29,17 @@ constexpr unsigned long WIFI_CHANGE_TEST_MS = 60000;
 // lookup through it succeeds (connected but isolated = rollback).
 bool wifiRequestChange(const char* ssid, const char* pass, bool test = true, bool dhcp = false);
 bool wifiChangeBusy();             // requested or being tested
-String wifiChangeResult();         // last outcome (plain text, escape for HTML), "" if none
+// Last outcome of a change (texts: web_api.cpp, in the page language).
+enum WifiChangeKind : uint8_t {
+    WIFI_CHG_NONE = 0,
+    WIFI_CHG_STORED_NO_TEST,   // ssid
+    WIFI_CHG_ABORTED,          // ssid: the current network's config could not be read, nothing changed
+    WIFI_CHG_SWITCHED,         // ssid, extra = IP
+    WIFI_CHG_FAIL_UNREACHABLE, // ssid, extra = previous ssid: not reachable within 60 s
+    WIFI_CHG_FAIL_NO_NET,      // ssid, extra = previous ssid: connected, but neither gateway nor DNS answered
+};
+struct WifiChangeOutcome { WifiChangeKind kind = WIFI_CHG_NONE; char ssid[33] = ""; char extra[33] = ""; };
+WifiChangeOutcome wifiChangeResult();
 String wifiCurrentPassword();      // stored password (to keep it when only the SSID changes)
 
 // Home Assistant node_id/unique_id and MQTT client id: copies `in` with

@@ -8,7 +8,7 @@ The optional custom PCB for Davis and other wired sensors: hardware, power, conn
 
 | Component | Function |
 |-----------|----------|
-| Heltec WiFi LoRa 32 V3 | Microcontroller (ESP32-S3), LoRa SX1262, OLED display 128×64 |
+| Heltec WiFi LoRa 32 V3 or V4 | Microcontroller (ESP32-S3), LoRa SX1262, OLED display 128×64; on the custom PCB v2.0 either module fits (one socket set each, see [Heltec V3 or V4](#heltec-v3-or-v4-on-the-pcb)) |
 | Davis 6410 Anemometer (default) | Wind speed (reed switch) + wind direction (potentiometer 20 kΩ) |
 | Davis AeroCone / Standard, typically 6466M (default) | Rainfall (reed switch, 0.2 mm/pulse) |
 | BME280 | Temperature / humidity / air pressure (I²C 0x76; Cat5 recommended for longer cables, see [Connectors](#connectors)) |
@@ -38,7 +38,7 @@ The optional custom PCB for Davis and other wired sensors: hardware, power, conn
 
 For permanent VIN power on v2.0, disconnect USB first, then fit JP8 as described below.
 
-**Hardware v2.0** is the current design: a KiCad/SMD redesign in [`pcb/v2.0/`](../pcb/v2.0/), prepared for JLCPCB SMD assembly. Through-hole connectors/headers, the Heltec module and jumper shunts need separate assembly arrangements. It retains Rev 1.3's main sensor GPIOs and adds its own power supply, screw terminals and AUX/UV inputs. Rev 1.2/1.3's Fritzing design is kept in [`pcb/v1.3/`](../pcb/v1.3/).
+**Hardware v2.0** is the current design — **works with the Heltec WiFi LoRa 32 V3 and V4 (populate one socket set)**: a KiCad/SMD redesign in [`pcb/v2.0/`](../pcb/v2.0/), prepared for JLCPCB SMD assembly. Through-hole connectors/headers, the Heltec module and jumper shunts need separate assembly arrangements. It retains Rev 1.3's main sensor GPIOs and adds its own power supply, screw terminals and AUX/UV inputs. Rev 1.2/1.3's Fritzing design is kept in [`pcb/v1.3/`](../pcb/v1.3/).
 
 <!-- help:skip -->
 <table>
@@ -54,7 +54,7 @@ For permanent VIN power on v2.0, disconnect USB first, then fit JP8 as described
 
 **Board:** 100 × 100 mm, 2 layers, four M3 mounting holes on a **92 × 92 mm** pattern (centres 4 mm from adjacent edges). With the component side facing you:
 
-- **Top-left:** Heltec WiFi LoRa 32 **V3.2**, pin-compatible with V3/V3.1. Its USB-C connector sits 1.5 mm inside the board edge.
+- **Top-left:** Heltec WiFi LoRa 32 **V3** (V3/V3.1/V3.2, sockets J1/J2) **or V4** (V4.2/V4.3, sockets J19/J20 plus the 1×2 socket J21 for its extra pins) — two socket sets, 2.54 mm apart; fit **one** set only. The V3's USB-C connector sits 1.5 mm inside the board edge, the longer V4's reaches the edge.
 - **Right:** original Davis RJ11 plugs, each with a parallel 3.5 mm screw terminal below it (J7 rain, J5 wind). J17 UV sits further down this edge, with its wire opening facing right.
 - **Bottom:** power, heater, fan, AUX, 1-Wire and I²C terminals.
 - **Left:** isolated Victron VE.Direct screw terminal and JST-PH connector; below them, at the lower left corner, the optional **J18 DC jack** (5.5 × 2.1 mm) with its opening at the left edge.
@@ -106,6 +106,48 @@ sensor PTC is not a guarantee of available Heltec regulator current.
 USB does not power the VIN rail: the heater and a VIN-mode fan require VIN.
 VE.Direct's isolated side still needs power from the Victron device.
 
+### Heltec V3 or V4 on the PCB
+
+The board carries **two socket sets**; solder **only the set for your module** — an unused socket under the other module collides with its bottom-side parts:
+
+| Module | Sockets to fit | Silkscreen |
+|--------|----------------|------------|
+| Heltec WiFi LoRa 32 **V3 / V3.1 / V3.2** | **J1 + J2** (2 × 1×18) | rows marked `V3` |
+| Heltec WiFi LoRa 32 **V4** (V4.2 / V4.3; not V4-R8) | **J19 + J20** (2 × 1×18) **+ J21** (1×2, the V4's P4 pins GPIO15/16) | rows marked `V4`, J21 `V4 P4` |
+
+The V4 rows sit 2.54 mm further towards the board centre/J1 than the V3 rows (the other direction would put the V4's pin 1 onto the top-left mounting screw). J21 sits one pitch beyond pin 18 at the antenna end, about 0.45 mm off the 2.54 mm grid (position from Heltec's V4 3D model; **check it with a real V4 before soldering**). Pin 1 of every row (GND) is at the USB-C end and marked `1`. The V4 is 51.7 × 25.4 mm (V3 50.2 × 25.5 mm); everything under the module is at most 2.5 mm high, the V4's lowest bottom-side parts (GNSS / battery / solar connectors) stay about 7 mm above the board on 8.5 mm sockets.
+
+Every function reaches the matching GPIO on both sets; the V4 needs other GPIOs because its GPIO2/5/7 (and 46) drive the RF front end and GPIO19/20 are its only USB port:
+
+| Function | V3 GPIO (socket pin) | V4 GPIO (socket pin) |
+|----------|----------------------|----------------------|
+| Wind direction (ADC1) | 2 (J2.13) | **6** (J20.17) |
+| UV analog (ADC1) | 3 (J2.14) | 3 (J20.14) |
+| AUX analog (ADC1) | 4 (J2.15) | 4 (J20.15) |
+| 1-Wire DQ | 5 (J2.16) | **43** (J19.6) |
+| Wind speed (pulse) | 6 (J2.17) | **44** (J19.5) |
+| Rain (pulse) | 7 (J2.18) | **16** (J21.2, P4) |
+| Heater / fan / tacho | 38 / 39 / 40 (J2.11 / .10 / .9) | 38 / 39 / 40 (J20.11 / .10 / .9) |
+| I²C SDA / SCL | 41 / 42 (J2.8 / .7) | 41 / 42 (J20.8 / .7) |
+| VE.Direct RX (from Victron) | 33 (J1.12) | 33 (J19.12) |
+| VE.Direct TX (to Victron) | 34 (J1.11) | **45** (J20.6) |
+| 1-Wire supply switch | 47 (J1.13) | 47 (J19.13) |
+| AUX pulse | 48 (J1.14) | 48 (J19.14) |
+| Wind-vane supply (`VANE`, LOW = on) | 19 (J1.18) | **34** (J19.11) |
+| Hardware revision ID (ADC2) | 20 (J1.17) | **15** (J21.1, P4) |
+| 5 V / 3.3 V / GND | J1.2 / J2.2+3 / pin 1 | J19.2 (via ideal diodes U8/U9) / J20.2+3 / pin 1 |
+
+V4 pins left open on purpose: 2, 5, 7, 46 (RF front end), 19 / 20 (USB D− / D+), 26, and as on the V3 0, 1, 21, 35, 36, 37.
+
+- **Revision ID:** the same 1 MΩ / 1 MΩ divider (≈ 1.65 V, net HW_ID) reaches V3 GPIO20 and V4 GPIO15 — both are ADC2 inputs read once before Wi-Fi starts; the firmware reports "PCB v2.0" for either module.
+- **VE.Direct TX on the V4 is GPIO45, a strapping pin** (must be LOW at reset for the V4's 3.3 V flash). R65 (100 kΩ) holds the line low at boot in addition to the chip's internal pull-down; the isolator input draws no current. The firmware drives TX HIGH (idle) after boot.
+- **5 V and USB on the V4:** the V4's header pin 2 is its USB VBUS **without a diode**. On this board it is connected through two **LM66100 ideal diodes** (U8, U9; 79 mΩ, 1.5 A) wired antiparallel, each with its enable tied to its own output (always-on reverse-current blocking):
+  - **VIN only:** U8 feeds the board's 5 V to the V4 with about 0.1 V drop at 1 A (V4 sees ≈ 4.9 V; Heltec specifies 4.7–6 V).
+  - **USB only** (JP8 removed): U9 feeds the V4's USB 5 V to the board's 5 V rail, so sensors, UV and a 5 V fan work as with the V3.
+  - **Both present:** each diode only conducts while its input is about 0.15 V above its output and switches off as soon as the output side is higher; in between both are off. A **running** computer or charger therefore never receives current from the board unless its VBUS is more than ≈ 0.15 V below the board's 5.0 V (below USB's 4.75 V minimum), and it never powers the board's VIN loads.
+  - **What no part on the board can prevent:** a computer that is **switched off** (or a hub without power) looks exactly like "no cable" at the V4's 5 V pin, so in VIN mode the board puts ≈ 4.9 V on the cable. **Rule, unchanged:** for USB work on the bench remove JP8 / disconnect VIN first; with VIN on, only plug the V4 into a running computer or a USB charger. On the **V3** the rule is mandatory as before (its USB VBUS meets the board's 5 V directly).
+- **Firmware with a V4 on the PCB:** UART0 (GPIO43/44) carries 1-Wire and wind speed, so the log goes over the V4's native USB; the V4 USB pins are never reconfigured.
+
 ### Functions by power source (v2.0)
 
 The table assumes a fitted Heltec, enabled/configured firmware features and
@@ -115,7 +157,7 @@ qualification. Use **one power source at a time**.
 | Function / connector | USB-C 5 V only | VIN 6–29.2 V only |
 |----------------------|---------------|------------------|
 | JP8 / source setup | **Remove JP8**, disconnect VIN | **Fit JP8 pins 1–2**, unplug USB-C |
-| ESP32, display, Wi-Fi, LoRaWAN, dashboard | Yes | Yes, powered through the 5 V buck |
+| ESP32, display, Wi-Fi, LoRaWAN, dashboard | Yes (V4: the board's 5 V rail is fed through U9) | Yes, powered through the 5 V buck (V4: through U8) |
 | Davis wind / direction (J4/J5) and rain (J6/J7) | Yes | Yes |
 | BME280 / 3.3 V I²C sensors (J9) | Yes, within sensor supply budget | Yes, within sensor supply budget |
 | DS18B20 / powered 3-wire 1-Wire (J10) | Yes, within sensor supply budget | Yes, within sensor supply budget |
@@ -193,12 +235,12 @@ minus left); recheck the final order. No hardware release is implied.
 - **Heater**: **J12 HEATER** `+V HEAT-`, design target **3 A**, supplied from protected VIN (up to 29.2 V, not regulated). Low-side AON7264E on GPIO38, with a 5 V 74AHCT1G125 gate driver and a separate **4 A fuse F5**. The fuse rating is not an allowed continuous load current. Select a heater rated for the actual battery voltage, and size supply/wiring for its current.
 - **Fan**: **J13 FAN** `FAN+ GND TACH`, high-side switch on GPIO39. **JP9 1–2 = 5 V (default, max 0.5 A design target); JP9 2–3 = protected VIN (max 1 A design target)**. Fit only one shunt and change it with power disconnected. A usual 24 V fan is not automatically suitable for a fully charged 29.2 V battery. Heater and fan are PWM-capable and off at reset; check the current limits thermally in your build.
 - **Fan tacho** on GPIO40: transistor level conversion for an open-collector signal or an external pull-up, without feeding that voltage back into the 3.3 V rail; filter and Schmitt trigger follow the transistor
-- **Victron VE.Direct** (isolated, ADuM121N): J14 screw terminal and J15 JST-PH; pin 1 = isolated GND, pin 2 = node TX to Victron RX, pin 3 = Victron TX to node RX, pin 4 = Victron-side V+. GPIO33 receives, GPIO34 is the unused transmit direction. The MCU side of U4 runs from the Heltec 3.3 V, independent of the fused sensor rail. Never bridge isolated GND to board GND.
+- **Victron VE.Direct** (isolated, ADuM121N): J14 screw terminal and J15 JST-PH; pin 1 = isolated GND, pin 2 = node TX to Victron RX, pin 3 = Victron TX to node RX, pin 4 = Victron-side V+. GPIO33 receives; the unused transmit direction is GPIO34 on a V3 and GPIO45 on a V4 (R65 100 kΩ pull-down keeps the V4 strapping pin low at reset). The MCU side of U4 runs from the Heltec 3.3 V, independent of the fused sensor rail. Never bridge isolated GND to board GND.
 - **AUX inputs** (terminal J11: `3V3 AIN PULSE GND`): **AIN** on GPIO4 (ADC1, works while Wi-Fi is on; electrical input limit 3.3 V with R25 absent, useful ADC range approximately 0–3.1 V). Populate **R25 = 15 kΩ** for 0–5 V sensors: with R24 = 10 kΩ, 5 V becomes 3.0 V at the ADC; set the input scale to **1.66667**. **PULSE** on GPIO48 is for a reed switch / open collector (4.7 kΩ pull-up, RC 0.47 ms, Schmitt trigger — inverted like rain and wind), e.g. a second rain gauge or an anemometer
 - **UV sensor input** (terminal J17: `GND SIGNAL 3V3 5V`): GPIO3 ADC1 with a connector-side D32 PESD5V0S2BT TVS, a 10 kΩ input resistor, BAT54S rail clamps and range-select divider. JP10 1–2 selects 0–3.3 V (scale 1.10989); 2–3 selects 0–5 V (scale 1.66534). D32 has 5 V standoff, not a 5 V clamp; the resistor/divider and BAT54S remain necessary. The 5 V pin is fed through its own PTC F8 (nominal 100 mA), so a shorted UV cable cannot pull down the shared 5 V rail. Supply the sensor from exactly one voltage pin; the UV index requires separate sensor calibration. This protection does not guarantee survival of sustained overvoltage or prevent backfeeding from an externally powered sensor when the controller is off.
-- **Hardware revision ID**: 1 MΩ / 1 MΩ divider on GPIO20 (≈ 1.65 V on v2.0, pin open on Rev 1.x; 1.65 µA)
-- **Test pads** TP1–TP5 (GND, VIN, 5V, 3V3), plus bare probe pads **TP6** (bottom, 1.5 mm) on the Heltec 3.3 V rail (3V3_HELTEC, also U4 pin 1) and **TP7** (top, 1.0 mm, next to Q1) on the switched 1-Wire supply OW_SW, for scoping the switch-on dip; the heater gate is probed at R31 pad 1. The bottom silkscreen has **S/N and date fields** for marking boards. None of these are BOM/CPL parts. **Expansion header J16** (`GND 3V3 SDA SCL IO19 5V`, 3.3 V logic, unprotected, not populated)
-- **Wind-vane supply switched** by GPIO19 (P-MOSFET Q6, LOW = on; TVS SMLVT3V3 on the switched line): J5 `3V3` and the RJ11 3.3 V pin are only powered around each reading in low-power mode — see [Low-Power Mode](lorawan.md#low-power-mode-lora-only). GPIO3 is the UV analog input.
+- **Hardware revision ID**: 1 MΩ / 1 MΩ divider on GPIO20 of a V3 / GPIO15 of a V4 (≈ 1.65 V on v2.0, pin open on Rev 1.x; 1.65 µA)
+- **Test pads** TP1–TP5 (GND, VIN, 5V, 3V3), plus bare probe pads **TP6** (bottom, 1.5 mm) on the Heltec 3.3 V rail (3V3_HELTEC, also U4 pin 1) and **TP7** (top, 1.0 mm, next to Q1) on the switched 1-Wire supply OW_SW, for scoping the switch-on dip; the heater gate is probed at R31 pad 1. The bottom silkscreen has **S/N and date fields** for marking boards. None of these are BOM/CPL parts. **Expansion header J16** (`GND 3V3 SDA SCL VANE 5V`, 3.3 V logic, unprotected, not populated; `VANE` is the wind-vane supply control — V3 GPIO19 / V4 GPIO34 — not a free GPIO)
+- **Wind-vane supply switched** by `VANE` — GPIO19 on a V3, GPIO34 on a V4 (P-MOSFET Q6, LOW = on; TVS SMLVT3V3 on the switched line): J5 `3V3` and the RJ11 3.3 V pin are only powered around each reading in low-power mode — see [Low-Power Mode](lorawan.md#low-power-mode-lora-only). GPIO3 is the UV analog input.
 - **Wind-vane pull-up R8** (4.7 kΩ) for reed-switch vanes, activated with jumper **JP2** (Rev 1.3: optional footprint R21)
 
 **Firmware:** the board identifies itself through the revision ID — the firmware switches to v2.0 by itself, nothing to select. It uses the same GPIOs and the same inverting Schmitt trigger as Rev 1.3 for wind, rain and 1-Wire. The new I/Os (AUX inputs, heater/fan outputs, tacho, VE.Direct) are **all off by default** and are switched on individually — see [Inputs and Outputs (PCB v2.0)](#inputs-and-outputs-pcb-v20).
@@ -212,14 +254,14 @@ minus left); recheck the final order. No hardware release is implied.
 | File | Use |
 |------|-----|
 | [Gerber/drill ZIP](../pcb/v2.0/production/universal-weather-node-v2.0-gerber.zip) | Board fabrication: copper, mask, silkscreen, paste, outline and holes |
-| [JLCPCB BOM](../pcb/v2.0/production/universal-weather-node-v2.0-bom-jlcpcb.csv) | Bill of materials for JLCPCB assembly: 135 SMD references in 47 groups |
-| [JLCPCB CPL](../pcb/v2.0/production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | Component placement list: 136 top-side SMD parts, no THT/DNP parts |
+| [JLCPCB BOM](../pcb/v2.0/production/universal-weather-node-v2.0-bom-jlcpcb.csv) | Bill of materials for JLCPCB assembly: 139 SMD references in 48 groups |
+| [JLCPCB CPL](../pcb/v2.0/production/universal-weather-node-v2.0-cpl-jlcpcb.csv) | Component placement list: 139 top-side SMD parts, no THT/DNP parts |
 | [THT parts (LCSC)](../pcb/v2.0/production/universal-weather-node-v2.0-tht-lcsc.csv) | Through-hole connectors and headers for hand soldering, grouped by LCSC number with quantity per board (jumper shunts not included) |
 | [Schematic PDF](../pcb/v2.0/universal-weather-node-v2.0-schematic.pdf) | Circuit reference; editable project in [pcb/v2.0](../pcb/v2.0/) |
 
-DRC: **0 errors, 0 unconnected items, 0 schematic-parity issues**; nine known terminal silkscreen-edge warnings remain. These checks do not qualify electrical or thermal performance.
+DRC: **0 errors, 0 unconnected items, 0 schematic-parity issues**; warnings only: the eleven known terminal silkscreen-edge warnings, two `lib_footprint_mismatch` for J19/J20 (their socket outline is on F.Fab so it does not overlap the V3 rows), and about 16 dangling-via/stub warnings left by the scripted V4 re-route (single-layer junction vias and short stubs; no open or extra connections). The alternative V3/V4 socket courtyards overlap by design (`universal-weather-node.kicad_dru`). These checks do not qualify electrical or thermal performance.
 
-**Before paying:** follow the [assembly and bring-up checklist](../pcb/v2.0/CHECKLIST.md). Check parts availability, polarity/rotation in the manufacturer's preview, the quote and how the 22 THT components will be assembled. DNP means **do not populate**; fit optional parts only as instructed. The Heltec module and jumper shunts are separate from the SMD placement file. Pricing has not been re-quoted.
+**Before paying:** follow the [assembly and bring-up checklist](../pcb/v2.0/CHECKLIST.md). Check parts availability, polarity/rotation in the manufacturer's preview, the quote and how the through-hole parts will be assembled (the THT list holds both socket sets: 26 references, of which a V3 build fits 23 and a V4 build 24). DNP means **do not populate**; fit optional parts only as instructed. The Heltec module and jumper shunts are separate from the SMD placement file. Pricing has not been re-quoted.
 
 **JLCPCB rotations updated on 2026-11-03:** the regular CPL now includes
 the corrections checked step by step against the supplied JLCPCB previews:
@@ -307,6 +349,8 @@ The following v2.0 pin lists are in **numbered pin order**, not necessarily left
 | **39** | Fan output J13 (v2.0) | HIGH = on, 100 Hz PWM (LEDC channel 7) |
 | **40** | Fan tacho (v2.0) | Schmitt trigger, inverted (pulse counter unit 3) |
 
+The table lists the **Heltec V3**. A **V4 on PCB v2.0** uses GPIO6 (wind direction), 44 (wind speed), 16 (rain), 43 (1-Wire), 34 (vane supply), 15 (revision ID) and 45 (VE.Direct TX) instead — see [Heltec V3 or V4 on the PCB](#heltec-v3-or-v4-on-the-pcb).
+
 | Rev 1.2 | Rev 1.3 / v2.0 | Function |
 |:-------:|:-------:|----------|
 | **3** | **6** | Wind speed (pulse counter unit 0) |
@@ -316,7 +360,7 @@ The following v2.0 pin lists are in **numbered pin order**, not necessarily left
 
 ## PCB Revisions
 
-**v2.0** (KiCad, SMD, [`pcb/v2.0/`](../pcb/v2.0/)) is the current hardware design, see [Custom PCB](#custom-pcb). The firmware recognises it by GPIO20's revision ID and runs as revision `20`. Without this ID, the stored revision applies (default `13`): **select `12` manually for Rev 1.2**. Only use the manual `20` override on an actual v2.0 board if its ID cannot be read; it enables GPIOs used differently on older boards. **Rev 1.3** is kept in [`pcb/v1.3/`](../pcb/v1.3/); the board photos in the [README](../README.md#the-project-in-pictures) show **Rev 1.2**.
+**v2.0** (KiCad, SMD, [`pcb/v2.0/`](../pcb/v2.0/)) is the current hardware design, see [Custom PCB](#custom-pcb). The firmware recognises it by the revision ID (GPIO20 on a V3, GPIO15 on a V4) and runs as revision `20`. Without this ID, the stored revision applies (default `13`): **select `12` manually for Rev 1.2**. Only use the manual `20` override on an actual v2.0 board if its ID cannot be read; it enables GPIOs used differently on older boards. **Rev 1.3** is kept in [`pcb/v1.3/`](../pcb/v1.3/); the board photos in the [README](../README.md#the-project-in-pictures) show **Rev 1.2**.
 
 > **Rev 1.2 / 1.3 power:** the 5 V input feeds the Heltec's 5 V pin directly — **never connect USB-C and the 5 V input at the same time**, otherwise the power supply back-feeds into the computer's USB port. Use a regulated 5 V supply (a 12 V supply needs an external converter). The 3.3 V sensor rail comes from the Heltec's regulator through a 170 mA PTC.
 
@@ -357,22 +401,22 @@ The board is open hardware: everyone orders it for their own use. The SMD parts 
 | Option | Setting |
 |--------|---------|
 | PCBA type | *Economic* if offered for this order, otherwise *Standard* |
-| Assembly side | **Top side** (all 135 SMD placements are on top) |
+| Assembly side | **Top side** (all 139 SMD placements are on top) |
 | PCBA quantity | 2 or 5 (fixed costs per order; see the cost note below) |
 | Tooling holes | added by JLCPCB |
 | Confirm parts placement | **yes** — you get a placement preview to approve before production |
 
-**3. Parts** — upload the BOM and CPL. All 47 lines should be matched to their LCSC numbers; R25, J16 and TP1–TP7 are intentionally not populated (DNP) and not in the BOM. If a part is out of stock, pick a replacement with the **same value, voltage/current rating and package** — never replace **D1 (SMBJ30CA)** by a unidirectional *A* type, and keep the ratings of F5/F7, Q3/Q4/Q7, U1 and L1 (see [`CHECKLIST.md`](../pcb/v2.0/CHECKLIST.md#a-jlcpcb-assembly-preview-before-paying)).
+**3. Parts** — upload the BOM and CPL. All 48 lines should be matched to their LCSC numbers; R25, J16 and TP1–TP7 are intentionally not populated (DNP) and not in the BOM. If a part is out of stock, pick a replacement with the **same value, voltage/current rating and package** — never replace **D1 (SMBJ30CA)** by a unidirectional *A* type, and keep the ratings of F5/F7, Q3/Q4/Q7, U1 and L1 (see [`CHECKLIST.md`](../pcb/v2.0/CHECKLIST.md#a-jlcpcb-assembly-preview-before-paying)).
 
 **4. Placement preview** — check every polarised part against [CHECKLIST A](../pcb/v2.0/CHECKLIST.md#a-jlcpcb-assembly-preview-before-paying) (diodes, transistors, ICs, C6/C31). The CPL already contains the corrections found in earlier previews; still look at each one before approving.
 
 **5. Through-hole parts** — order the [THT list](../pcb/v2.0/production/universal-weather-node-v2.0-tht-lcsc.csv) at [lcsc.com](https://www.lcsc.com) (multiply by your number of boards), plus:
 
 - 2.54 mm **jumper shunts** (at least JP8, JP9, JP10; JP1/JP11/JP2/JP12 as needed),
-- the **Heltec WiFi LoRa 32 V3 / V3.2** with an **868 MHz** antenna (EU),
+- the **Heltec WiFi LoRa 32 V3 / V3.2 or V4** with an **868 MHz** antenna (EU) — the THT list contains the sockets for **both** (J1/J2 for a V3; J19/J20 + J21 for a V4); order and solder only the set for your module,
 - a **BME280** module (I²C, 3.3 V) and your sensors.
 
-J18 (DC jack) is optional. Solder from low to high: pin sockets J1/J2 (fit them onto the Heltec while soldering so they line up), headers, JST, screw terminals, RJ11 jacks, DC jack. Use **lead-free solder**. Then follow [CHECKLIST B](../pcb/v2.0/CHECKLIST.md#b-bring-up-of-the-first-boards) for the first power-up.
+J18 (DC jack) is optional. Solder from low to high: the pin sockets of **one** set — J1/J2 (V3) or J19/J20/J21 (V4) — fitted onto the Heltec while soldering so they line up, headers, JST, screw terminals, RJ11 jacks, DC jack. Use **lead-free solder**. Then follow [CHECKLIST B](../pcb/v2.0/CHECKLIST.md#b-bring-up-of-the-first-boards) for the first power-up.
 
 **Costs:** set-up, stencil and a per-type fee for every *extended* part are charged per order, so 2–5 assembled boards cost considerably more per board than a large batch; JLC's calculator shows the actual price, VAT and shipping before payment. A **group order** spreads these fixed costs: one person orders on behalf of and at the expense of the participants and the costs are split without a mark-up. Selling assembled boards is a different matter (CE, RoHS, WEEE obligations).
 
@@ -453,7 +497,7 @@ Take the values from the datasheet. Example: the common SparkFun/Argent-style an
 
 **Calibration wizard** (works with any vane, regardless of brand):
 
-1. Open the config portal and click **Calibrate Wind Direction** (or http://192.168.4.1/calibrate).
+1. Open the config portal and click **Calibrate Wind Direction** (or http://192.168.4.1/calibrate) — or, in normal operation, *Settings → Sensors → Sensor calibration → Calibrate (guided)* in the web interface (`http://<node-ip>/calibrate`, admin login).
 2. Choose **8** or **16** positions, matching your vane.
 3. For each position, turn the vane to the shown direction and click **Capture**.
 4. Click **Save Calibration** — the node switches to the calibrated table automatically.

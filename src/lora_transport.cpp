@@ -1,4 +1,5 @@
 #include "lora_transport.h"
+#include "out_status.h"
 #include "globals.h"
 #include "serial_log.h"
 #include <atomic>
@@ -30,6 +31,7 @@ unsigned long retryMs = RETRY_MIN_MS;
 void joinFailed()
 {
     lastAttemptMs = millis();
+    outReport(OUT_LORAWAN, false, 0, "join failed");
     dbgSerial.printf("LoRaWAN join failed; measurements/WiFi continue, retry in %lu min.\n", retryMs / 60000);
     retryMs = retryMs * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : retryMs * 2;
 }

@@ -4,14 +4,26 @@
   "title": "Universal Weather Node — device description (/api/info)",
   "description": "What this node is and what /api/data will contain: read it once at start-up (and again after the node restarted, i.e. device.uptimeSec went down) to build your UI. Contains no secrets (no passwords, keys, station IDs, broker or coordinates). Stability: within apiVersion 1 fields are only added.",
   "type": "object",
-  "required": ["apiVersion", "device", "firmware", "hardware", "units", "measurement", "history", "outputs", "available", "sources"],
+  "required": ["apiVersion", "device", "system", "firmware", "hardware", "units", "measurement", "history", "outputs", "available", "sources"],
   "additionalProperties": true,
   "properties": {
     "apiVersion": { "type": "integer", "minimum": 1, "description": "API contract version (1). Check it first: refuse or warn on an unknown major version.", "x-present": "always" },
+    "system": {
+      "type": "object", "additionalProperties": false, "x-present": "always",
+      "required": ["uptimeSec", "heapFree", "heapMin", "heapLargest"],
+      "description": "Uptime and memory, for watching a node over days (a steadily falling heapMin or heapLargest points to a leak or fragmentation).",
+      "properties": {
+        "uptimeSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last start (same as device.uptimeSec).", "x-unit": "s" },
+        "heapFree": { "type": "integer", "minimum": 0, "description": "Free heap now (8-bit capable).", "x-unit": "bytes" },
+        "heapMin": { "type": "integer", "minimum": 0, "description": "Lowest free heap since start.", "x-unit": "bytes" },
+        "heapLargest": { "type": "integer", "minimum": 0, "description": "Largest free block now - HTTPS needs about 40 KB in one block.", "x-unit": "bytes" }
+      }
+    },
     "device": {
       "type": "object", "description": "Identity.", "x-present": "always",
-      "required": ["name", "hostname", "uptimeSec"], "additionalProperties": true,
+      "required": ["name", "hostname", "uptimeSec", "language"], "additionalProperties": true,
       "properties": {
+        "language": { "type": "string", "enum": ["auto", "en", "de", "fr", "es", "pt"], "description": "Language setting of the web interface (parameter 57): auto = each browser's language, else fixed. The node's own pages follow it; a UI may too.", "x-present": "always" },
         "name": { "type": "string", "maxLength": 32, "description": "Device name as configured (\"\" = none set). Use it as the station title.", "x-present": "always" },
         "hostname": { "type": "string", "maxLength": 31, "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", "description": "Host name for mDNS (reachable as <hostname>.local) and Wi-Fi/DHCP (the same name). The device name in lower case with other characters as '-' (at most 31), else weathernode-<last 6 MAC hex digits>.", "x-present": "always" },
         "uptimeSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last restart (the history is cleared by a restart).", "x-unit": "s", "x-present": "always" }
@@ -31,7 +43,7 @@
       "properties": {
         "board": { "type": "string", "enum": ["V3", "V4", "V4-R8"], "description": "Heltec WiFi LoRa 32 board (= /api/data status.board).", "x-present": "always" },
         "boardFem": { "type": "string", "enum": ["GC1109", "KCT8103L"], "description": "RF front end of a V4.", "x-present": "V4 with a detected front end" },
-        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20], "description": "PCB revision (= /api/data status.pcbRev): 12, 13 (also a board without PCB), 20 = v2.0, 0 = no PCB possible (V4).", "x-present": "always" }
+        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20], "description": "PCB revision (= /api/data status.pcbRev): 12, 13 (also a board without PCB), 20 = v2.0 (also a V4 on PCB v2.0), 0 = Heltec V4 without PCB (no revision ID on GPIO15).", "x-present": "always" }
       }
     },
     "units": {
@@ -90,7 +102,31 @@
         "updateCheck": { "type": "boolean", "description": "Daily firmware update check enabled.", "x-present": "always" },
         "weatherNetworks": {
           "type": "array", "description": "Weather networks the node uploads to.", "x-present": "always (may be empty)",
-          "items": { "type": "string", "enum": ["awekas", "wunderground", "weathercloud", "wetternetzwerk", "windy", "opensensemap"], "description": "Network key." }
+          "items": { "type": "string", "enum": ["awekas", "wunderground", "weathercloud", "wetternetzwerk", "windy", "opensensemap", "wow", "cwop"], "description": "Network key." }
+        },
+        "status": {
+          "type": "object", "additionalProperties": false, "x-present": "always; one entry per enabled output",
+          "description": "Send status per enabled output since start: last success / error as age, the last error's short text (local reason or trimmed server reply - never URLs or keys) and code, consecutive failures. haDiscovery = the Home Assistant discovery configs (MQTT).",
+          "properties": {
+            "lorawan": { "$ref": "#/$defs/outStatus", "description": "Send status of lorawan." },
+            "mqtt": { "$ref": "#/$defs/outStatus", "description": "Send status of mqtt." },
+            "haDiscovery": { "$ref": "#/$defs/outStatus", "description": "Send status of haDiscovery." },
+            "loxone": { "$ref": "#/$defs/outStatus", "description": "Send status of loxone." },
+            "awekas": { "$ref": "#/$defs/outStatus", "description": "Send status of awekas." },
+            "wunderground": { "$ref": "#/$defs/outStatus", "description": "Send status of wunderground." },
+            "weathercloud": { "$ref": "#/$defs/outStatus", "description": "Send status of weathercloud." },
+            "wetternetzwerk": { "$ref": "#/$defs/outStatus", "description": "Send status of wetternetzwerk." },
+            "windy": { "$ref": "#/$defs/outStatus", "description": "Send status of windy." },
+            "opensensemap": { "$ref": "#/$defs/outStatus", "description": "Send status of opensensemap." },
+            "wow": { "$ref": "#/$defs/outStatus", "description": "Send status of Met Office WOW." },
+            "cwop": { "$ref": "#/$defs/outStatus", "description": "Send status of CWOP (APRS-IS)." },
+            "ntfy": { "$ref": "#/$defs/outStatus", "description": "Send status of alarm notifications via ntfy." },
+            "pushover": { "$ref": "#/$defs/outStatus", "description": "Send status of alarm notifications via Pushover." },
+            "telegram": { "$ref": "#/$defs/outStatus", "description": "Send status of alarm notifications via Telegram." },
+            "webhook": { "$ref": "#/$defs/outStatus", "description": "Send status of the alarm webhook." },
+            "custom1": { "$ref": "#/$defs/outStatus", "description": "Send status of custom upload 1." },
+            "custom2": { "$ref": "#/$defs/outStatus", "description": "Send status of custom upload 2." }
+          }
         }
       }
     },
@@ -100,7 +136,7 @@
       "properties": {
         "temp": { "type": "boolean", "description": "temp (+ dewPoint, feelsLike, warnings …).", "x-present": "always" },
         "humidity": { "type": "boolean", "description": "humidityPct (+ dewPoint, vpd, cloudBase).", "x-present": "always" },
-        "pressure": { "type": "boolean", "description": "pressureAbs/pressureQnh (BME280).", "x-present": "always" },
+        "pressure": { "type": "boolean", "description": "pressureAbs/pressureQnh from the selected pressure source (BME280 or a wireless sensor).", "x-present": "always" },
         "wind": { "type": "boolean", "description": "A wind source is active.", "x-present": "always" },
         "rain": { "type": "boolean", "description": "A rain source is active.", "x-present": "always" },
         "uvIndex": { "type": "boolean", "description": "uvIndex.", "x-present": "always" },
@@ -117,15 +153,39 @@
         "victron": { "type": "boolean", "description": "victron object.", "x-present": "always" }
       }
     },
+    "wireless": {
+      "type": "object", "description": "Wireless sensor states (settings: Mine / Received / Hidden).", "x-present": "always",
+      "required": ["onlyMine", "mine", "hidden", "hiddenInRange"], "additionalProperties": false,
+      "properties": {
+        "onlyMine": { "type": "boolean", "description": "Only the \"Mine\" sensors are accepted (setting Only my sensors, with a non-empty list).", "x-present": "always" },
+        "mine": { "type": "integer", "minimum": 0, "maximum": 32, "description": "IDs in the \"Mine\" list (numbered first, wireless 1..n; Home Assistant devices).", "x-present": "always" },
+        "hidden": { "type": "integer", "minimum": 0, "maximum": 32, "description": "IDs in the hidden list (never stored, numbered or output).", "x-present": "always" },
+        "hiddenInRange": { "type": "integer", "minimum": 0, "maximum": 16, "description": "Hidden sensors heard within the last 10 minutes.", "x-present": "always" }
+      }
+    },
     "sources": {
       "type": "object", "description": "Current source per value group (same format as /api/data sources, but always present).", "x-present": "always",
-      "required": ["tempHum", "wind", "rain", "uv", "light"], "additionalProperties": true,
+      "required": ["tempHum", "wind", "rain", "uv", "light", "pressure"], "additionalProperties": true,
       "properties": {
+        "pressure": { "$ref": "data.schema.json#/$defs/source", "description": "Pressure source." },
         "tempHum": { "$ref": "data.schema.json#/$defs/source", "description": "Temperature/humidity source." },
         "wind": { "$ref": "data.schema.json#/$defs/source", "description": "Wind source." },
         "rain": { "$ref": "data.schema.json#/$defs/source", "description": "Rain source." },
         "uv": { "$ref": "data.schema.json#/$defs/source", "description": "UV source." },
         "light": { "$ref": "data.schema.json#/$defs/source", "description": "Light source." }
+      }
+    }
+  },
+  "$defs": {
+    "outStatus": {
+      "type": "object", "required": ["failsInRow"], "additionalProperties": false,
+      "description": "Send status of one output.",
+      "properties": {
+        "lastOkSecAgo": { "type": "integer", "minimum": 0, "description": "Seconds since the last success (absent: none since start).", "x-unit": "s" },
+        "lastErrorSecAgo": { "type": "integer", "minimum": 0, "description": "Seconds since the last error (absent: none since start).", "x-unit": "s" },
+        "lastError": { "type": "string", "maxLength": 39, "description": "Last error: local reason or trimmed server reply." },
+        "lastErrorCode": { "type": "integer", "description": "Code of the last error: HTTP status, negative HTTP client / RadioLib code, or the MQTT client state." },
+        "failsInRow": { "type": "integer", "minimum": 0, "description": "Consecutive failures (0 after a success)." }
       }
     }
   }

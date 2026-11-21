@@ -12,6 +12,25 @@
   "temp": 18.1495,
   "tempUnit": "C",
   "humidityPct": 50.2473,
+  "astro": {
+    "sunrise": "2026-06-15T03:08:40Z",
+    "sunset": "2026-06-15T19:08:15Z",
+    "civilDawn": "2026-06-15T02:27:47Z",
+    "civilDusk": "2026-06-15T19:49:10Z",
+    "solarNoon": "2026-06-15T11:08:22Z",
+    "dayLengthMin": 960,
+    "sunElevation": 63.4,
+    "clearSkyWm2": 922,
+    "moonrise": "2026-06-15T02:45:20Z",
+    "moonset": "2026-06-15T20:13:18Z",
+    "moonTransit": "2026-06-15T11:30:44Z",
+    "moonIlluminationPct": 0,
+    "moonPhase": "new",
+    "moonPhaseIndex": 0
+  },
+  "tempMinToday": 5.4,
+  "tempMaxToday": 18.2,
+  "gustMaxToday": 9.1,
   "pressureAbs": 946.8342,
   "pressureQnh": 1013.034,
   "pressureUnit": "hPa",
@@ -23,7 +42,8 @@
     "wind": "radio:39582376",
     "rain": "radio:39582376",
     "uv": "radio:39582376",
-    "light": "radio:39582376"
+    "light": "radio:39582376",
+    "pressure": "board"
   },
   "radioBatteryLow": false,
   "dewPoint": 7.6,
@@ -69,6 +89,7 @@
     {
       "id": "39582376",
       "slot": 1,
+      "mine": false,
       "type": 1,
       "protocol": "Bresser",
       "rssi": -71,
@@ -80,6 +101,8 @@
       "windGust": 8.3,
       "windDirDeg": 220,
       "rainTotal": 16.99999,
+      "rainToday": 17,
+      "rain1h": 4.2,
       "uvIndex": 4.1,
       "lightLux": 49902
     }

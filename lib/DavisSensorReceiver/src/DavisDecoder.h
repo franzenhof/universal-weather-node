@@ -99,6 +99,49 @@ const char* davisTypeName(uint8_t type);
 // between two counts is taken as a counter reset (ISS restarted, battery
 // changed), not as rain: 64 tips = 12.8 mm in the ~10 s between two rain
 // packets - and beyond half the range the wrap is ambiguous anyway.
+// Phantom-rain filter for the 7-bit tip counter (davis_rx.cpp). A packet
+// whose CRC happens to pass with a wrong counter, a decrement that is not a
+// 7-bit wrap, or a counter reset would otherwise turn into rain:
+//  - up to maxPerPacket tips since the last accepted count: rain;
+//  - more (or a pending value): held until the next counter packet. If that
+//    one continues from the held value, the jump is real - counted as rain
+//    while it fits maxPerMin tips per minute since the last accepted count
+//    (at least one minute), else the counter is re-based without counting
+//    the jump (counter reset). If it continues from the old value instead,
+//    the held one was a corrupt packet and is dropped.
+// Disabled: the old behaviour (steps above 64 = counter reset, not rain).
+enum DavisRainEvent : uint8_t {
+    DRE_OK = 0,        // counted (tips may be 0)
+    DRE_FIRST,         // first count: reference only
+    DRE_HELD,          // implausible jump held for confirmation (0 tips)
+    DRE_CONFIRMED,     // a held jump confirmed and counted as rain
+    DRE_REBASED,       // a held jump confirmed but implausible: new reference, jump not counted
+    DRE_DROPPED,       // a held value contradicted by this packet: dropped
+};
+struct DavisRainStep {
+    uint8_t        tips = 0;     // rain tips to add
+    DavisRainEvent event = DRE_OK;
+    uint8_t        jump = 0;     // the step that was held / re-based / dropped (for the log)
+};
+class DavisRainFilter {
+public:
+    void configure(bool enabled, uint8_t maxPerPacket, uint8_t maxPerMin)
+    {
+        enabled_ = enabled; maxPkt_ = maxPerPacket ? maxPerPacket : 1; maxMin_ = maxPerMin ? maxPerMin : 1;
+    }
+    DavisRainStep update(uint8_t count, uint32_t nowMs);
+    void     reset() { valid_ = pending_ = false; total_ = 0; }
+    bool     valid() const { return valid_; }
+    uint32_t totalTips() const { return total_; }
+private:
+    bool     enabled_ = true;
+    uint8_t  maxPkt_ = 8, maxMin_ = 50;
+    bool     valid_ = false, pending_ = false;
+    uint8_t  last_ = 0, pend_ = 0;
+    uint32_t lastMs_ = 0;
+    uint32_t total_ = 0;
+};
+
 class DavisRainCounter {
 public:
     explicit DavisRainCounter(uint8_t maxStep = 64) : maxStep_(maxStep) {}

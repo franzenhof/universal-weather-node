@@ -6,30 +6,17 @@
 // see serial_log.h for exactly what is/isn't captured: our own code, not
 // library-internal prints, and never anything before setup() runs). The
 // WebServer library has no server-push mechanism, so the page just polls
-// /api/log/raw on an interval instead.
-static const char LOG_PAGE_HTML[] PROGMEM = R"HTML(
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WeatherNode log</title>
-<style>
-  body{font-family:sans-serif;max-width:900px;margin:1rem auto;padding:0 1rem;}
-  nav a{margin-right:0.75rem;}
-  #log{background:#111;color:#ddd;font-family:ui-monospace,Consolas,monospace;font-size:0.85rem;
-       padding:0.75rem;border-radius:6px;height:60vh;overflow-y:auto;white-space:pre-wrap;word-break:break-word;}
-  button{margin:0.5rem 0.5rem 0.5rem 0;}
-</style>
-</head>
-<body>
-<nav><a href="/status">Status</a><a href="/">Chart</a><a href="/api/settings">Settings</a><a href="/help">Help / Documentation</a></nav>
-<h3>Device log</h3>
-<p>Rolling view of this device's own serial output (library-internal messages, e.g. from WiFiManager/RadioLib, aren't captured). Auto-refreshes every second.</p>
-<button id="toggle">Pause</button>
-<button id="clear">Clear</button>
-<pre id="log">Loading...</pre>
-<script>
+// /api/log/raw on an interval instead. The page itself (navigation, texts in
+// the visitor's language) is built by handleLogPage() in web_api.cpp; this
+// is only its style and script. The script expects
+//   var L = { pause, resume, failed }   (texts, set before it)
+static const char LOG_PAGE_STYLE[] PROGMEM = R"HTML(<style>
+#log{background:#111;color:#ddd;font-family:ui-monospace,Consolas,monospace;font-size:0.85rem;
+     padding:0.75rem;border-radius:6px;height:60vh;overflow-y:auto;white-space:pre-wrap;word-break:break-word;}
+.logbtn{margin:0.5rem 0.5rem 0.5rem 0;}
+</style>)HTML";
+
+static const char LOG_PAGE_SCRIPT[] PROGMEM = R"HTML(<script>
 var paused = false, atBottom = true;
 var logEl = document.getElementById('log');
 logEl.addEventListener('scroll', function () {
@@ -37,7 +24,7 @@ logEl.addEventListener('scroll', function () {
 });
 document.getElementById('toggle').addEventListener('click', function (e) {
   paused = !paused;
-  e.target.textContent = paused ? 'Resume' : 'Pause';
+  e.target.textContent = paused ? L.resume : L.pause;
 });
 document.getElementById('clear').addEventListener('click', function () {
   fetch('/api/log/clear', { method: 'POST' }).then(refresh);
@@ -47,11 +34,8 @@ function refresh() {
   fetch('/api/log/raw').then(function (r) { return r.text(); }).then(function (t) {
     logEl.textContent = t;
     if (atBottom) logEl.scrollTop = logEl.scrollHeight;
-  }).catch(function (e) { logEl.textContent = 'Failed to load log: ' + e; });
+  }).catch(function (e) { logEl.textContent = L.failed + ' ' + e; });
 }
 refresh();
 setInterval(refresh, 1000);
-</script>
-</body>
-</html>
-)HTML";
+</script>)HTML";

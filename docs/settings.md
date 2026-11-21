@@ -10,18 +10,45 @@ There are two places to change settings:
 |---|---|---|
 | **Where** | The node's own Wi-Fi `WeatherNode` → http://192.168.4.1 | Your home network → `http://<node-ip>/api/settings` |
 | **When** | First boot, button held 3 s, or LoRaWAN downlink `0x03` | Any time, while Wi-Fi and the web API are on |
-| **What** | Everything incl. the Wi-Fi network, wind-direction calibration, firmware update | Everything except the Wi-Fi network and the calibration wizard — incl. weather networks and time zone |
+| **What** | Everything incl. the Wi-Fi network, wind-direction calibration, decoder download, firmware update — the only way in for the first setup and for a node with Wi-Fi or the web interface off | Everything, incl. the Wi-Fi network, the calibration wizard, the decoder download, weather networks and time zone |
 
 ## Web Settings Page
 
 Open **Settings** in the web interface (user `admin`, password = the *web settings admin password* from the portal).
+
+The page has six **tabs** (links: `/api/settings#basics`, `#sensors`, `#outputs`, `#alarms`, `#display`, `#system`); one *Save* stores all of them, and the page comes back on the tab you were on. Without JavaScript all tabs are shown one below the other.
+
+| Tab | Sections |
+|-----|----------|
+| **Basics** | Language, Device (name), Location (altitude, latitude / longitude), Time, Units, Web access (admin password) |
+| **Sensors** | Wireless receiver (on/off, sensor type, *Only my sensors*), the **wireless sensor table** (★ Mine / ○ Received / ✕ Hidden, order of the ★ sensors — see [Wireless sensors](wireless-sensors.md#mine-received-hidden)), Value sources, Measurement (interval, board wind / rain, rain statistics, LiPo), Sensor calibration (incl. the link to the [wind-direction calibration wizard](#wind-direction-calibration)), Inputs & outputs (PCB v2.0), Davis (diagnostics) |
+| **Outputs** | Send intervals and wind values (MQTT, LoRaWAN), MQTT / Home Assistant, Weather networks, Custom uploads, Loxone, LoRaWAN (incl. the payload decoder download) |
+| **Alarms** | Alarm rules (12 slots, ready-made rules) and notification channels (ntfy, Pushover, Telegram, MQTT, webhook) with test buttons — see [Alarms](alarms.md). This tab has its own *Save* button (it is a separate form) |
+| **Display** | The built-in OLED: when it is on, which screens, rotation, brightness, night-off hours — see [Display](#display) |
+| **System** | Network (Wi-Fi, static IP), Firmware update check, Hardware (board, PCB, CPU frequency, debug mode), Switch off Wi-Fi / web interface (advanced, see [below](#switching-wi-fi-or-the-web-interface-off)), Setup wizard (start it again), Backup and restore, Firmware update (upload a `.bin`, needs an admin password — see [Firmware Update](installation.md#firmware-update-ota)), Records (reset), Diagnostics (log, radio trace) |
+
+**Language:** the whole web interface — dashboard, status, settings, log, the radio-trace and firmware-update pages and the setup portal's own labels — is available in English, German, French, Spanish and Portuguese. *Settings → Basics → Language* (parameter 57, portal field `uilang`): **Auto** (default; each browser gets its own language from `Accept-Language`, e.g. `de-AT` → German, anything unsupported → English) or one fixed language for everybody. Every browser can still pick its own language in the menu at the top of each page or on the dashboard (stored in that browser as a cookie `wnLang`; *Language: device setting* removes it). Order: the browser's own choice, then a fixed setting, then the browser language. Technical names (JSON keys, MQTT topics, parameter names, units, sensor models) are never translated; the help page (this documentation) stays English.
+
+**Show advanced options** (above the tabs, remembered in the browser) shows the expert fields, hidden by default: the whole *Davis (diagnostics)* section, CPU frequency, debug mode, the sensor lists as text (*Mine* / *Hidden* IDs), the AUX analog and UV divider scale factors, tacho pulses per revolution, the version list URL of the update check and the section *Switch off Wi-Fi / web interface*. Hidden fields are still saved with their current value.
 
 - Sections marked **live** apply immediately: measurement, inputs & outputs (PCB v2.0 only), units, calibration, weather networks, time, admin password.
 - Sections marked **restart** are only read at boot: LoRaWAN, network & MQTT, PCB revision. If you change one of them, the node saves and restarts — this clears the chart history, which lives in RAM.
 - **Passwords and keys are never shown.** Leave a password field empty to keep the stored value; optional ones have a *remove* checkbox.
 - Invalid values are listed after saving and keep their old value; everything else is saved. Fields that are not sent keep their value (scripts: send checkboxes explicitly as `name=on` / `name=0`). Posts from another web site (`Origin`/`Referer` not matching the node) are refused with 403.
 - **Wi-Fi network** (name and password, *Network & MQTT*): a change is **tested for 60 s** without a restart. If the node connects, the new network is stored; if not, it goes back to the current one and the settings page shows a notice — a typo can't lock you out. The test only counts as passed if the new network also answers (gateway ping or a DNS lookup within 10 s) — a network that blocks both rolls back; use *Store without test* for it. Switching to another network needs DHCP: switch a static IP off in the same step (or before). **Store without test (pre-provisioning)** stores a network that is not in range yet right away: the node leaves the current network immediately and keeps trying the new one (reachable again via that network, downlink `0x03` for the portal, or the button).
-- Only switching Wi-Fi or the web API off and the wind-direction calibration wizard are portal-only — so you can't lock yourself out.
+- **Payload decoder** (*Outputs → LoRaWAN*): downloads `weather-node-decoder.js`, the ChirpStack / TTN decoder matching this firmware — the same file as the portal's. `GET /decoder`, no login (it holds no secrets).
+
+### Wind-direction calibration
+
+*Settings → Sensors → Sensor calibration → Calibration table → Calibrate (guided)* opens `/calibrate`, the same 8- or 16-position wizard as in the config portal (see [Wind Vanes](pcb.md#wind-vanes) for when a vane needs it): turn the vane to each shown direction, the page shows the live ADC reading, *Capture* records it, *Save Calibration* stores the table and switches the sensor type to the calibrated table — immediately, without a restart. Admin login like the settings page (no admin password: refused, as the settings), the save is same-origin only. Only offered on a board with a wind-vane input (not on the Heltec V4 wireless build). API: `GET /calibrate/sample` (`{"adc":N}`), `POST /calibrate/save` ([OpenAPI](api/openapi.yaml)).
+
+### Switching Wi-Fi or the web interface off
+
+*Settings → System → Switch off Wi-Fi / web interface* (shown with *Show advanced options*): **Wi-Fi enabled** off makes a LoRaWAN-only node (no web interface, MQTT, weather networks, NTP); **Web interface enabled** off keeps Wi-Fi, MQTT and the uploads but closes all web pages and the REST API. After saving the node restarts and is **reachable only via the config portal** (PRG button 3 s) **or a LoRaWAN downlink** (`0x03` opens the portal; parameter changes via `0x10`). To be safe the save is refused — the switches stay on, with a notice — unless
+- the confirmation checkbox is ticked, and
+- LoRaWAN is enabled (and stays enabled in the same save) **and joined** right now.
+
+Switching them on again is only possible in the config portal (fields `wifien`, `webapien`). Form fields for scripts: `wifien=0` / `webapien=0` with `radiooffok=1`; a restored backup never switches them off.
 
 ## Settings Reference
 
@@ -53,16 +80,21 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | RX window: late / early (guard) | 5–500 ms after / before the predicted packet | 25 / 40 |
 | Channel table | measured 2026 or classic DavisRFM69 | measured |
 | Receiver bandwidth | 58.6, 78.2, 93.8, 117.3, 156.2, 234.3 kHz | 93.8 |
+| Phantom-rain filter, tips per packet, max. tips per minute | an implausible jump of the 7-bit tip counter (more than *tips per packet* since the last accepted count, a decrement that is not a 127 → 0 wrap, a counter reset) is **held** until the next counter packet: if that one continues from the old value, the held value was corrupt and is dropped; if it continues from the new one, the jump counts as rain while it fits *max. tips per minute* (over at least one minute), else it is a counter reset and only re-bases the counter. Every held / dropped / confirmed / re-based jump goes to the log and the radio trace. Off = the old behaviour (steps above 64 tips = reset). Heavy rain (8 tips = 1.6 mm per ~10 s packet, 50 tips = 10 mm per minute) passes unchanged | on, 8, 50 |
 | Sniffer | every packet to the log (`/api/log`, max 30 lines/min; all of them in the [radio trace](wireless-sensors.md#capturing-a-radio-trace-for-us), `/api/davis/log`) | off |
 | Raw capture, channel | park on channel 0–4 without hopping, log everything incl. CRC failures | off, 0 |
-| Wireless sensor IDs | Hex IDs to accept, comma-separated, max 32; empty = any (up to 32 sensors). The order numbers the sensors *Wireless 1–32* (the first four are the *Wireless 1–4* value sources); only listed IDs get their own [Home Assistant device](mqtt-home-assistant.md#wireless-sensors-in-home-assistant). The hint lists the IDs received so far. A list saved by an older firmware (max 4 IDs) is kept unchanged | – |
-| Source: temperature / humidity, wind, rain, UV, light | Which sensor feeds each value into all outputs: *Auto* (board first, then wireless 1–4), *Board sensor*, *Wireless 1–4*, *Off* — see [Value Sources](wireless-sensors.md#value-sources) | Auto |
+| Only my sensors | On: only the ★ *Mine* sensors are received (the behaviour of older firmware with an ID list); off: every sensor except the hidden ones, the others numbered after yours. No effect while no sensor is ★. Portal field `rfonly`, parameter 55 | off; **on** for a node updated with an ID list set |
+| Wireless sensor table | Per sensor ★ *Mine* / ○ *Received* / ✕ *Hidden* and the order of the ★ sensors (arrows) — see [Mine, Received, Hidden](wireless-sensors.md#mine-received-hidden) | – |
+| Mine (IDs as text) *(advanced)* | The ★ list as hex IDs, comma-separated, max 32; its order numbers the sensors *Wireless 1–n* (the first four are the *Wireless 1–4* value sources); each gets a [Home Assistant device](mqtt-home-assistant.md#wireless-sensors-in-home-assistant). Portal field `rfids`. A list saved by an older firmware is kept unchanged | – |
+| Hidden (IDs as text) *(advanced)* | The ✕ list, max 32: never stored, numbered or output. Portal field `rfignore`; parameter 56 (value 0) empties it | – |
+| Source: temperature / humidity, wind, rain, UV, light, pressure | Which sensor feeds each value into all outputs: *Auto* (board first, then wireless 1–4), *Board sensor*, *Wireless 1–4*, *Off* — see [Value Sources](wireless-sensors.md#value-sources). Portal field `srcs`: six values `air,wind,rain,uv,light,pressure` (a value left out keeps its setting) | Auto |
 | Wind / rain sensor (board) | The PCB's anemometer / rain gauge — switch on when one is connected (a wireless sensor delivers wind/rain independently, see value sources) | off |
 | Keep rain statistics over a power cut | Saves rain today / yesterday / week / month / year, sunshine today / yesterday and the last-rain time (one 68-byte record) to flash at most once per hour when changed, at the day change and before every planned restart or update — so they survive power cuts and firmware updates; off = RTC RAM only (lost on power loss) | on |
 | LiPo measurement | Battery voltage measurement | off |
+| Sunshine duration | *Illuminance ≥ 15000 lx* or *solar radiation ≥ 0.4 × clear-sky maximum* (WMO-like; needs a W/m² sensor — Davis solar radiation — as the light source and latitude / longitude, otherwise the illuminance threshold is used) — see [Sun and Moon](values.md#sun-and-moon). Parameter 65 | illuminance |
 | Altitude | Station altitude in m, for sea-level pressure (QNH) | 560 |
-| Heltec board (restart) | *Auto* (by flash size: 8 MB = V3, 16 MB = V4) / *V3* / *V4* — only needed if detection is wrong. On a V4 the PCB revision, board wind / rain sensors and all PCB inputs and outputs are ignored (wireless build only) | Auto |
-| PCB revision | 12 = Rev 1.2, 13 = Rev 1.3, 20 = v2.0 (v2.0 is detected automatically); ignored on a Heltec V4 | 13 |
+| Heltec board (restart) | *Auto* (by flash size: 8 MB = V3, 16 MB = V4) / *V3* / *V4* — only needed if detection is wrong. A V4 runs without PCB or on PCB v2.0 (detected by the revision ID on GPIO15); a V4 without that ID ignores the PCB revision, board wind / rain sensors and all PCB inputs and outputs (wireless build) | Auto |
+| PCB revision | 12 = Rev 1.2, 13 = Rev 1.3, 20 = v2.0 (v2.0 is detected automatically); a Heltec V4 runs on v2.0 only (ID on GPIO15) and ignores this without it | 13 |
 | CPU frequency | 80 MHz (saves power) or 240 MHz | 80 |
 | Debug mode | Adds diagnostic fields (cycle counter, free heap, uptime; CPU temperature in the LoRaWAN payload — the JSON/MQTT data always contain it) | off |
 | **Units & calibration** | | |
@@ -70,6 +102,9 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | Wind speed unit | km/h or m/s (metric only) | m/s |
 | Wind direction offset | North correction in degrees (−180 to +180) | 0 |
 | Rain per tip / wind per pulse | Sensor ratios — see [Using Other Sensors](pcb.md#using-other-sensors) | Davis values |
+| Temperature / humidity / pressure offset | Added to the main value **after the value source** — board sensor or wireless alike: temperature −10…+10 K, humidity −20…+20 % (result kept within 0–100 %), pressure −20…+20 hPa on the **station pressure before** the sea-level (QNH) reduction. Parameters 59 / 60 / 61 (tenths) | 0 |
+| Rain factor / wind speed factor | 0.5–2 (1 = unchanged); multiplies every rain increment / wind speed and gust of the selected source. Parameters 62 / 63 (thousandths) | 1 |
+| Per wireless sensor | Offsets and factors per sensor ID: `ID:temperature:humidity[:rain:wind:UV:light[:wn20 or :wh40][:ad=AD0-AD100]]`, comma-separated (offsets in K and %, factors 0.5–2; humidity and the factors optional), e.g. `1A2B3C4D:-0.4:+3`, `900181A2:0:0:0.95:1.05:1:1`, `20001234:0:0:1:1:1:1:wn20`; up to 32 sensors (about 15 bytes each, 40 with factors) — see [Calibration](#calibration) | – |
 | **Inputs & outputs (PCB v2.0)** | Details: [Inputs and Outputs](pcb.md#inputs-and-outputs-pcb-v20) | |
 | AUX analog input, scale | GPIO4; scale = V at the terminal per V at the pin (1.66667 with R25 = 15 kΩ) | off, 1.0 |
 | UV sensor, divider scale | GPIO3; terminal voltage per ADC voltage, matching JP10 (1–2: 0–3.3 V, 1.1; 2–3: 0–5 V, 1.66534) | off, 1.1 |
@@ -85,7 +120,7 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | **Loxone (UDP)** | see [Loxone](loxone.md) | |
 | Loxone UDP | on/off, Miniserver IP or host name, UDP port, name prefix (`A–Z a–z 0–9 _ . -`, max 16), interval (`0` = every cycle, else 2–3600 s) | off, –, 7000, –, 0 |
 | **Wi-Fi + MQTT** | | |
-| Wi-Fi / web API | On/off switches | on |
+| Wi-Fi / web API | On/off switches; off from the web settings only with a confirmation and LoRaWAN joined — see [Switching Wi-Fi or the web interface off](#switching-wi-fi-or-the-web-interface-off) | on |
 | MQTT / MQTT commands | On/off switches — see [MQTT and Home Assistant](mqtt-home-assistant.md) | off |
 | Device name | Hostname for Wi-Fi/DHCP and mDNS (`<hostname>.local`): lower case, characters outside `a–z 0–9` → `-` (runs collapsed, none at the start or end), at most 31 characters (`"Weather Mast"` → `weather-mast`); without a name `weathernode-<last 6 MAC hex digits>`. Also the MQTT client ID (characters outside `A–Z a–z 0–9 _ -` become `_`) and default topic prefix | – |
 | Wi-Fi network and password | Portal (*Configure WiFi*) or web settings (tested for 60 s with rollback, or *store without test* for pre-provisioning) | – |
@@ -93,10 +128,43 @@ Open **Settings** in the web interface (user `admin`, password = the *web settin
 | MQTT broker, port, user, password, topic prefix, TLS mode, CA certificate | Broker connection | port 1883, no TLS |
 | Web settings admin password | Required for the settings page and the log | – |
 | **Web settings page only** | | |
-| Weather networks | Station IDs, keys and intervals (AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap) — see [Weather Networks](weather-networks.md) | off |
-| Firmware update check, version list URL | Daily check for a newer version — see [Firmware Update Check](values.md#firmware-update-check) | off; this project's Gitea tags |
-| Latitude / longitude | Only sent to AWEKAS | – |
+| Weather networks | Station IDs, keys and intervals (AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap, Met Office WOW, CWOP) — see [Weather Networks](weather-networks.md) | off |
+| Custom uploads 1–2 | URL template, GET / POST, body template, interval 60–3600 s — see [Custom Upload](weather-networks.md#custom-upload) | off, 300 s |
+| Alarms | Rules and channels — see [Alarms and Notifications](alarms.md); stored in their own flash records (namespaces `alarms`, `cupload` for the custom uploads) | none |
+| Firmware update check, version list URL | Daily check for a newer version — see [Firmware Update Check](values.md#firmware-update-check) | off; this project's GitHub releases |
+| Latitude / longitude | Sun and moon times computed on the node ([Sun and Moon](values.md#sun-and-moon)) and sent to AWEKAS; nowhere else | – |
+| Records: reset | *today … this year* or *all, including all-time* — applied once on Save; parameter 64 — see [Records](values.md#records) | – |
+| Backup and restore | see [Backup and Restore](#backup-and-restore) | – |
 | Time zone, NTP server | POSIX time zone string and time server | Central Europe, `pool.ntp.org` |
+
+### Display
+
+*Settings → Display* — the Heltec's built-in 128 × 64 OLED. All live.
+
+| Setting | Meaning | Default |
+|---------|---------|---------|
+| Display on | **for 20 s after PRG** (as before), **always** (except the night hours), or **for N minutes after PRG** | 20 s after PRG |
+| Minutes after PRG | for the third mode, 1–120 | 5 |
+| Screens | **classic status** (wind, rain, temperature, battery, LoRaWAN uplink result or IP / receiver state — the screen of older firmware), **temperature** (big, with humidity, dew point, feels like), **wind** (mean, gust, compass point and degrees), **rain** (today, last hour, rate), **pressure** (QNH, 3-h change with an arrow and the weather trend word), **status** (IP and RSSI, `.local` name, number of wireless sensors and active alarms) | classic only |
+| Next screen every | rotation through the ticked screens, 2–60 s; while the display is on, a short PRG press shows the next screen | 5 s |
+| Brightness | OLED contrast 1–255 | 200 |
+| Night off from / until | local hours 0–23 (e.g. 22 and 6); equal = never. Against burn-in and to save power in *always* mode; a PRG press still switches the display on for 20 s | 0 / 0 |
+
+Texts on the screens follow the device language (*Settings → Basics → Language*; *Auto* = English). Existing nodes keep the old behaviour until something is changed here.
+
+### Calibration
+
+*Settings → Sensors → Sensor calibration.* The main-value corrections (offsets for temperature, humidity and station pressure, factors for rain and wind speed) are applied **after the value source was chosen**, so they correct whatever feeds the value — the board sensors or a wireless sensor — and **every output sees the corrected value**: status page, dashboard and history, `/api/data`, MQTT / Home Assistant, LoRaWAN, Loxone, the weather networks, the records and the derived values (dew point, QNH, rain statistics …). The pressure offset is added to the station pressure; QNH is then computed from the corrected value.
+
+The **per-sensor** offsets (`ID:temperature:humidity`) and the **wind, UV and light factors** are applied when a packet of that sensor is stored. The per-sensor **rain factor** multiplies the counter's *increments* — the main rain path when that sensor is the rain source, and the sensor's rain today / last hour — never the raw counter that is shown. **`wn20`** switches on the WN20 correction from the Ecowitt wiki instead of a fixed rain factor (see [Wireless sensors](wireless-sensors.md#names-ecowitt-ids-rain-and-lightning-per-sensor)). Entries saved by older firmware (`ID:t:h`) keep working. They therefore also correct that sensor's raw values: `rfSensors` in `/api/data`, `<prefix>/rf/<ID>`, its Home Assistant device and the status page. If the sensor is the selected source, the main offset comes on top — use one or the other for a sensor that is a value source. Wind direction, rain per tip, wind per pulse and the UV calibration stay where they were.
+
+### Backup and Restore
+
+*Settings → System → Backup and restore.*
+
+- **Download settings** saves `uwn-settings-<host>-<date>.json` with every field of the settings page (`settings`: the form field names of this page with their values; `format`, `version`, `firmware`, `host`, `date`, `secrets`). Passwords and keys — Wi-Fi, admin, MQTT, the weather networks' keys, the alarm channels' tokens, the LoRaWAN AppKey, and the webhook / custom-upload URLs (they may carry a key) — are only included if you tick **include passwords and keys** (default off): the file then holds them in plain text, keep it private.
+- **Restore settings from a file** uploads such a file. It is checked like a manual *Save* (same limits, invalid values are listed and keep their old value), the next settings page lists **what changed** (old → new; secrets only as `***`), and the node restarts if a restart field changed. A file from a newer major format (`version` > 1) or another file is refused without changing anything. Fields that this node's page does not have (other hardware, older firmware) are ignored; a backup without secrets keeps the stored passwords. A different Wi-Fi network in the file is tested like a manual change (rollback after 60 s).
+- Not in the backup: the LoRaWAN session and DevNonces (stay untouched), the wind-direction calibration table ([wizard](#wind-direction-calibration)), the rain statistics and records. API: `GET /api/settings/backup[?secrets=1]`, `POST /api/settings/restore` (field `backup`), both admin login and same-origin.
 
 Saved settings survive ordinary restarts and application-only OTA updates. Factory reset or a full flash erase removes project settings; upgrades from the older storage layout may require re-entering them. Keep a private backup of keys, sensor calibration and settings before changing firmware or partitions.
 
@@ -155,6 +223,19 @@ Send on **FPort 1**: `0x10`, followed by one or more triplets `[paramId][valueHi
 | 51 | `0x33` | `rainPersist` | keep rain and sunshine statistics (today, yesterday, week, month, year, last rain) over power cuts and updates (`0` off / `1` on, at most one flash write per hour plus one per planned restart) | 1 | `10 33 00 01` |
 | 52 | `0x34` | `loxEn` | Loxone UDP output `0` off / `1` on | 0 | `10 34 00 01` |
 | 53 | `0x35` | `loxSec` | Loxone interval in s: `0` = every measurement cycle, else 2–3600 | 0 | `10 35 00 3C` |
+| 54 | `0x36` | value source: pressure | `0` auto (BME280 first, then wireless 1–4 with a barometer), `1` board (BME280), `2`–`5` wireless 1–4, `6` off — see [Value Sources](wireless-sensors.md#value-sources) | 0 | `10 36 00 02` |
+| 55 | `0x37` | `rfOnlyMine` | Only my sensors: `1` = accept only the ★ *Mine* IDs (no effect while there are none), `0` = all except hidden | 0 (1 after an update with an ID list) | `10 37 00 01` |
+| 56 | `0x38` | hidden-sensor list | `0` = empty the list (unhide all); the IDs themselves are set in the web settings / portal | – | `10 38 00 00` |
+| 57 | `0x39` | `uiLang` | web interface / portal language: `0` Auto (browser language; the portal: English), `1` English, `2` Deutsch, `3` Français, `4` Español, `5` Português | 0 | `10 39 00 02` |
+| 58 | `0x3A` | `setupDone` | setup wizard: `1` = done, `0` = the dashboard opens the [setup wizard](installation.md#setup-wizard) again (once per browser session; without an admin password it is open in the LAN until finished) | 0 (1 for nodes updated from an older firmware) | `10 3A 00 00` |
+| 59 | `0x3B` | temperature offset | 0.1 K, −100…100 (signed 16 bit), after the value source — see [Calibration](#calibration) | 0 | `10 3B FF FC` (−0.4 K) |
+| 60 | `0x3C` | humidity offset | 0.1 %, −200…200 | 0 | `10 3C 00 1E` (+3 %) |
+| 61 | `0x3D` | pressure offset | 0.1 hPa, −200…200, on the station pressure before QNH | 0 | `10 3D 00 0F` (+1.5 hPa) |
+| 62 | `0x3E` | rain factor | ×1000, 500…2000 | 1000 | `10 3E 04 4C` (1.1) |
+| 63 | `0x3F` | wind speed factor | ×1000, 500…2000 (speed and gust) | 1000 | `10 3F 03 84` (0.9) |
+| 64 | `0x40` | records reset | `1` = today … this year, `2` = also the all-time records (an action, not stored) — see [Records](values.md#records) | – | `10 40 00 01` |
+| 65 | `0x41` | sunshine method | `0` illuminance ≥ 15000 lx, `1` solar radiation ≥ 0.4 × clear-sky maximum (W/m² sensor + location) | 0 | `10 41 00 01` |
+| 66 | `0x42` | alarm rules on / off | bit n = rule n + 1 (0–4095); the rules themselves are set on the web page — see [Alarms](alarms.md) | – | `10 42 00 05` (rules 1 and 3 on) |
 
 IDs 15–30 and wind-2 mode (33) belong to the [PCB v2.0 I/O block](pcb.md#inputs-and-outputs-pcb-v20); on Rev 1.2/1.3 they are rejected except for disabling a function. Enabling UV (35) also requires v2.0. Calibration values can be prepared where accepted, but do not provide the missing hardware.
 

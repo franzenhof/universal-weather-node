@@ -27,6 +27,11 @@
 #include "../src/history.cpp"
 
 #include "api_info.h"
+#include "records.h"
+#include "out_status.h"
+#include "astro.h"
+#include "alarms.h"
+#include "rf_stats.h"
 #include "json_payload.h"
 #include "board_io.h"
 #include "rf_sensors.h"
@@ -51,6 +56,27 @@ bool epochNow(int64_t& out)
 {
     if (!hostClockSynced) return false;
     out = hostEpochAtZero + (int64_t)(millis() / 1000);
+    return true;
+}
+// rf_stats.h clock: the simulated wall clock
+bool rfStatsClock(uint32_t& t, uint32_t& ymd)
+{
+    int64_t e;
+    if (!epochNow(e)) { t = (uint32_t)(millis() / 1000); ymd = 0; return false; }
+    time_t tt = (time_t)e;
+    struct tm lt;
+    localtime_r(&tt, &lt);
+    t = (uint32_t)e;
+    ymd = (uint32_t)((lt.tm_year + 1900) * 10000 + (lt.tm_mon + 1) * 100 + lt.tm_mday);
+    return true;
+}
+
+bool localTimeNow(struct tm& out)
+{
+    int64_t e;
+    if (!epochNow(e)) return false;
+    time_t t = (time_t)e;
+    localtime_r(&t, &out);
     return true;
 }
 static const char* hostUpdate = "";
@@ -100,7 +126,7 @@ RfSensorReading& rfAdd(int slot, uint32_t id, uint8_t type, uint8_t proto, const
 void rfHeard(RfSensorReading& r, unsigned long agoMs)
 {
     unsigned long t = millis() - agoMs;
-    r.lastMs = r.tempMs = r.humMs = r.windMs = r.rainMs = r.uvMs = r.lightMs = t;
+    r.lastMs = r.tempMs = r.humMs = r.windMs = r.rainMs = r.uvMs = r.lightMs = r.pressMs = t;
 }
 
 constexpr unsigned long CYCLE_MS = 300000;
@@ -110,6 +136,9 @@ constexpr int64_t NOW_EPOCH = 1781524800;   // end of every run: 2026-06-15T12:0
 // not built here): today = the last 14 h (since local midnight), yesterday
 // = the 24 h before.
 struct RunRain { float todayMm = 0, yesterdayMm = 0; int64_t lastRainEpoch = 0; };
+// records.h, fed like records_store.cpp's recordsCycle() does on the node
+Records hostRecords;
+float   hostDayRainMm = 0.0f;
 RunRain runRain;
 
 // Runs `hours` of 5-min cycles: set(w) puts the cycle's values into the
@@ -118,6 +147,8 @@ RunRain runRain;
 void run(float hours, float rainLastHours, const std::function<void(const Wx&)>& set)
 {
     int cycles = (int)lroundf(hours * 3600000.0f / CYCLE_MS);
+    setenv("TZ", gCfg.timeZone, 1);   // local day for the records
+    tzset();
     // the response follows 63 s after the last cycle, at NOW_EPOCH
     hostEpochAtZero = NOW_EPOCH - 63 - (int64_t)((millis() + (unsigned long)cycles * CYCLE_MS) / 1000);
     for (int i = cycles - 1; i >= 0; i--) {
@@ -133,8 +164,29 @@ void run(float hours, float rainLastHours, const std::function<void(const Wx&)>&
         rainMM = w.rainMm;
         srcUpdateCycle();
         pushHistorySample();
+        int64_t e;
+        if (epochNow(e)) {
+            time_t tt = (time_t)e;
+            struct tm lt;
+            localtime_r(&tt, &lt);
+            if (recordsRoll(hostRecords, lt)) hostDayRainMm = 0.0f;
+            const uint32_t t = (uint32_t)e;
+            if (gSrc.tempValid)  recordsUpdate(hostRecords, RQ_TEMP, gSrc.tempC, t);
+            if (gSrc.humValid)   recordsUpdate(hostRecords, RQ_HUM, gSrc.humidity, t);
+            if (gSrc.pressValid) recordsUpdate(hostRecords, RQ_PRESS, gSrc.pressSeaHpa, t);
+            if (srcActive(SG_WIND)) recordsUpdate(hostRecords, RQ_GUST, windGustMs, t);
+            if (srcActive(SG_RAIN)) {
+                recordsUpdate(hostRecords, RQ_RAINRATE, rainRateMmH, t);
+                hostDayRainMm += w.rainMm;
+                recordsDailyRain(hostRecords, hostDayRainMm);
+            }
+        }
     }
     gBaseCycleMs = CYCLE_MS;
+    astroCycle();
+    // send status (out_status.h) of the last cycle; shown for the enabled outputs only
+    for (uint8_t i = 0; i < OUT_COUNT; i++) outReport(i, true);
+    outReport(OUT_WX_FIRST + 1, false, 401, "Unauthorized");   // Weather Underground: wrong key
     delay(63000);                 // 63 s into the next cycle: nextCycleInSec = 237
     lastSendMs = millis() - 63000;
 }
@@ -151,6 +203,11 @@ void radioWeather(RfSensorReading& r, const Wx& w, bool uvLight)
     r.tempC = round1(w.tC); r.humidity = (uint8_t)lroundf(w.rh);
     r.windAvgMs = round1(w.windMs); r.windGustMs = round1(w.gustMs); r.windDirDeg = (float)w.dir;
     r.rainTotalMm += w.rainMm;
+    {   // per-sensor rain today / last hour (rf_stats.h), fed like rfStoreValues() does
+        uint32_t t, ymd;
+        rfStatsClock(t, ymd);
+        if (RfStat* st = rfStatFor(r.id, true)) rfStatRain(*st, w.rainMm, t, ymd);
+    }
     if (uvLight) { r.hasUv = r.hasLight = true; r.uvIndex = w.uv; r.lightLux = roundf(w.lux); }
     rfHeard(r, 9000);
     rainMMSinceStart += w.rainMm;
@@ -176,11 +233,14 @@ void syncedDay(float earlierWeekMm, float earlierMonthMm, float earlierYearMm, f
 void common(const char* name)
 {
     gCfg = Config{};   // a new node's defaults (wireless sensors on, Wi-Fi + web API on)
+    rfStatsClear();
     snprintf(gCfg.deviceName, sizeof(gCfg.deviceName), "%s", name);
     gResetReason = "power-on";
     sendFailCount = 0;
     cpuTemperature = 41.5f;
     hostNow = 1000;
+    snprintf(gCfg.latitude, sizeof(gCfg.latitude), "47.80");    // sun / moon (astro.h)
+    snprintf(gCfg.longitude, sizeof(gCfg.longitude), "13.04");
 }
 
 // ---- fixtures ----
@@ -201,7 +261,8 @@ void fixtureBresser()
     syncedDay(0.0f, 24.6f, 498.2f, 205, 312);
 }
 
-// Ecowitt / Froggit: WS90 array, WH31 (not heard for 7 min), WH51, WH57, WN34
+// Ecowitt / Froggit with an ID list: WS90 array, WH31 (not heard for 7 min), WN32P
+// (pressure source), WH51, WH57, WN34
 // temperature probe and a second WH31 (wireless 5 and 6), WH46, WH55, WN32P,
 // WH52, WN35 and WH41 (wireless 7-12); no BME280.
 void fixtureEcowitt()
@@ -210,26 +271,44 @@ void fixtureEcowitt()
     gCfg.rfProto = RF_PROTO_FINEOFFSET;
     gCfg.windUnitMs = 0;   // km/h
     gCfg.loxEn = 1;
+    gCfg.altitudeM = 560;
+    // ID list: the order numbers the sensors (wireless 1-12); the WN32P indoor
+    // sensor is wireless 3 - the pressure source (no BME280), but never the
+    // temperature source (Auto skips indoor sensors for temperature / humidity)
+    snprintf(gCfg.rfIds, sizeof(gCfg.rfIds), "900C3A7F, 300002B2, 25000050, 5700E21A, 5100D0C7, 3400A1B2, 300003C4, "
+             "460027F1, 5530CF55, A2005D8D, 3500305E, 410000C7");
     bme280Present = false;
-    RfSensorReading& ws = rfAdd(0, 0x000C3A7F, 1, RF_PROTO_FINEOFFSET, "WS90");
+    RfSensorReading& ws = rfAdd(0, 0x900C3A7F, 1, RF_PROTO_FINEOFFSET, "WS90");
     ws.hasSupercap = true;
-    RfSensorReading& wh31 = rfAdd(1, 0x000000B2, 2, RF_PROTO_FINEOFFSET, "WH31");
+    RfSensorReading& wh31 = rfAdd(1, 0x300002B2, 2, RF_PROTO_FINEOFFSET, "WH31");
+    snprintf(gCfg.rfNames, sizeof(gCfg.rfNames), "300002B2:Greenhouse|5100D0C7:Raised bed");   // rf_names.h
     wh31.channel = 2; wh31.hasTemp = wh31.hasHumidity = true;
-    RfSensorReading& wh51 = rfAdd(2, 0x0000D0C7, 4, RF_PROTO_FINEOFFSET, "WH51");
+    RfSensorReading& wh51 = rfAdd(2, 0x5100D0C7, 4, RF_PROTO_FINEOFFSET, "WH51");
     wh51.hasMoisture = true;
-    RfSensorReading& wh57 = rfAdd(3, 0x0000E21A, 9, RF_PROTO_FINEOFFSET, "WH57");
+    RfSensorReading& wh57 = rfAdd(3, 0x5700E21A, 9, RF_PROTO_FINEOFFSET, "WH57");
     wh57.hasLightning = true;
     // sensors 5 and 6 (up to 32 are received): shown everywhere, not value sources
     RfSensorReading& wn34 = rfAdd(4, 0x3400A1B2, 3, RF_PROTO_FINEOFFSET, "WN34");
     wn34.hasTemp = true;
     RfSensorReading& wh31b = rfAdd(5, 0x300003C4, 2, RF_PROTO_FINEOFFSET, "WH31");
     wh31b.channel = 3; wh31b.hasTemp = wh31b.hasHumidity = true;
+    RfSensorReading& wn32p = rfAdd(8, 0x25000050, 2, RF_PROTO_FINEOFFSET, "WN32P");
+    wn32p.hasTemp = wn32p.hasHumidity = wn32p.hasPressure = true;
+    wn32p.tempC = 22.6f; wn32p.humidity = 40;
     run(30, 0.5f, [&](const Wx& w) {
+        wn32p.pressureHpa = roundf((w.qnh - 66.2f) * 10.0f) / 10.0f; rfHeard(wn32p, 30000);   // station pressure at 560 m
         radioWeather(ws, w, true); boardWind(w);
         ws.supercapV = 3.86f;
         wh31.tempC = round1(w.tC + 8.5f); wh31.humidity = 48; rfHeard(wh31, 20000);
         wh51.moisturePct = 41; rfHeard(wh51, 40000);
-        wh57.lightningCount = 12; wh57.lightningKm = 8; rfHeard(wh57, 30000);
+        // the WH57's counter: a strike now and then in the last hours (wraps at 255)
+        if (w.rainMm > 0.0f) wh57.lightningCount = (uint8_t)(wh57.lightningCount + 3);
+        wh57.lightningKm = 8; rfHeard(wh57, 30000);
+        {
+            uint32_t t, ymd;
+            rfStatsClock(t, ymd);
+            if (RfStat* st = rfStatFor(wh57.id, true)) rfStatLightning(*st, wh57.lightningCount, t, ymd);
+        }
         wn34.tempC = round1(w.tC * 0.4f + 9.0f); rfHeard(wn34, 25000);
         wh31b.tempC = round1(w.tC + 1.1f); wh31b.humidity = 63; rfHeard(wh31b, 45000);
     });
@@ -240,9 +319,6 @@ void fixtureEcowitt()
     wh45.pm1 = 4.2f; wh45.pm4 = 5.4f;
     RfSensorReading& wh55 = rfAdd(7, 0x5530CF55, 5, RF_PROTO_FINEOFFSET, "WH55");
     wh55.channel = 4; wh55.hasLeak = true; wh55.leakHighSensitivity = true; wh55.leakRaw = 649;
-    RfSensorReading& wn32p = rfAdd(8, 0x25000050, 2, RF_PROTO_FINEOFFSET, "WN32P");
-    wn32p.hasTemp = wn32p.hasHumidity = wn32p.hasPressure = true;
-    wn32p.tempC = 22.6f; wn32p.humidity = 40; wn32p.pressureHpa = 1001.7f;
     RfSensorReading& wh52 = rfAdd(9, 0xA2005D8D, 4, RF_PROTO_FINEOFFSET, "WH52");
     wh52.hasTemp = wh52.hasMoisture = wh52.hasConductivity = true;
     wh52.tempC = 22.3f; wh52.moisturePct = 91; wh52.conductivityUsCm = 643.4f;
@@ -250,7 +326,7 @@ void fixtureEcowitt()
     wn35.hasLeafWetness = true; wn35.leafWetnessPct = 7;
     RfSensorReading& wh41 = rfAdd(11, 0x410000C7, 8, RF_PROTO_FINEOFFSET, "WH41");
     wh41.hasPm25 = wh41.hasPm10 = wh41.pm10Estimated = true; wh41.pm25 = 43.0f; wh41.pm10 = 45.0f;
-    rfHeard(wh45, 120000); rfHeard(wh55, 50000); rfHeard(wn32p, 30000); rfHeard(wh52, 60000);
+    rfHeard(wh45, 120000); rfHeard(wh55, 50000); rfHeard(wh52, 60000);
     rfHeard(wn35, 70000); rfHeard(wh41, 240000);
     wn34.rssi = -79.0f; wh31b.rssi = -84.0f;
     rfHeard(wh31, 420000);   // WH31 lost: values stale, no longer a source
@@ -402,6 +478,9 @@ void print(const char* name, JsonDocument& doc)
 
 } // namespace
 
+// records_store.cpp is not built here: today's records of the simulated run
+bool recordsToday(Records& out) { out = hostRecords; return hostClockSynced && hostRecords.ymd != 0; }
+
 // deviceHostname() (api_info.cpp): DHCP and mDNS host name.
 void checkHostname()
 {
@@ -447,5 +526,25 @@ int main(int argc, char** argv)
     buildHistoryJson(doc, false); assert(!doc.overflowed()); print("history-24h", doc);
     buildHistoryJson(doc, true);  assert(!doc.overflowed()); print("history-7d", doc);
     buildInfoJson(doc);      assert(!doc.overflowed()); print("info", doc);
+    recordsJson(doc, hostRecords, gCfg, hostClockSynced); assert(!doc.overflowed()); print("records", doc);
+    {   // alarms (alarms.h): two ready-made rules and a wireless-sensor leak rule, frost active for 20 min
+        AlarmRule rules[ALARM_RULES];
+        AlarmState st[ALARM_RULES];
+        alarmTemplate(0, rules[0]);
+        rules[0].channels = (1 << AC_NTFY) | (1 << AC_MQTT);
+        alarmTemplate(3, rules[1]);
+        rules[2].src = AS_RF; rules[2].enabled = 1; rules[2].rfId = 0x39582376; rules[2].rfField = AF_LEAK;
+        rules[2].raise = rules[2].clear = 0.5f; rules[2].priority = 5; rules[2].repeatMin = 30;
+        rules[2].channels = 1 << AC_PUSHOVER;
+        snprintf(rules[2].name, sizeof(rules[2].name), "Cellar leak");
+        st[0].active = true; st[0].since = 1000; st[0].valid = true; st[0].value = 1.0f;
+        st[1].valid = true; st[1].value = -0.8f;
+        AlarmChannels ch;
+        snprintf(ch.ntfyTopic, sizeof(ch.ntfyTopic), "secret-topic");
+        snprintf(ch.poToken, sizeof(ch.poToken), "secret-token");
+        snprintf(ch.poUser, sizeof(ch.poUser), "secret-user");
+        alarmsJson(doc, rules, st, ch, gCfg, 2200);
+        assert(!doc.overflowed()); print("alarms", doc);
+    }
     return 0;
 }

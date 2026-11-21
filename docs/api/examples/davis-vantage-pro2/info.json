@@ -3,7 +3,14 @@
   "device": {
     "name": "Davis Garden",
     "hostname": "davis-garden",
-    "uptimeSec": 21664
+    "uptimeSec": 21664,
+    "language": "auto"
+  },
+  "system": {
+    "uptimeSec": 21664,
+    "heapFree": 150000,
+    "heapMin": 120000,
+    "heapLargest": 90000
   },
   "firmware": {
     "version": "2.0.0"
@@ -52,7 +59,13 @@
     "lorawan": true,
     "loxone": false,
     "updateCheck": false,
-    "weatherNetworks": []
+    "weatherNetworks": [],
+    "status": {
+      "lorawan": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0
+      }
+    }
   },
   "available": {
     "temp": true,
@@ -73,11 +86,18 @@
     "fan": false,
     "victron": false
   },
+  "wireless": {
+    "onlyMine": false,
+    "mine": 0,
+    "hidden": 0,
+    "hiddenInRange": 0
+  },
   "sources": {
     "tempHum": "board",
     "wind": "radio:DA000001",
     "rain": "radio:DA000001",
     "uv": "radio:DA000001",
-    "light": "radio:DA000001"
+    "light": "radio:DA000001",
+    "pressure": "board"
   }
 }

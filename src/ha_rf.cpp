@@ -1,5 +1,6 @@
 // Home Assistant discovery per wireless sensor (see ha_rf.h).
 #include "ha_rf.h"
+#include "rf_names.h"
 #include "globals.h"
 #include "units.h"
 #include "rf_sensors.h"
@@ -53,15 +54,15 @@ const EntityDef ENTITIES[HA_RF_ENTITY_COUNT] = {
     { "light",              "Illuminance",        false, U_LX,   "illuminance",     "measurement",      "lightLux",        "light",    false },
     { "solar",              "Solar Radiation",    false, U_WM2,  "irradiance",      "measurement",      "solarWm2",        nullptr,    false },
     { "soil_moisture",      "Soil Moisture",      false, U_PCT,  "moisture",        "measurement",      "soilMoisturePct", nullptr,    false },
-    // 8-bit counter of the sensor: wraps -> total_increasing sees a new cycle
-    { "lightning_count",    "Lightning Strikes",  false, U_NONE, nullptr,           "total_increasing", "lightningCount",  nullptr,    false },
+    // 8-bit counter of the sensor: wraps -> total_increasing sees a new cycle; diagnostic (strikes: lightning_today)
+    { "lightning_count",    "Lightning Counter",  false, U_NONE, nullptr,           "total_increasing", "lightningCount",  nullptr,    true  },
     { "lightning_distance", "Lightning Distance", false, U_KM,   "distance",        "measurement",      "lightningDistKm", nullptr,    false },
     { "supercap",           "Supercap Voltage",   false, U_V,    "voltage",         "measurement",      "supercapV",       nullptr,    true  },
     { "battery",            "Battery",            true,  U_NONE, "battery",         nullptr,            "batteryOk",       nullptr,    true  },
     { "rssi",               "Signal Strength",    false, U_DBM,  "signal_strength", "measurement",      "rssi",            nullptr,    true  },
     { "age",                "Last Packet Age",    false, U_S,    "duration",        "measurement",      "ageSec",          nullptr,    true  },
     // Fine Offset air quality, leak, leaf wetness, EC, pressure sensors
-    { "pressure",           "Pressure",           false, U_PRESS, "atmospheric_pressure", "measurement", "pressure",        nullptr,    false },
+    { "pressure",           "Pressure",           false, U_PRESS, "atmospheric_pressure", "measurement", "pressure",        "pressure", false },
     { "pm25",               "PM2.5",              false, U_UGM3, "pm25",            "measurement",      "pm25",            nullptr,    false },
     { "pm10",               "PM10",               false, U_UGM3, "pm10",            "measurement",      "pm10",            nullptr,    false },
     { "pm1",                "PM1",                false, U_UGM3, "pm1",             "measurement",      "pm1",             nullptr,    false },
@@ -70,10 +71,15 @@ const EntityDef ENTITIES[HA_RF_ENTITY_COUNT] = {
     { "leak",               "Leak",               true,  U_NONE, "moisture",        nullptr,            "leak",            nullptr,    false },
     { "leaf_wetness",       "Leaf Wetness",       false, U_PCT,  "moisture",        "measurement",      "leafWetnessPct",  nullptr,    false },
     { "conductivity",       "Soil Conductivity",  false, U_USCM, "conductivity",    "measurement",      "conductivityUsCm", nullptr,   false },
+    // rf_stats.h: from the counters' increments, reset at local midnight (a decrease = new cycle)
+    { "rain_today",         "Rain Today",         false, U_RAIN, "precipitation",   "total_increasing", "rainToday",       nullptr,    false },
+    { "lightning_today",    "Lightning Strikes Today", false, U_NONE, nullptr,      "total_increasing", "lightningToday",  nullptr,    false },
+    { "last_lightning",     "Last Lightning",     false, U_NONE, "timestamp",       nullptr,            "lastLightning",   nullptr,    false },
 };
 enum : int { E_TEMP, E_HUM, E_WSPD, E_WGUST, E_WDIR, E_RAIN, E_UV, E_LIGHT, E_SOLAR, E_SOIL, E_LCOUNT, E_LDIST,
-             E_SUPERCAP, E_BATTERY, E_RSSI, E_AGE, E_PRESS, E_PM25, E_PM10, E_PM1, E_PM4, E_CO2, E_LEAK, E_LEAF, E_EC };
-static_assert(E_EC + 1 == HA_RF_ENTITY_COUNT && HA_RF_ENTITY_COUNT <= 32, "one mask bit per entity");
+             E_SUPERCAP, E_BATTERY, E_RSSI, E_AGE, E_PRESS, E_PM25, E_PM10, E_PM1, E_PM4, E_CO2, E_LEAK, E_LEAF, E_EC,
+             E_RAINDAY, E_LTODAY, E_LLAST };
+static_assert(E_LLAST + 1 == HA_RF_ENTITY_COUNT && HA_RF_ENTITY_COUNT <= 32, "one mask bit per entity");
 
 const char* unitText(Unit u)
 {
@@ -114,7 +120,9 @@ void deviceName(char* out, size_t len, const RfSensorReading& r)
             default: what = "Bresser sensor"; break;
         }
     }
-    snprintf(out, len, "%s %08lX", what, (unsigned long)r.id);
+    const char* nm = rfNameOf(r.id);
+    if (nm[0]) snprintf(out, len, "%s (%s)", nm, what);   // user-defined name (rf_names.h)
+    else       snprintf(out, len, "%s %08lX", what, (unsigned long)r.id);
 }
 
 const char* manufacturer(const RfSensorReading& r)
@@ -146,7 +154,7 @@ bool publishDoc(const HaRfOut& out, const char* topic, JsonDocument& doc, bool r
 bool publishConfig(const HaRfOut& out, const RfSensorReading& r, int n)
 {
     const EntityDef& e = ENTITIES[n];
-    char topic[160], uid[96], state[112], tmpl[160], dev[48], devId[64];
+    char topic[160], uid[96], state[112], tmpl[160], dev[64], devId[64];
     configTopic(topic, sizeof(topic), out.clientId, r.id, n);
     snprintf(uid, sizeof(uid), "%s_rf_%08lX_%s", out.clientId, (unsigned long)r.id, e.key);
     snprintf(devId, sizeof(devId), "%s_rf_%08lX", out.clientId, (unsigned long)r.id);
@@ -172,10 +180,10 @@ bool publishConfig(const HaRfOut& out, const RfSensorReading& r, int n)
     node["payload_available"] = "online";
     node["payload_not_available"] = "offline";
     if (!e.diagnostic) {
-        // the sensor itself: offline once not heard for SRC_RF_FRESH_MS
+        // the sensor itself: offline once not heard for its freshness window (per family, rf_sensors.h)
         char at[96];
         snprintf(at, sizeof(at), "{{ 'online' if (value_json.ageSec | int(999999)) <= %lu else 'offline' }}",
-                 SRC_RF_FRESH_MS / 1000);
+                 rfFreshMs(r) / 1000);
         JsonObject self = avail.add<JsonObject>();
         self["topic"] = state;
         self["value_template"] = at;
@@ -255,12 +263,12 @@ uint32_t haRfEntityMask(int idx)
     if (r.hasTemp)      m |= 1UL << E_TEMP;
     if (r.hasHumidity)  m |= 1UL << E_HUM;
     if (r.hasWind)      m |= (1UL << E_WSPD) | (1UL << E_WGUST) | (1UL << E_WDIR);
-    if (r.hasRain)      m |= 1UL << E_RAIN;
+    if (r.hasRain)      m |= (1UL << E_RAIN) | (1UL << E_RAINDAY);
     if (r.hasUv)        m |= 1UL << E_UV;
     if (r.hasLight)     m |= 1UL << E_LIGHT;
     if (r.hasSolar)     m |= 1UL << E_SOLAR;
     if (r.hasMoisture)  m |= 1UL << E_SOIL;
-    if (r.hasLightning) m |= (1UL << E_LCOUNT) | (1UL << E_LDIST);
+    if (r.hasLightning) m |= (1UL << E_LCOUNT) | (1UL << E_LDIST) | (1UL << E_LTODAY) | (1UL << E_LLAST);
     if (r.hasSupercap)  m |= 1UL << E_SUPERCAP;
     if (r.hasPressure)  m |= 1UL << E_PRESS;
     if (r.hasPm25)      m |= 1UL << E_PM25;
@@ -353,3 +361,5 @@ int haRfPublishStates(const HaRfOut& out)
     }
     return sent;
 }
+
+void haRfDeviceNameForTest(char* out, size_t len, const RfSensorReading& r) { deviceName(out, len, r); }

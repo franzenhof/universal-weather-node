@@ -3,6 +3,7 @@
 #include "wifi_mqtt.h"
 #include "wx_upload.h"
 #include "serial_log.h"
+#include "rf_stats.h"
 
 #include <Arduino.h>
 #include <esp_sntp.h>
@@ -95,4 +96,20 @@ bool localTimeNow(struct tm& out)
     std::lock_guard<std::mutex> g(tzLock);
     localtime_r(&now, &out);
     return true;
+}
+
+// Clock of the per-sensor rain / lightning statistics (rf_stats.h): UTC
+// seconds and the local date once synced, else the uptime and no date.
+bool rfStatsClock(uint32_t& t, uint32_t& ymd)
+{
+    int64_t e;
+    struct tm lt;
+    if (epochNow(e) && localTimeNow(lt)) {
+        t = (uint32_t)e;
+        ymd = (uint32_t)((lt.tm_year + 1900) * 10000 + (lt.tm_mon + 1) * 100 + lt.tm_mday);
+        return true;
+    }
+    t = millis() / 1000;
+    ymd = 0;
+    return false;
 }

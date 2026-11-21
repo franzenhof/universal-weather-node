@@ -37,6 +37,7 @@ HELP_FILES = [
     "docs/api.md",
     "docs/mqtt-home-assistant.md",
     "docs/weather-networks.md",
+    "docs/alarms.md",
     "docs/loxone.md",
     "docs/values.md",
     "docs/settings.md",

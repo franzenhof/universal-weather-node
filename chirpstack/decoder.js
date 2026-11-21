@@ -313,9 +313,11 @@ function parseLPP(bytes) {
 }
 
 // Value sources (firmware sources.h): 2 bits per group, 0 none, 1 board,
-// 2 wireless sensor; bit 15 = a wireless sensor in use reports a low battery.
+// 2 wireless sensor (pressure: bits 10-11, since the pressure source was
+// added - older firmware leaves them 0 = "none"); bit 15 = a wireless
+// sensor in use reports a low battery.
 function decodeSources(result, v) {
-    var names = ["temp_humidity", "wind", "rain", "uv", "light"];
+    var names = ["temp_humidity", "wind", "rain", "uv", "light", "pressure"];
     var kinds = ["none", "board", "wireless", "unknown"];
     result.sources = {};
     for (var g = 0; g < names.length; g++) result.sources[names[g]] = kinds[(v >> (2 * g)) & 3];

@@ -11,8 +11,10 @@ SOIC_CANDIDATES = {
     "U4": ("C190783", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", 180),
 }
 SOT6_CANDIDATES = {
-    "U2": ("C12401", "Package_TO_SOT_SMD:SOT-23-6", 90),
-    "U3": ("C12401", "Package_TO_SOT_SMD:SOT-23-6", 180),
+    # UMW SN74LVC2G14DBVR (C5375976) replaces the preview-matched TI article C12401 (33 in stock,
+    # 2026-11-21); same package and pinout, the +270 rule is kept but needs a new preview check
+    "U2": ("C5375976", "Package_TO_SOT_SMD:SOT-23-6", 90),
+    "U3": ("C5375976", "Package_TO_SOT_SMD:SOT-23-6", 180),
 }
 SC70_CANDIDATES = {
     "U5": ("C350557", "Package_TO_SOT_SMD:SOT-353_SC-70-5", 270),
@@ -61,8 +63,11 @@ def build(raw_rows, bom_rows):
             if angle % 360 != raw_angle:
                 raise ValueError(f"{ref}: expected raw KiCad angle {raw_angle}; "
                                  "input already corrected or board changed")
-            offset = 270
-            status = "PREVIEW_MATCHED_DFN" if ref == "Q3" else "PREVIEW_MATCHED_IC"
+            # UMW C5375976 (SOT-23-6) sits 90 degrees further clockwise in JLCPCB's model than the
+            # former TI article: 2026-11-21 preview showed U2/U3 turned by 90 degrees with +270
+            offset = 180 if ref in SOT6_CANDIDATES else 270
+            status = ("PREVIEW_MATCHED_DFN" if ref == "Q3" else
+                      "PREVIEW_MATCHED_IC")   # U2/U3 (UMW): 2026-11-21 08:51 UTC preview
             check = {"U1": "Pin 1 upper left", "U4": "Pin 1 lower right",
                      "U2": "Pin 1 lower left", "U3": "Pin 1 lower right",
                      "U5": "Pin 1 upper right; three leads top, two bottom",
@@ -97,6 +102,15 @@ def build(raw_rows, bom_rows):
                      "D24", "D26", "D31"):
             status = "PREVIEW_MATCHED_POLARITY"
             check = "Cathode band matches PCB pad 1; retain article and verify final order"
+        elif ref in ("U8", "U9"):
+            # Heltec V4 5 V ideal diodes LM66100DCKR (SC-70-6): not yet seen in a JLCPCB preview
+            if (part["LCSC Part #"], part["Footprint"]) != ("C2869734", "Package_TO_SOT_SMD:SOT-363_SC-70-6"):
+                raise ValueError(f"{ref}: ideal-diode part/footprint changed; reassess orientation")
+            # 2026-11-21 preview without offset: leads across the pads (90 degrees off), pin 1 one
+            # corner off -> +270 like U5's SC-70-5; confirm in the next preview
+            offset = 270
+            status = "PREVIEW_MATCHED_SC70_6"
+            check = "Pin 1 (VIN) at the PCB pin-1 mark; +270 confirmed in the 2026-11-21 08:51 UTC preview"
         elif ref == "Q7":
             if (part["LCSC Part #"], angle % 360) != ("C130104", 90):
                 raise ValueError(f"{ref}: TO-252 part/angle changed; reassess centroid shift")

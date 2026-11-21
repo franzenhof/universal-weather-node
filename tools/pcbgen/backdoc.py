@@ -14,7 +14,7 @@ BLOCKS = (
      "JP8 fitted: VIN buck -> 5V rail\n"
      "JP8: REMOVE BEFORE USB\n"
      "USB only: remove shunt; disconnect VIN\n"
-     "No external 5V terminal input.\n"
+     "V4: 5V pin = USB VBUS; ideal diodes U8/U9\n"
      "No auto-mux / no reverse-current isolation.\n"
      "Power OFF + discharge before rewiring.\n"
      "USB does not power VIN / heater loads."),
@@ -26,8 +26,6 @@ BLOCKS = (
      "Fan: high-side PWM (GPIO39).\n"
      "JP9 1-2: 5V, <=0.5A (default)\n"
      "JP9 2-3: protected VIN, <=1A\n"
-     "Use a fan rated for selected voltage.\n"
-     "Combined 5V loads share source budget.\n"
      "JP12 fit: OC tacho; off: ext. pull-up."),
     ("UV", "UV / J17 / JP10 - GPIO3 ADC1\n"
      "J17: 1 GND | 2 SIGNAL | 3 3V3 | 4 5V\n"
@@ -36,8 +34,7 @@ BLOCKS = (
      "JP10 2-3: input 0-5V; scale 1.66534\n"
      "Select range BEFORE applying signal.\n"
      "5V range: 5V input -> 3.0024V ADC.\n"
-     "Sensor volts != UVI: calibrate sensor.\n"
-     "TVS + 10k + rail clamps + RC filter."),
+     "Sensor volts != UVI: calibrate sensor."),
     ("AUX", "AUX / J11 - ANALOG + PULSE\n"
      "Pins: 1 3V3 | 2 AIN | 3 PULSE | 4 GND\n"
      "AIN GPIO4 ADC1; R24 series = 10k.\n"
@@ -46,7 +43,6 @@ BLOCKS = (
      "Fit R25 15k for 0-5V; scale 1.66667\n"
      "(downlink x1000 = 1667; 5V -> 3V ADC).\n"
      "PULSE GPIO48: reed / open collector;\n"
-     "pull-up + RC + inverting Schmitt.\n"
      "Never connect battery / 12V to AUX."),
     ("BUSES", "SENSOR BUSES - 3.3V LOGIC ONLY\n"
      "J9 I2C: 1 3V3 | 2 SDA | 3 SCL | 4 GND\n"
@@ -54,56 +50,50 @@ BLOCKS = (
      "JP1 SDA / JP11 SCL: fit for extra 4k7\n"
      "pull-ups; check total bus pull-up load.\n"
      "J10 1-Wire: 1 GND | 2 3V3 | 3 DQ\n"
-     "DS18B20 DQ GPIO5; powered 3-wire bus.\n"
+     "DQ V3 GPIO5 / V4 GPIO43; 3-wire bus.\n"
      "3V3 sensors: own LDO U7, F3 PTC 0.25A;\n"
-     "1-Wire branch F4 PTC 0.10A nominal.\n"
-     "PTC ratings derate with temperature."),
+     "1-Wire branch F4 PTC 0.10A nominal."),
     ("DAVIS", "DAVIS WIND / RAIN\n"
      "J5 WIND: 1 GND | 2 SPD | 3 DIR | 4 3V3\n"
      "J4 RJ11: 2 3V3 | 3 DIR | 4 GND | 5 SPD\n"
-     "RJ11 contacts 1/6 unused; use pin nos.\n"
      "J7 RAIN: 1 GND | 2 RAIN\n"
      "J6 RJ11: 3 RAIN | 4 GND; 1/2/5/6 NC\n"
      "RJ11 + screw terminal are parallel.\n"
      "JP2 OPEN: Davis potentiometer vane.\n"
      "JP2 FITTED: extra 4k7 vane pull-up.\n"
-     "Speed GPIO6 / rain GPIO7 / dir GPIO2."),
+     "V3 GPIO: speed 6 / rain 7 / dir 2\n"
+     "V4 GPIO: speed 44 / rain 16 / dir 6"),
     ("VIC", "ISOLATED VE.DIRECT / J14 + J15\n"
      "Both: 1 ISO GND | 2 TX | 3 RX | 4 V+\n"
-     "TX = node -> Victron RX (GPIO34)\n"
+     "TX = node -> Victron RX (V3 34/V4 45)\n"
      "RX = Victron TX -> node (GPIO33)\n"
      "V+ from Victron powers isolated side.\n"
-     "Use original cable / verify pin numbers.\n"
      "Do NOT bridge ISO GND to board GND.\n"
      "No RS232 +/-voltage or RS485 interface."),
     ("EXP", "EXPANSION / TEST POINTS\n"
      "J16 DNP: 1 GND | 2 3V3 | 3 SDA\n"
-     "4 SCL | 5 GPIO19 | 6 5V\n"
-     "GPIO19 also controls vane supply:\n"
-     "LOW = vane ON; not a free output.\n"
+     "4 SCL | 5 VANE | 6 5V\n"
+     "VANE = V3 GPIO19 / V4 GPIO34; vane\n"
+     "supply LOW = ON; not a free output.\n"
      "J16 signals: 3.3V, not field protected.\n"
      "TP1/TP5 GND | TP2 protected VIN\n"
      "TP3 5V | TP4 3V3 | TP6 3V3H | TP7 OW\n"
      "ADC probe pads: C17 AUX / C27 UV."),
     ("START", "FIRST POWER-UP / HARDWARE\n"
-     "Heltec WiFi LoRa 32 V3/V3.1/V3.2;\n"
-     "USB end at USB-C mark; align sockets.\n"
+     "Heltec V3: J1/J2 OR V4: J19/J20/J21;\n"
+     "fit ONE socket set; USB-C end = pin 1.\n"
      "Remove module; current-limit supply.\n"
      "Select JP8; verify TP3=5V, no shorts.\n"
      "Power OFF; fit module; check TP4=3.3V.\n"
-     "GPIO20 ID about 1.65V -> PCB v2.0.\n"
-     "Enable/configure optional I/O in FW.\n"
+     "ID ~1.65V (V3 GPIO20/V4 GPIO15) = v2.0\n"
      "No powered sensor signals with MCU OFF."),
     ("LIMITS", "PROTECTION / MECHANICAL LIMITS\n"
      "VIN: Q7 MOSFET reverse protection.\n"
      "USB current shares Heltec power path.\n"
-     "NOT a lightning / surge approval.\n"
      "D1 MUST be bidirectional SMBJ30CA.\n"
      "F7 6.3A main / F5 4A heater fuse.\n"
      "Fuse rating is NOT allowed load current!\n"
-     "Thermal test; NO continuous 2A guarantee.\n"
-     "100x100mm; M3 centres 92x92mm.\n"
-     "Washers/standoffs <=7mm OD; mind underside."),
+     "Washers <=7mm OD; mind underside."),
 )
 
 def documentation_blocks():
@@ -150,7 +140,9 @@ def apply(board):
         if drawing.GetLayer() != pcbnew.B_SilkS or not hasattr(drawing, "GetText"):
             continue
         text = drawing.GetText()
-        if text in replaced_texts or text.startswith(("POWER / JP8 - ONE SOURCE ONLY\n",
+        heads = {t.split("\n")[0] + "\n" for _, t in documentation_blocks()} | {
+            "DAVIS WIND / RAIN\n", "EXPANSION / TEST POINTS\n", "FIRST POWER-UP / HARDWARE\n"}
+        if text in replaced_texts or text.startswith(tuple(heads)) or text.startswith(("POWER / JP8 - ONE SOURCE ONLY\n",
                                                      "PROTECTION / MECHANICAL LIMITS\n",
                                                      "HEATER / FAN - CHECK LOAD RATINGS\n")):
             retained.append(drawing)
@@ -169,6 +161,7 @@ def apply(board):
         return not (a[2] + .25 <= b[0] or b[2] + .25 <= a[0] or a[3] + .25 <= b[1] or b[3] + .25 <= a[1])
     jobs = [("TITLE", TITLE, .8)] + [
         (name, text, .8) for name, text in sorted(documentation_blocks(), key=lambda block: -len(block[1].splitlines()))]
+    prepared = []
     for name, text, size in jobs:
         obj = pcbnew.PCB_TEXT(board)
         obj.SetText(text)
@@ -177,30 +170,41 @@ def apply(board):
         obj.SetTextSize(pcbnew.VECTOR2I(mm(size), mm(size)))
         obj.SetTextThickness(mm(.13 if size == .8 else .15))
         obj.SetPosition(pcbnew.VECTOR2I(mm(100), mm(100)))
-        box = bbox(obj)
+        prepared.append((name, text, obj, bbox(obj)))
+    # greedy packing; reading from the back starts at the upper right in board coordinates.
+    # Further strategies only if the first one leaves a block without space.
+    strategies = (lambda x, y: y * 1000 - x, lambda x, y: -x * 1000 + y, lambda x, y: y * 1000 + x,
+                  lambda x, y: x * 1000 + y)
+    for strategy in strategies:
+        placed, obst = [], list(obstacles)
+        for name, text, obj, box in prepared:
+            width, height = box[2] - box[0], box[3] - box[1]
+            best = None
+            for yi in range(102, 268):
+                y = yi / 2
+                for xi in range(104, 295):
+                    x = xi / 2
+                    rect = (x, y, x + width, y + height)
+                    if rect[2] > 148.8 or rect[3] > 133.5 or any(hit(rect, o) for o in obst):
+                        continue
+                    score = strategy(x, y)
+                    if best is None or score < best[0]:
+                        best = score, rect
+            if best is None:
+                print(f"no back-silkscreen space for {name}: {width:.2f} x {height:.2f} mm, next strategy")
+                break
+            placed.append((name, text, obj, box, best[1])); obst.append(best[1])
+        if len(placed) == len(prepared): break
+    else:
+        raise RuntimeError("No back-silkscreen layout fits every documentation block")
+    for name, text, obj, box, rect in placed:
         width, height = box[2] - box[0], box[3] - box[1]
-        best = None
-        for yi in range(102, 268):
-            y = yi / 2
-            for xi in range(104, 295):
-                x = xi / 2
-                rect = (x, y, x + width, y + height)
-                if rect[2] > 148.8 or rect[3] > 133.5 or any(hit(rect, o) for o in obstacles):
-                    continue
-                # Reading from the back: start at upper right in board coordinates.
-                score = y * 1000 - x
-                if best is None or score < best[0]:
-                    best = score, rect
-        if best is None:
-            raise RuntimeError(f"No back-silkscreen space for {name}: {width:.2f} x {height:.2f} mm")
-        _, rect = best
         offset_x = (box[0] + box[2]) / 2 - 100
         offset_y = (box[1] + box[3]) / 2 - 100
         obj.SetPosition(pcbnew.VECTOR2I(mm((rect[0] + rect[2]) / 2 - offset_x),
                                        mm((rect[1] + rect[3]) / 2 - offset_y)))
         board.Add(obj)
         retained.append(obj)
-        obstacles.append(rect)
         print(f"Back documentation {name}: {len(text.splitlines())} lines, {width:.1f} x {height:.1f} mm at {rect}")
     return retained
 

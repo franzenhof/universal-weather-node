@@ -16,7 +16,11 @@ circuit or layout change (or edit the board directly in KiCad for small changes)
 | `brand.py`, `fixrefs.py` | silkscreen: terminal titles, notes, reference texts |
 | `backdoc.py` | standalone back-side operating reference, 0.8 mm text, preserving pin labels |
 | `add_dcjack.py` | one-off in-place edit of the routed board: adds the J18 DC jack, moves F7/D1/R45 and re-routes only that corner (a full rebuild places them via `layout_w1.FIXED`) |
-| `checknet.py`, `domaincheck.py`, `drc.py` | checks: netlist vs. design, isolation, DRC summary |
+| `dual_socket.py`, `dual_socket.sh` | in-place edit of the routed board: Heltec V4 socket set J19/J20 + P4 socket J21, ideal diodes U8/U9 (LM66100) + C39, R65, parts and moat moved out of the way, local rip-up, re-route, silkscreen (see below) |
+| `route_grid.py` | small two-layer grid router (A*, 0.025 mm grid, 45° segments) for the connections a local edit opens; needs numpy, scipy, pillow |
+| `refplace.py` | silkscreen readability check / fix: reference texts over part bodies (F.Fab extent, +0.3 mm for headers and sockets), pads, own outline, other texts, holes or the edge are moved to the nearest free spot (`PREFERRED` spots first; `FORCE` also avoids via rings); JP2's pin labels move left of the header; board texts are only reported. Run by `dual_socket.sh` |
+| `heltec_sockets.kicad_dru` | custom DRC rule: the alternative V3 / V4 socket courtyards may overlap |
+| `checknet.py`, `domaincheck.py`, `drc.py` | checks: netlist vs. design, Heltec V3/V4 pin map (every function on its V3 and V4 GPIO, V4 RF/USB pins open), isolation, DRC summary |
 | `build2.sh` | full flow: schematic → ERC → netlist → placement → parallel Freerouting attempts → best board |
 | `export.sh` | Gerber/drill ZIP, JLCPCB BOM/CPL, schematic PDF, renders, final DRC |
 | `jlcpcb_cpl.py` | Corrected JLCPCB CPL from temporary raw positions, with article/angle guards |
@@ -258,6 +262,31 @@ land-pattern/orientation have not been physically validated. The protection desi
 48.4 V max-clamp SMBJ30CA TVS with 60 V Q7 and 65 V LMR36520 ratings; fuses and PPTCs are
 selected with ratings above that clamp, but fuse/PPTC derating under combined load and
 ambient temperature still requires prototype validation.
+
+## Heltec V3 / V4 double socket
+
+v2.0 takes a Heltec V3 (J1/J2, unchanged) or V4 (J19/J20 2.54 mm towards J1, plus the 1×2
+socket J21 for the V4's P4 pins GPIO15/16 at the position of Heltec's V4 STEP model).
+The other shift direction would put V4 pin 1 2.97 mm from the H1 screw and over F3/C9/D5/J16.
+The change was made on the finished board, not by a full rebuild (which would lose the hand
+touch-ups listed above):
+
+```bash
+NPY=/path/to/python-with-numpy-scipy-pillow bash tools/pcbgen/dual_socket.sh tools/pcbgen/proj
+```
+
+`dual_socket.py prepare` applies the regenerated netlist to every pad, adds the
+new footprints, moves C36/C37/R1/JP8/JP12/J14 (+ labels), lowers the VE.Direct moat and
+GND_VICTRON pour by 1.65 mm, renames GPIO19 to `VANE_EN`, rips up only copper that collides
+with new/moved pads, the new moat or the fixed `PRE` routes (U8/U9 5 V paths and the
+3V3_LDO / 3V3_HELTEC runs between socket pins, 0.3 mm with 0.27 mm clearance), and stops each
+rip-up at the next pad, via or junction. `geometry` + `route_grid.py` + `apply` route the
+DRC's open connections (three passes), `cleanup` removes dangling stubs, `finish.py fix`
+stitches ground islands, `silk` adds the V3/V4 marks, `backdoc.py` re-places the back
+reference. Freerouting is not used here: on the finished board it re-fans every SMD pad.
+Run it once on the original board; it refuses a board that already has J19.
+
+`layout_w1.py` contains the new positions, so a full rebuild places them too.
 
 ## 3D models
 

@@ -21,7 +21,8 @@ const root = path.join(__dirname, '..');
 const examplesDir = path.join(root, 'docs/api/examples');
 const schemas = new SchemaSet(path.join(root, 'docs/api/schemas'));
 const FIXTURES = ['bresser-7in1-bme280', 'ecowitt-ws90-wh31-wh51-wh57', 'pcb-v2-full', 'pcb-v2-imperial', 'heltec-v4-wireless', 'davis-vantage-pro2'];
-const DOCS = {data: 'data.schema.json', 'history-24h': 'history.schema.json', 'history-7d': 'history.schema.json', info: 'info.schema.json'};
+const DOCS = {data: 'data.schema.json', 'history-24h': 'history.schema.json', 'history-7d': 'history.schema.json', info: 'info.schema.json',
+  records: 'records.schema.json', alarms: 'alarms.schema.json'};
 const UPDATE = process.env.UPDATE_API_EXAMPLES === '1';
 const REGEN = 'UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js';
 
@@ -33,8 +34,9 @@ function build() {
       '-std=c++11', '-Wall', '-Wextra', '-Werror', '-ffp-contract=off', '-DFIRMWARE_VERSION="2.0.0"',
       '-I', 'test/host', '-I', 'src', '-I', 'lib/TfaWeatherSensorReceiver/src', '-I', 'lib/FineOffsetSensorReceiver/src',
       '-I', '.pio/libdeps/heltec_wifi_lora_32_V3/ArduinoJson/src',
-      'src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp',
+      'src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp',
       'src/derived.cpp', 'src/derived_now.cpp', 'src/units.cpp', 'src/json_payload.cpp', 'src/api_info.cpp',
+      'src/calibration.cpp', 'src/records.cpp', 'src/out_status.cpp', 'src/astro.cpp', 'src/astro_store.cpp', 'src/alarms.cpp',
       'test/firmware_api.cpp', '-o', exe,
     ], {cwd: root, stdio: 'pipe'});
   } catch (error) {

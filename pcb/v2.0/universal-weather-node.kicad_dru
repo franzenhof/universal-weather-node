@@ -1,0 +1,7 @@
+(version 1)
+# Heltec V3 (J1/J2) and V4 (J19/J20/J21) are alternative socket sets: only one set is
+# fitted, so their courtyards may overlap (rows 2.54 mm apart). All other courtyards are checked.
+(rule "alternative Heltec V3 / V4 sockets"
+  (constraint courtyard_clearance)
+  (condition "(A.Reference == 'J1' || A.Reference == 'J2' || A.Reference == 'J19' || A.Reference == 'J20' || A.Reference == 'J21') && (B.Reference == 'J1' || B.Reference == 'J2' || B.Reference == 'J19' || B.Reference == 'J20' || B.Reference == 'J21')")
+  (severity ignore))

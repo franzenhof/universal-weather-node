@@ -3,7 +3,14 @@
   "device": {
     "name": "Balcony V4",
     "hostname": "balcony-v4",
-    "uptimeSec": 2464
+    "uptimeSec": 2464,
+    "language": "auto"
+  },
+  "system": {
+    "uptimeSec": 2464,
+    "heapFree": 150000,
+    "heapMin": 120000,
+    "heapLargest": 90000
   },
   "firmware": {
     "version": "2.0.0"
@@ -53,7 +60,8 @@
     "lorawan": false,
     "loxone": false,
     "updateCheck": false,
-    "weatherNetworks": []
+    "weatherNetworks": [],
+    "status": {}
   },
   "available": {
     "temp": true,
@@ -74,11 +82,18 @@
     "fan": false,
     "victron": false
   },
+  "wireless": {
+    "onlyMine": false,
+    "mine": 0,
+    "hidden": 0,
+    "hiddenInRange": 0
+  },
   "sources": {
     "tempHum": "board",
     "wind": "radio:0000A1F3",
     "rain": "radio:0000A1F3",
     "uv": "none",
-    "light": "none"
+    "light": "none",
+    "pressure": "board"
   }
 }

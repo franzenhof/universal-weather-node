@@ -132,10 +132,12 @@ static int32_t pcntPulses(pcnt_unit_t unit, int idx, int16_t& last, uint32_t& la
 
 PinSet getPins(int pcbVersion)
 {
-    // PCB v2.0 keeps the Rev 1.3 pins for wind, rain and 1-Wire
-    if (pcbVersion >= PCB_REV_1_3) return { .windSpeed = 6, .rain = 7, .oneWire = 5 };
-    return { .windSpeed = 3, .rain = 4, .oneWire = 5 };
+    // V3: Rev 1.3 / v2.0 wind 6, rain 7, 1-Wire 5 (Rev 1.2: 3 / 4 / 5); V4 on PCB v2.0: 44 / 16 / 43
+    const BoardPins b = boardPins(gBoard.kind, gBoard.pcbOnV4, pcbVersion);
+    return { .windSpeed = b.windSpeed, .rain = b.rain, .oneWire = b.oneWire };
 }
+
+int windDirPin() { return boardPins(gBoard.kind, gBoard.pcbOnV4, gCfg.pcbVersion).windDir; }
 
 void configureWindPcnt()
 {
@@ -228,8 +230,8 @@ void sensorsEarlyInit()
     adcAttachPin(PIN_ADC_VOLTBATTERY);
     // GPIO2 is the RF front end's chip enable on a Heltec V4 (heltec_board.h)
     if (boardPcbAllowed()) {
-        pinMode(PIN_ADC_WINDDIRECTION, INPUT);
-        adcAttachPin(PIN_ADC_WINDDIRECTION);
+        pinMode(windDirPin(), INPUT);
+        adcAttachPin(windDirPin());
     }
     analogReadResolution(12);
 }
@@ -319,7 +321,7 @@ float readBatteryVoltage()
 uint16_t readWindDirection()
 {
     if (!boardPcbAllowed()) return 0;   // Heltec V4: GPIO2 = FEM enable, never an ADC
-    int raw = adcAverage(PIN_ADC_WINDDIRECTION);
+    int raw = adcAverage(windDirPin());
     int rawDeg;
 
     if (gCfg.windDirSensorType == 1 && gCfg.windDirCalCount > 0) {
