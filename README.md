@@ -56,7 +56,7 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 </p>
 <!-- /help:skip -->
 
-**Current status:** [2.0.0-rc.7](firmware/universal-weather-node-2.0.0-rc.7.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.7-factory.bin) for the first installation) is the release candidate for 2.0.0.
+**Current status:** [2.0.0-rc.8](firmware/universal-weather-node-2.0.0-rc.8.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.8-factory.bin) for the first installation) is the release candidate for 2.0.0.
 
 ## Documentation
 

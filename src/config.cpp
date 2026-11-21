@@ -104,7 +104,7 @@ void rangeF(volatile float& v, float def, float lo, float hi)
 
 void sanitizeConfig(Config& c)
 {
-    // The defaults from config.h; on the heap, Config is ~3.7 KB.
+    // The defaults from config.h; on the heap, Config is ~7 KB.
     std::unique_ptr<const Config> defaults(new Config());
     const Config& d = *defaults;
     choice(c.pcbVersion, d.pcbVersion, PCB_REV_1_2, PCB_REV_1_3, PCB_REV_2_0);
@@ -208,10 +208,9 @@ void sanitizeConfig(Config& c)
 
 } // namespace
 
-Config loadConfig()
+void loadConfigInto(Config& c)
 {
     Preferences prefs;
-    Config c;
     // Own dedicated NVS-formatted partition (see partitions.csv) rather than
     // the stock "nvs" partition — keeps our config fully isolated from
     // WiFiManager's/ESP-IDF's own WiFi credential storage and from any other
@@ -221,7 +220,7 @@ Config loadConfig()
     // begin() returns false. Return the all-defaults Config (devEui == 0),
     // which causes setup() to open the Wi-Fi configuration portal.
     if (!prefs.begin("config", true, "cfgdata")) {
-        return c;
+        return;
     }
     // A config stored by any earlier firmware always has "deveui" (saveConfig()
     // writes every key; a factory reset clears them all). For such a node, a
@@ -398,6 +397,12 @@ Config loadConfig()
 
     prefs.end();
     sanitizeConfig(c);
+}
+
+Config loadConfig()
+{
+    Config c;
+    loadConfigInto(c);
     return c;
 }
 

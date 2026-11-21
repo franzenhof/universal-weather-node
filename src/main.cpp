@@ -248,7 +248,7 @@ static void openPortalSaveAndRestart(bool showStartScreen = true)
     // outcome, there's no need to re-subscribe afterward. Harmless no-op if
     // this is the first-boot call, where the task was never subscribed yet.
     esp_task_wdt_delete(nullptr);
-    gCfg = runConfigPortal(gCfg);
+    runConfigPortal(gCfg);
     gCfg.provisioned = 1;
     saveConfig(gCfg);
     display.clear();
@@ -845,7 +845,7 @@ void setup()
     cfgdataPrepare();
 
     // Load config and set CPU frequency
-    gCfg = loadConfig();
+    loadConfigInto(gCfg);   // straight into gCfg (still the defaults here): no 7-KB temporary on the stack
     setCpuFrequencyMhz(gCfg.cpuFreqMhz);
 
     // Board in effect (setting or detection) and, on a V4, its RF front end -

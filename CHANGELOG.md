@@ -4,6 +4,12 @@ Release notes of the Universal Weather Node firmware, newest first. Binaries are
 
 [← back to README](README.md)
 
+## 2.0.0-rc.8
+
+Firmware: [`universal-weather-node-2.0.0-rc.8.bin`](firmware/universal-weather-node-2.0.0-rc.8.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.8-factory.bin`](firmware/universal-weather-node-2.0.0-rc.8-factory.bin) (first installation, USB at `0x0`). **Fix release — needed for every new installation** (rc.5 to rc.7 could not start on a new node); running nodes: update when convenient, nothing to check afterwards.
+
+- **New nodes did not start (restart loop, no `WeatherNode` Wi-Fi) — since 2.0.0-rc.5:** the settings structure has grown to about 7 KB (alarms, custom uploads, sensor names, MQTT certificate), and the setup portal held four copies of it on the 24-KB loop-task stack — on the first start of a new node (and with the PRG button) it overflowed (`Stack overflow in task loopTask`). The portal now writes the settings in place and keeps its snapshot on the heap; saving the wind-direction calibration from the web settings (8-KB web task) no longer puts a copy on the stack either. The log shows the free stack when the portal starts and saves. Thanks to Dirk for the log. (The rc.7 fix for a settings area left by another firmware stays — it was not the cause here.)
+
 ## 2.0.0-rc.7
 
 Firmware: [`universal-weather-node-2.0.0-rc.7.bin`](firmware/universal-weather-node-2.0.0-rc.7.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.7-factory.bin`](firmware/universal-weather-node-2.0.0-rc.7-factory.bin) (first installation, USB at `0x0`). A small fix release on top of rc.6; nothing to check after the update.

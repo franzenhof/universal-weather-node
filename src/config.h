@@ -297,6 +297,9 @@ struct ConfigLegacyDefaults {
 inline int rfOnlyMineDefault(const char* rfIds) { return rfIds && rfIds[0] ? 1 : 0; }
 
 Config loadConfig();
+// The same into an existing Config that holds the defaults (a fresh Config,
+// e.g. on the heap): Config is ~7 KB, too big for the 8 KB web task stack.
+void loadConfigInto(Config& c);
 void   saveConfig(const Config& c);
 // Writes only the "rfproto" key (wireless auto search locked: one NVS write).
 void   saveRfProto(int proto);

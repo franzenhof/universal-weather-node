@@ -10,6 +10,7 @@
 #include "decoder_js.h"
 #include "readme_md.h"
 #include <new>
+#include <memory>
 #include "net_check.h"
 #include "gz_send.h"
 #include "help_page.h"
@@ -129,7 +130,14 @@ bool portalHandleCalibrateSave(WebServer& srv)
         srv.send(400, "text/plain", "Invalid JSON");
         return false;
     }
-    Config c = loadConfig();
+    // on the heap: Config is ~7 KB, this also runs on the 8 KB web task (web_api.cpp)
+    std::unique_ptr<Config> owner(new (std::nothrow) Config());
+    if (!owner) {
+        srv.send(503, "text/plain", "low memory, try again");
+        return false;
+    }
+    Config& c = *owner;
+    loadConfigInto(c);
     int n = 0;
     for (JsonObject p : doc["positions"].as<JsonArray>()) {
         if (n >= 16) break;
@@ -155,8 +163,14 @@ bool portalHandleCalibrateSave(WebServer& srv)
     return true;
 }
 
-Config runConfigPortal(const Config& cur)
+void runConfigPortal(Config& cfg)
 {
+    // Config is ~7 KB: no copy of it on this (loop task) stack - the portal
+    // path (setup() -> openPortalSaveAndRestart() -> here -> WiFiManager ->
+    // the save callback) once held four and overflowed the 24 KB stack on
+    // the first start of a new node. The result goes straight into cfg (gCfg),
+    // the snapshot lives on the heap for the portal session only.
+    const Config& cur = cfg;
     // Portal language: the setting; "Auto" = English here (the parameter
     // labels are fixed before any browser request).
     i18nSet(cur.uiLang > 0 && cur.uiLang <= LANG_COUNT ? (uint8_t)(cur.uiLang - 1) : (uint8_t)LANG_EN);
@@ -166,7 +180,13 @@ Config runConfigPortal(const Config& cur)
     // setSaveParamsCallback below reassigns — buildConfig() uses this
     // snapshot as its baseline instead, so a second param-only save in the
     // same session doesn't build on top of the first save's result.
-    const Config curSnapshot = cur;
+    std::unique_ptr<Config> snapshotOwner(new (std::nothrow) Config(cur));
+    if (!snapshotOwner) {
+        dbgSerial.println("Portal: not enough memory to start - restarting.");
+        delay(1000);
+        ESP.restart();
+    }
+    const Config& curSnapshot = *snapshotOwner;
 
     // Set by /calibrate/save below. The calibration is persisted (and copied
     // into gCfg) right there, but buildConfig() starts from curSnapshot and
@@ -571,13 +591,13 @@ Config runConfigPortal(const Config& cur)
     // immediate-persist save below and the function's own return value, so
     // there's exactly one place that knows how to translate the portal's
     // form fields into a Config.
-    auto buildConfig = [&]() -> Config {
+    auto buildConfig = [&](Config& c) {
         // curSnapshot, not cur: setSaveParamsCallback below assigns into
         // gCfg, which cur (a reference, since openPortalSaveAndRestart()
         // calls this as runConfigPortal(gCfg)) aliases — using cur directly
         // here would mean a second param-only save this session starts from
         // the first save's result instead of the original pre-portal state.
-        Config c = curSnapshot;
+        c = curSnapshot;
         if (strlen(p_dev.getValue())  == 16) c.devEui  = hexToUint64(p_dev.getValue());
         if (strlen(p_join.getValue()) == 16) c.joinEui = hexToUint64(p_join.getValue());
         if (strlen(p_key.getValue())  == 32) hexToBytes(p_key.getValue(), c.appKey, 16);
@@ -761,7 +781,6 @@ Config runConfigPortal(const Config& cur)
             if (loxPrefixValid(p_loxprefix.getValue())) strlcpy(c.loxPrefix, p_loxprefix.getValue(), sizeof(c.loxPrefix));
         }
 
-        return c;
     };
 
     // The CA-cert field is a raw <textarea>, not a normal id-based
@@ -783,7 +802,9 @@ Config runConfigPortal(const Config& cur)
         // otherwise see WiFiManager's own "Saved" confirmation, consider
         // themselves done, and never actually have anything written to NVS
         // at all until/unless they also submit the WiFi page.
-        gCfg = buildConfig();
+        buildConfig(gCfg);
+        dbgSerial.printf("Portal: settings saved (loop task stack: %u bytes never used).\n",
+                         (unsigned)uxTaskGetStackHighWaterMark(nullptr));
         gCfg.provisioned = 1;
         saveConfig(gCfg);
 
@@ -909,12 +930,13 @@ Config runConfigPortal(const Config& cur)
     deviceHostname(host, sizeof(host));
     WiFi.setHostname(host);
 
+    dbgSerial.printf("Portal: starting (loop task stack: %u bytes never used so far).\n",
+                     (unsigned)uxTaskGetStackHighWaterMark(nullptr));
     wm.startConfigPortal("WeatherNode");
 
     if (otaHandle) { vTaskDelete(otaHandle); ArduinoOTA.end(); }
 
-    Config result = buildConfig();
+    buildConfig(cfg);
     free(b_cacert_html);  b_cacert_html = nullptr;   // the portal's heap buffers
     free(capturedCaCert); capturedCaCert = nullptr;
-    return result;
 }
