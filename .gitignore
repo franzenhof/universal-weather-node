@@ -11,6 +11,11 @@ kicad
 include/generated_version.h
 include/decoder_js.h
 include/readme_md.h
+include/i18n_keys.h
+include/i18n_table.h
+include/chart_page_gz.h
+include/web_assets.h
+
 
 # KiCad
 *.kicad_prl
@@ -19,3 +24,4 @@ fp-info-cache
 *.lck
 _autosave-*
 \#auto_saved_files\#
+
