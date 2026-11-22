@@ -20,6 +20,14 @@ int main()
     assert(staticIpCheck(true, "192.168.1.10", "", "255.255.255.0", "", true, en) == SIP_INVALID);
     assert(staticIpCheck(true, "192.168.1.10", "192.168.1.1", "255.255.255.0", "", true, en) == SIP_APPLY && en);
     assert(staticIpCheck(true, "192.168.1.10", "192.168.1.1", "255.255.255.0", "1.1.1", true, en) == SIP_INVALID);
+    {   // the field that is wrong, for the message
+        StaticIpField b = SIPF_NONE;
+        assert(staticIpCheck(true, "192.168.1.10", "", "255.255.255.0", "", true, en, &b) == SIP_INVALID && b == SIPF_GATEWAY);
+        assert(staticIpCheck(true, "192.168.1.300", "192.168.1.1", "255.255.255.0", "", true, en, &b) == SIP_INVALID && b == SIPF_IP);
+        assert(staticIpCheck(true, "192.168.1.10", "192.168.1.1", "", "", true, en, &b) == SIP_INVALID && b == SIPF_SUBNET);
+        assert(staticIpCheck(true, "192.168.1.10", "192.168.1.1", "255.255.255.0", "1.1.1", true, en, &b) == SIP_INVALID && b == SIPF_DNS);
+        assert(staticIpCheck(true, "192.168.1.10", "192.168.1.1", "255.255.255.0", "", true, en, &b) == SIP_APPLY && b == SIPF_NONE);
+    }
     // Wi-Fi / web interface off from the web settings: only with LoRaWAN on
     // and joined (else the node would be unreachable) and the confirmation
     assert(radioOffCheck(false, false, false, false) == RADIO_OFF_NONE);

@@ -10,8 +10,11 @@ bool ipValid(const char* s);   // dotted quad a.b.c.d, each 0-255
 // setting. Off: never rejected. On with an empty address: DHCP, like the
 // Wi-Fi code does (effectiveEn = false). On and unchanged: kept as stored -
 // a save of other settings is never refused because of it. Else checked.
+// bad (if not null): with SIP_INVALID the first field that is missing or
+// invalid - for a message that names it.
+enum StaticIpField { SIPF_NONE = 0, SIPF_IP, SIPF_GATEWAY, SIPF_SUBNET, SIPF_DNS };
 StaticIpOutcome staticIpCheck(bool en, const char* ip, const char* gw, const char* sn, const char* dns, bool changed,
-                              bool& effectiveEn);
+                              bool& effectiveEn, StaticIpField* bad = nullptr);
 
 // Switching Wi-Fi (wifien) or the web interface (webapien) off from the web
 // settings: afterwards the node is reachable only via the config portal

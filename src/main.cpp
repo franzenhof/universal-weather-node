@@ -74,6 +74,7 @@ extern SPIClass* hspi;
 #include "wifi_mqtt.h"
 #include "web_api.h"
 #include "history.h"
+#include "series.h"
 #include "sensors.h"
 #include "lora_payload.h"
 #include "portal.h"
@@ -96,12 +97,16 @@ extern SPIClass* hspi;
 #include "custom_upload.h"
 #include "out_status.h"
 #include "loxone.h"
+#include "psram.h"
+#include <new>
 
 // ============================================================================
 // DISPLAY MANAGEMENT
 // ============================================================================
 // Start + duration rather than an absolute end time, so the timeout stays
 // correct across the millis() wrap (every 49.7 days).
+static constexpr int PIN_HEARTBEAT_LED = 35;   // Heltec V3 / V4 white LED
+
 static bool          displayActive    = false;
 static unsigned long displayOnSinceMs = 0;
 static unsigned long displayOnForMs   = 0;
@@ -137,9 +142,17 @@ static bool displayNight()
            oledNightNow(gCfg.dispNightFrom, gCfg.dispNightTo, lt.tm_hour);
 }
 
+// Orientation (Settings → Display): 0 = as older firmware drew it (the
+// SSD1306 default after display.init()), 1 = rotated by 180°.
+static int displayFlip = -1;
+
 static void updateDisplayState()
 {
     if (displayContrast != gCfg.dispContrast) { displayContrast = gCfg.dispContrast; display.setContrast((uint8_t)displayContrast); }
+    if (displayFlip != gCfg.dispFlip) {
+        displayFlip = gCfg.dispFlip;
+        if (displayFlip) display.flipScreenVertically(); else display.resetOrientation();
+    }
     // mode 1: always on (outside the night hours)
     if (gCfg.dispMode == 1 && !displayActive && !displayNight()) activateDisplay(0xFFFFFFFFUL);
     if (gCfg.dispMode == 1 && displayActive && displayOnForMs == 0xFFFFFFFFUL && displayNight()) displayOnForMs = 0;
@@ -162,6 +175,25 @@ static void updateDisplayState()
             display.display();
         }
     }
+}
+
+// Heartbeat LED (Settings → Display): the Heltec's white LED on GPIO35
+// flashes for 40 ms every 2 s while the loop runs - a hanging loop (or a
+// crash) stops it, the display can stay off. Not on a V4-R8 (GPIO35 belongs
+// to its octal PSRAM). The PCBs do not use GPIO35.
+static void heartbeatPoll()
+{
+    static bool pinSet = false, on = false;
+    static unsigned long lastMs = 0;
+    const bool wanted = gCfg.dispLed && !boardIsR8();
+    if (!wanted) {
+        if (pinSet && on) { digitalWrite(PIN_HEARTBEAT_LED, LOW); on = false; }
+        return;
+    }
+    if (!pinSet) { pinMode(PIN_HEARTBEAT_LED, OUTPUT); pinSet = true; }
+    const unsigned long now = millis();
+    if (!on && now - lastMs >= 2000) { digitalWrite(PIN_HEARTBEAT_LED, HIGH); on = true; lastMs = now; }
+    else if (on && now - lastMs >= 40) { digitalWrite(PIN_HEARTBEAT_LED, LOW); on = false; }
 }
 
 // ============================================================================
@@ -353,7 +385,8 @@ static uint8_t  noDownlinkShift = 0;
 // ============================================================================
 enum PathIdx { PATH_BASE = 0, PATH_LORA = 1, PATH_MQTT = 2, PATH_LOX = 3, PATH_COUNT = 4 };
 static_assert(PATH_COUNT == SRC_PATHS, "wireless wind keeps one window per path (sources.h)");
-static WindRing      windRing;
+// 10-min wind window (~5 KB): PSRAM if the board has some (setup(), psram.h)
+static WindRing*     windRing = nullptr;
 static WindAcc       windAcc[PATH_COUNT];
 static RainWindow    rainWin[PATH_COUNT];
 static RainRateRing  rainRateRing;   // rate over >= 5 min for short windows
@@ -405,7 +438,7 @@ static void takeWindSample()
         uint16_t dir = readWindDirection();
         if (vaneSwitched) windVaneSupply(false);
         if (ps.windValid) {
-            float gust = windRing.push(ps.windPulses, ps.elapsedMs, dir, true, gCfg.windMsPerPps);
+            float gust = windRing->push(ps.windPulses, ps.elapsedMs, dir, true, gCfg.windMsPerPps);
             for (int i = 0; i < PATH_COUNT; i++) windAcc[i].add(ps.windPulses, ps.elapsedMs, dir, true, gust);
         }
     }
@@ -441,7 +474,7 @@ static PathValues pathValues(int idx, int aggMode, unsigned long now)
     PathValues v;
     // wind from the selected source (board anemometer or a wireless sensor)
     WindStats w = srcIsRadio(SG_WIND) ? srcRfWind(idx, aggMode == WIND_AGG_10MIN)
-                : (aggMode == WIND_AGG_10MIN) ? windRing.stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps)
+                : (aggMode == WIND_AGG_10MIN) ? windRing->stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps)
                                               : windAcc[idx].result(gCfg.windMsPerPps);
     // No valid sample in the window (all rejected, wireless sensor silent):
     // windValid stays false and the payloads leave wind out - not the
@@ -464,6 +497,8 @@ static PathValues pathValues(int idx, int aggMode, unsigned long now)
 
 // End of a base cycle: the base window's values become the globals
 // (status page, REST, history, display, weather-network feed).
+static constexpr unsigned long CYCLE_LOG_EVERY_MS = 60000;   // cycle summary line in the log
+
 static void computeFinalValues(unsigned long elapsedMs, unsigned long now)
 {
     if (srcActive(SG_WIND)) {
@@ -472,7 +507,10 @@ static void computeFinalValues(unsigned long elapsedMs, unsigned long now)
         windSpeedMs   = b.windSpeedMs;
         windGustMs    = b.windGustMs;
         windDirection = b.windDirDeg;
-        if (!b.windValid) dbgSerial.println("Wind: no valid sample this cycle - left out.");
+        // logged when it starts (not every cycle: a short cycle would fill the 4-KB log)
+        static bool windWasValid = true;
+        if (!b.windValid && windWasValid) dbgSerial.println("Wind: no valid sample this cycle - left out (logged once until valid again).");
+        windWasValid = b.windValid;
     } else {
         windCycleValid = false;
     }
@@ -492,13 +530,22 @@ static void computeFinalValues(unsigned long elapsedMs, unsigned long now)
     bme280SampleCount = 0;
 
     cpuTemperature = heltec_temperature();
-    batteryVolt    = gCfg.lipoEn ? readBatteryVoltage() : 0.0f;
+    // also for the display corner; the outputs still send it only with lipoEn
+    batteryVolt    = (gCfg.lipoEn || gCfg.dispBattery) && !boardIsR8() ? readBatteryVoltage() : 0.0f;
     ioFinishCycle(elapsedMs);
 
-    dbgSerial.printf("[Cycle %d wind samples] Wind: %d°, %.1f m/s (gust %.1f) | "
-                  "Rain: %.1f mm @ %.1f mm/h | Batt: %.2fV | CPU: %.1f°C\n",
-                  windSampleCount, windDirection, windSpeedMs, windGustMs,
-                  rainMM, rainRateMmH, batteryVolt, cpuTemperature);
+    // Cycle summary at most once a minute: with a 10-30 s measurement cycle
+    // it would otherwise push everything else out of the 4-KB log (serial_log.cpp).
+    static unsigned long lastCycleLogMs = 0;
+    static bool          cycleLogged    = false;
+    if (!cycleLogged || now - lastCycleLogMs >= CYCLE_LOG_EVERY_MS) {
+        cycleLogged = true;
+        lastCycleLogMs = now;
+        dbgSerial.printf("[Cycle %d wind samples] Wind: %d°, %.1f m/s (gust %.1f) | "
+                      "Rain: %.1f mm @ %.1f mm/h | Batt: %.2fV | CPU: %.1f°C\n",
+                      windSampleCount, windDirection, windSpeedMs, windGustMs,
+                      rainMM, rainRateMmH, batteryVolt, cpuTemperature);
+    }
     windSampleCount = 0;
 }
 
@@ -507,6 +554,15 @@ static void computeFinalValues(unsigned long elapsedMs, unsigned long now)
 // push the send a whole cycle - but not more: half a base cycle let a path
 // with a multiple of the base interval send up to 25 % too often.
 static constexpr unsigned long PATH_JITTER_MS = 2000;
+static constexpr unsigned long FIRST_CYCLE_MS   = 30000;   // first base cycle after the start
+static constexpr unsigned long MIN_GCD_CYCLE_MS = 10000;   // base cycle from the common divisor: not below
+
+static unsigned long gcdMs(unsigned long a, unsigned long b)
+{
+    while (b) { const unsigned long t = a % b; a = b; b = t; }
+    return a;
+}
+
 static bool pathDue(int idx, unsigned long now, unsigned long intervalMs, unsigned long baseMs)
 {
     return now - pathLastMs[idx] + min(baseMs / 2, PATH_JITTER_MS) >= intervalMs;
@@ -607,8 +663,8 @@ static bool sendLoRa()
     if (state == RADIOLIB_ERR_UPLINK_UNAVAILABLE) {
         unsigned long waitS = (unsigned long)(loRaNode->timeUntilUplink() / 1000);
         dbgSerial.printf("Uplink skipped: duty-cycle limit (next possible in %lu s), retry next cycle.\n", waitS);
-        display.drawString(0, 44, "Uplink deferred");
-        display.drawString(0, 55, "duty cycle");
+        display.drawString(0, OLED_ROW[4], "Uplink deferred");
+        display.drawString(0, OLED_ROW[5], "duty cycle");
         return false;
     }
     // FCntUp changed: keep the session copy current (RTC RAM + nonces), so a
@@ -639,8 +695,8 @@ static bool sendLoRa()
     if (state == RADIOLIB_ERR_NONE) {
         dbgSerial.println("Uplink sent, no downlink.");
         sendFailCount = 0;
-        display.drawString(0, 44, "Uplink sent");
-        display.drawString(0, 55, "no downlink");
+        display.drawString(0, OLED_ROW[4], "Uplink sent");
+        display.drawString(0, OLED_ROW[5], "no downlink");
         if (++uplinksWithoutDownlink >= (NO_DOWNLINK_REJOIN << noDownlinkShift)) {
             dbgSerial.printf("No downlink for %lu uplinks - session assumed broken, rejoining.\n",
                              (unsigned long)uplinksWithoutDownlink);
@@ -659,14 +715,14 @@ static bool sendLoRa()
         gLoraDiag.uplinksWithoutDownlink = 0;
         gLoraDiag.rejoinThreshold = NO_DOWNLINK_REJOIN;
         processDownlink(evDown.fPort, downlinkData, lenDown);
-        display.drawString(0, 44, "Uplink + Downlink");
+        display.drawString(0, OLED_ROW[4], "Uplink + Downlink");
         snprintf(buf, sizeof(buf), "SNR %.1f  RSSI %.1f", radio.getSNR(), radio.getRSSI());
-        display.drawString(0, 55, buf);
+        display.drawString(0, OLED_ROW[5], buf);
     } else {
         dbgSerial.printf("Send failed (code %d), attempt %d/10\n", state, ++sendFailCount);
-        display.drawString(0, 44, "Send error");
+        display.drawString(0, OLED_ROW[4], "Send error");
         snprintf(buf, sizeof(buf), "Code %d  Attempt %d/10", state, sendFailCount);
-        display.drawString(0, 55, buf);
+        display.drawString(0, OLED_ROW[5], buf);
         if (sendFailCount >= 10) {
             loraReconnect();
             sendFailCount = 0;
@@ -682,7 +738,22 @@ static void drawDisplay()
 {
     char buf[64];
     display.clear();
-    if (displayScreen != OS_CLASSIC) { oledDrawScreen(display, displayScreen); return; }
+    if (displayScreen != OS_CLASSIC) {
+        oledDrawScreen(display, displayScreen);
+        if (gCfg.dispBattery) {   // top right, over the end of the title line
+            if (batteryVolt < BATTERY_PRESENT_V) snprintf(buf, sizeof(buf), "USB");
+            else                                 snprintf(buf, sizeof(buf), "%.2fV", batteryVolt);
+            display.setFont(ArialMT_Plain_10);
+            const int w = display.getStringWidth(buf);
+            display.setColor(BLACK);
+            display.fillRect(128 - w - 4, 0, w + 4, 12);
+            display.setColor(WHITE);
+            display.setTextAlignment(TEXT_ALIGN_RIGHT);
+            display.drawString(128, 0, buf);
+            display.setTextAlignment(TEXT_ALIGN_LEFT);
+        }
+        return;
+    }
 
     if (srcActive(SG_WIND)) {
         snprintf(buf, sizeof(buf), "D%03d S%.1f G%.1f %s",
@@ -698,7 +769,7 @@ static void drawDisplay()
                  rainForOutput(rainMMSinceStart, gCfg), rainUnitLabel(gCfg));
     else
         snprintf(buf, sizeof(buf), "#%d", loopCount);
-    display.drawString(0, 11, buf);
+    display.drawString(0, OLED_ROW[1], buf);
 
     if (gSrc.tempValid && gSrc.pressValid)
         snprintf(buf, sizeof(buf), "%.1f%s  %.1f%%rH  %.0f%s",
@@ -710,7 +781,7 @@ static void drawDisplay()
                  temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg), gSrc.humidity);
     else
         snprintf(buf, sizeof(buf), "no BME280");
-    display.drawString(0, 22, buf);
+    display.drawString(0, OLED_ROW[2], buf);
 
     if (gIo.veValid && !isnan(gIo.ve.battV)) {
         // Victron: battery + PV power, plus which outputs are on
@@ -720,12 +791,12 @@ static void drawDisplay()
     } else {
         // LiPo measurement off: nothing to show (no more "Batt: 0.000V"); below 2.5 V: no battery, USB powered
         int n = 0;
-        if (gCfg.lipoEn) n = batteryVolt < BATTERY_PRESENT_V ? snprintf(buf, sizeof(buf), "USB")
+        if (gCfg.lipoEn || gCfg.dispBattery) n = batteryVolt < BATTERY_PRESENT_V ? snprintf(buf, sizeof(buf), "USB")
                                                              : snprintf(buf, sizeof(buf), "Batt: %.2fV", batteryVolt);
         else buf[0] = '\0';
         snprintf(buf + n, sizeof(buf) - n, "%s%s", gIo.heaterOn ? " H" : "", gIo.fanOn ? " F" : "");
     }
-    display.drawString(0, 33, buf);
+    display.drawString(0, OLED_ROW[3], buf);
 
     // Without LoRaWAN the two bottom lines (uplink result) are free: show
     // where to reach the node and what the wireless receiver does.
@@ -733,14 +804,14 @@ static void drawDisplay()
         if (!gCfg.wifiEn)               snprintf(buf, sizeof(buf), "WiFi off");
         else if (wifiIsConnected())     snprintf(buf, sizeof(buf), "http://%s", WiFi.localIP().toString().c_str());
         else                            snprintf(buf, sizeof(buf), "WiFi: connecting...");
-        display.drawString(0, 44, buf);
+        display.drawString(0, OLED_ROW[4], buf);
         if (gCfg.rfEn) {
             int n = 0;
             for (int i = 0; i < RF_MAX_SENSORS; i++) n += gRfSensors[i].used;
             if (gCfg.rfProto == RF_PROTO_DAVIS) snprintf(buf, sizeof(buf), "Davis: %s id%u", davisDiagStateName(gDavisDiag.state), gDavisDiag.txId);
             else if (gCfg.rfProto == RF_PROTO_AUTO) snprintf(buf, sizeof(buf), "RF: searching sensor...");
             else                               snprintf(buf, sizeof(buf), "RF: %d sensor(s)", n);
-            display.drawString(0, 55, buf);
+            display.drawString(0, OLED_ROW[5], buf);
         }
     }
 }
@@ -808,6 +879,15 @@ void setup()
         display.flipScreenVertically();
     }
 
+    // PSRAM (V4) or not - the log line, and the large buffers go there if it runs
+    psramLogStatus(gBoard.psramCap);
+    {
+        void* w = bigAlloc(sizeof(WindRing));
+        if (!w) abort();   // ~5 KB right after the start: cannot fail on a working board
+        windRing = new (w) WindRing();
+    }
+    historyAllocate();
+
     // Button interrupt – must be registered early so no press is missed
     pinMode(BUTTON, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(BUTTON), buttonISR, CHANGE);
@@ -831,9 +911,9 @@ void setup()
         display.displayOn();
         display.clear();
         display.drawString(0,  0, "cfgdata missing!");
-        display.drawString(0, 11, "USB reflash needed");
-        display.drawString(0, 22, "(OTA can't fix this)");
-        display.drawString(0, 33, "See README.md");
+        display.drawString(0, OLED_ROW[1], "USB reflash needed");
+        display.drawString(0, OLED_ROW[2], "(OTA can't fix this)");
+        display.drawString(0, OLED_ROW[3], "See README.md");
         display.display();
         while (true) {
             delay(1000);
@@ -847,6 +927,7 @@ void setup()
     // Load config and set CPU frequency
     loadConfigInto(gCfg);   // straight into gCfg (still the defaults here): no 7-KB temporary on the stack
     setCpuFrequencyMhz(gCfg.cpuFreqMhz);
+    historySeriesConfigure(gCfg.series, seriesLimit());   // custom series rings (PSRAM known by now)
 
     // Board in effect (setting or detection) and, on a V4, its RF front end -
     // before anything uses the radio.
@@ -926,7 +1007,7 @@ void setup()
 
     // Setup done - normal operation. Take a first sub-sample right away so
     // the 20 s boot display shows real readings instead of zeros (the first
-    // full cycle only completes after uplinkIntervalSec).
+    // cycle completes after FIRST_CYCLE_MS).
     takeWindSample();
     takeSlowSample();
     activateDisplay(20000);
@@ -946,6 +1027,7 @@ void loop()
     esp_task_wdt_reset();
     handleButton();
     updateDisplayState();
+    heartbeatPoll();
     wifiMqttPoll();   // non-blocking; no-op unless wifiEn is set
     ioPoll();         // PCB v2.0: VE.Direct, pulse counters, outputs
     timeSyncPoll();   // starts SNTP once WiFi is first up
@@ -957,9 +1039,16 @@ void loop()
     // stuck waiting behind sendLoRa()'s blocking airtime).
 
     const unsigned long now = millis();
-    // Intervals: wind sample (1 or 3 s), LoRaWAN, MQTT (0 = like LoRaWAN) and
-    // the base cycle = the shortest active send interval, never shorter than
-    // one wind sample.
+    // Intervals: wind sample (1 or 3 s), the measurement cycle (Settings ->
+    // Measurement, measureSec) and the send intervals of LoRaWAN, MQTT (0 =
+    // like LoRaWAN) and Loxone. The base cycle - values computed, display,
+    // history, records, sends due - is the measurement cycle, made shorter
+    // where a send interval needs it: the greatest common divisor of the
+    // measurement cycle and the active send intervals (60 s + LoRaWAN 300 s
+    // -> 60 s; 60 s + 90 s -> 30 s), or their shortest one if that divisor
+    // would be below 10 s. Each output keeps its own window (pathDue), so a
+    // send interval is independent of the cycle. LoRa-only low-power mode:
+    // the LoRaWAN interval as before (the node sleeps in between).
     const unsigned long windSampleMs = (unsigned long)windSampleSecNormalized(gCfg.sampleSec) * 1000UL;
     const unsigned long loraMs       = (unsigned long)gCfg.uplinkIntervalSec * 1000UL;
     const bool          mqttOn       = gCfg.wifiEn && gCfg.mqttEn;
@@ -968,8 +1057,16 @@ void loop()
     // Loxone UDP: 0 = every base cycle (does not shorten it), else its own interval
     const bool          loxOn        = gCfg.wifiEn && gCfg.loxEn;
     const unsigned long loxMs        = gCfg.loxSec > 0 ? max((unsigned long)gCfg.loxSec * 1000UL, windSampleMs) : 0;
-    unsigned long baseMs = mqttOn ? min(loraMs, mqttMs) : loraMs;
-    if (loxOn && loxMs) baseMs = min(baseMs, loxMs);
+    const bool          loraOn       = gCfg.loraEn && !davisLoraPaused();
+    unsigned long baseMs = lowPowerActive() ? loraMs : (unsigned long)gCfg.measureSec * 1000UL;
+    {
+        unsigned long g = baseMs, shortest = baseMs;
+        auto add = [&](unsigned long x) { g = gcdMs(g, x); shortest = min(shortest, x); };
+        if (loraOn)         add(loraMs);
+        if (mqttOn)         add(mqttMs);
+        if (loxOn && loxMs) add(loxMs);
+        baseMs = (g >= MIN_GCD_CYCLE_MS || g == shortest) ? g : shortest;
+    }
     baseMs = max(baseMs, windSampleMs);
     const unsigned long slowMs = min(SLOW_SAMPLE_MS, baseMs);
     gBaseCycleMs = baseMs;
@@ -992,7 +1089,13 @@ void loop()
     }
 
     // ── End of a base cycle ────────────────────────────────────────────────
-    if (!sendPending && now - lastSendMs >= baseMs) {
+    // The first one FIRST_CYCLE_MS after the start (not a whole cycle): the
+    // values, the display and the chart's first point are there at once.
+    // The send paths keep their own windows - no early uplink.
+    static bool firstCycle = true;
+    const bool cycleDue = now - lastSendMs >= baseMs || (firstCycle && now - lastSendMs >= min(FIRST_CYCLE_MS, baseMs));
+    if (!sendPending && cycleDue) {
+        firstCycle = false;
         sendElapsedMs = now - lastSendMs;
         lastSendMs    = now;
 
@@ -1060,11 +1163,16 @@ void loop()
         if (!loxOn)       resetPath(PATH_LOX, cycleEnd);
 
         historyStoreCycle();   // restore after the clock sync / save every 24 h (history.h)
-        pushHistorySample();   // base cycle values for the dashboard history
+        {   // base cycle values for the dashboard history, with the custom series (series.h)
+            float sv[SERIES_MAX];
+            bool  sok[SERIES_MAX];
+            seriesCycleValues(sv, sok);
+            pushHistorySample(sv, sok);
+        }
         recordsCycle();        // extremes (records.h)
         astroCycle();          // sun / moon times of the day (astro.h)
         wxUploadPushCycle(calWind(srcIsRadio(SG_WIND) ? srcRfWind(PATH_BASE, true)
-                                                      : windRing.stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps)));
+                                                      : windRing->stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps)));
         resetPath(PATH_BASE, cycleEnd);
         loopCount++;
 

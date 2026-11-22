@@ -14,7 +14,7 @@ For a wireless station — no soldering, no custom PCB:
 
 | Part | Notes | Approx. price |
 |------|-------|---------------|
-| **Heltec WiFi LoRa 32 V4** *(recommended)* or **V3 / V3.1 / V3.2** | The **868 MHz** version (EU). The **V4** has an RF front end with a low-noise amplifier (helps with weak or distant sensors) and more memory for the future (2 MB PSRAM, 16 MB flash — the firmware does not use the extra memory yet); the firmware detects it and switches the front end itself. The V3 works just as well today. For wired sensors (Davis cups and vane, reed switches, DS18B20 …) use the [custom PCB v2.0](docs/pcb.md#custom-pcb): it takes a **V3 or a V4** (one socket set each, see [Heltec V3 or V4 on the PCB](docs/pcb.md#heltec-v3-or-v4-on-the-pcb)); the older Rev 1.2 / 1.3 boards take the V3 only. Not supported: **V4-R8**. | €20–30 |
+| **Heltec WiFi LoRa 32 V4** *(recommended)* or **V3 / V3.1 / V3.2** | The **868 MHz** version (EU). The **V4** has an RF front end with a low-noise amplifier (helps with weak or distant sensors) and 2 MB PSRAM (ESP32-S3R2; used for the history, large buffers and HTTPS since 2.0.0-rc.9) plus 16 MB flash; the firmware detects it and switches the front end itself. The V3 works just as well today. For wired sensors (Davis cups and vane, reed switches, DS18B20 …) use the [custom PCB v2.0](docs/pcb.md#custom-pcb): it takes a **V3 or a V4** (one socket set each, see [Heltec V3 or V4 on the PCB](docs/pcb.md#heltec-v3-or-v4-on-the-pcb)); the older Rev 1.2 / 1.3 boards take the V3 only. Not supported: **V4-R8** (ESP32-S3R8): its 8 MB octal PSRAM takes GPIO33–37, which the board and the PCB need — buy the standard V4 with the **ESP32-S3R2**. | €20–30 |
 | **868 MHz antenna** | The small antenna that comes with the board is fine for sensors nearby. For more range, an external 868 MHz antenna with a u.FL/IPEX-to-SMA pigtail (the [enclosure](docs/minimal-build.md) has an SMA bulkhead). **Never power the board without an antenna.** | €0–15 |
 | **USB-C power supply** 5 V, ≥ 1 A, with cable | any phone charger | €5–10 |
 | **BME280 module** (I²C, 3.3 V) — *recommended* | Adds the air pressure (pressure trend, weather networks); four jumper wires, see [Minimal Wireless Build](docs/minimal-build.md). Must be a BME280, not a BMP280. Not needed if an Ecowitt WS69 pressure module or a WN32P already sends pressure. | €5–10 |
@@ -56,7 +56,7 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 </p>
 <!-- /help:skip -->
 
-**Current status:** [2.0.0-rc.8](firmware/universal-weather-node-2.0.0-rc.8.bin) ([factory image](firmware/universal-weather-node-2.0.0-rc.8-factory.bin) for the first installation) is the release candidate for 2.0.0.
+**Current release:** [2.0.0](firmware/universal-weather-node-2.0.0.bin) ([factory image](firmware/universal-weather-node-2.0.0-factory.bin) for the first installation) — see the [Changelog](CHANGELOG.md#200).
 
 ## Documentation
 

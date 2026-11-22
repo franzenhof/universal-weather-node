@@ -1,5 +1,6 @@
 #include "api_info.h"
 #include "out_status.h"
+#include "psram.h"
 #if __has_include(<esp_heap_caps.h>)
 #include <esp_heap_caps.h>
 #endif
@@ -68,17 +69,21 @@ void deviceHostname(char* out, size_t len)
     }
 }
 
-// 0 free, 1 minimum free since start, 2 largest free block (8-bit capable heap); weak: host tests
+// Internal RAM: 0 free, 1 minimum free since start, 2 largest free block;
+// PSRAM (0 without): 3 total, 4 free, 5 largest block. Weak: host tests
 __attribute__((weak)) size_t hostOrDeviceFreeHeap(int what)
 {
 #if __has_include(<esp_heap_caps.h>) && defined(ESP_PLATFORM)
     switch (what) {
-        case 0:  return heap_caps_get_free_size(MALLOC_CAP_8BIT);
-        case 1:  return heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
-        default: return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        case 0:  return internalFree();   // internal RAM: PSRAM separately (psram.h)
+        case 1:  return internalMinFree();
+        case 3:  return psramTotal();
+        case 4:  return psramFree();
+        case 5:  return psramLargest();
+        default: return internalLargest();
     }
 #else
-    return what == 0 ? 150000 : what == 1 ? 120000 : 90000;
+    return what == 0 ? 150000 : what == 1 ? 120000 : what >= 3 ? 0 : 90000;
 #endif
 }
 
@@ -91,6 +96,19 @@ __attribute__((weak)) size_t hostOrDeviceSettingsStore(bool freePart)
     return (freePart ? st.free_entries : st.used_entries) * 32;
 #else
     return freePart ? 45000 : 14000;
+#endif
+}
+
+// Task stack never used so far (bytes, FreeRTOS high-water mark), -1 = no
+// such task; weak: host tests. Tasks: loopTask (24 KB), webApi (8 KB),
+// wxUpload (12 KB) - a value near 0 is the warning before a stack overflow.
+__attribute__((weak)) int hostOrDeviceStackFree(const char* task)
+{
+#if defined(ESP_PLATFORM)
+    TaskHandle_t h = xTaskGetHandle(task);
+    return h ? (int)uxTaskGetStackHighWaterMark(h) : -1;
+#else
+    return !strcmp(task, "loopTask") ? 15000 : !strcmp(task, "webApi") ? 2800 : 6500;
 #endif
 }
 
@@ -111,8 +129,22 @@ void buildInfoJson(JsonDocument& doc)
     sys["heapFree"]    = (unsigned long)hostOrDeviceFreeHeap(0);
     sys["heapMin"]     = (unsigned long)hostOrDeviceFreeHeap(1);
     sys["heapLargest"] = (unsigned long)hostOrDeviceFreeHeap(2);
+    if (const size_t ps = hostOrDeviceFreeHeap(3)) {   // only a board whose PSRAM runs (V4)
+        JsonObject p = sys["psram"].to<JsonObject>();
+        p["total"]   = (unsigned long)ps;
+        p["free"]    = (unsigned long)hostOrDeviceFreeHeap(4);
+        p["largest"] = (unsigned long)hostOrDeviceFreeHeap(5);
+    }
     sys["settingsStoreUsed"] = (unsigned long)hostOrDeviceSettingsStore(false);
     sys["settingsStoreFree"] = (unsigned long)hostOrDeviceSettingsStore(true);
+    {   // stack never used per task (bytes)
+        JsonObject sf = sys["stackFree"].to<JsonObject>();
+        static const char* const tasks[][2] = { { "loop", "loopTask" }, { "web", "webApi" }, { "wxUpload", "wxUpload" } };
+        for (const auto& t : tasks) {
+            const int v = hostOrDeviceStackFree(t[1]);
+            if (v >= 0) sf[t[0]] = v;
+        }
+    }
     // Language setting of the web interface (a UI may follow it); "auto" = browser
     static const char* const langs[] = { "auto", "en", "de", "fr", "es", "pt" };
     dev["language"] = langs[gCfg.uiLang >= 0 && gCfg.uiLang <= 5 ? gCfg.uiLang : 0];

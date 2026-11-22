@@ -22,6 +22,7 @@ struct PhValue {
     float       v = 0.0f;          // metric
     int8_t      decimals = -1;     // default decimals (-1: per kind)
     const char* text = nullptr;    // PK_TEXT
+    const char* defUnit = nullptr; // unit suffix used when the placeholder names none (OLED: the device's units)
 };
 
 // name -> value; false = unknown / not available now

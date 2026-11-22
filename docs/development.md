@@ -8,7 +8,7 @@ Building and flashing from source, host-side tests, robustness measures, config 
 
 Install [PlatformIO](https://platformio.org/install) (VS Code extension or CLI), clone/download this repository and run commands from its root. Use a USB **data** cable, and select the serial device if more than one is connected.
 
-Environment `heltec_wifi_lora_32_V3` (`espressif32 @ 6.4.0`, Arduino core 2.x):
+Environment `heltec_wifi_lora_32_V3` (`espressif32 @ 6.11.0`, Arduino core 2.0.17 / ESP-IDF 4.4.7):
 
 ```bash
 pio run                 # build

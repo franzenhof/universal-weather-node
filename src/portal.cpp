@@ -26,6 +26,7 @@
 #include <ArduinoJson.h>
 #include <Update.h>
 #include "ota_upload.h"
+#include "oled_screens.h"
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -898,11 +899,11 @@ void runConfigPortal(Config& cfg)
         String ip = WiFi.softAPIP().toString();
         display.clear();
         display.drawString(0,  0, "Config Portal");
-        display.drawString(0, 11, "SSID: WeatherNode");
-        display.drawString(0, 22, "http://" + ip);
-        display.drawString(0, 33, "OTA:  weather-node");
-        display.drawString(0, 44, "1. Connect to SSID");
-        display.drawString(0, 55, "2. Open URL in browser");
+        display.drawString(0, OLED_ROW[1], "SSID: WeatherNode");
+        display.drawString(0, OLED_ROW[2], "http://" + ip);
+        display.drawString(0, OLED_ROW[3], "OTA:  weather-node");
+        display.drawString(0, OLED_ROW[4], "1. Connect to SSID");
+        display.drawString(0, OLED_ROW[5], "2. Open URL in browser");
         display.display();
     });
 

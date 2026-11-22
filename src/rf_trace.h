@@ -67,7 +67,16 @@ struct RfTracePacket {
     bool           hasId = false;
     uint32_t       id = 0;
     const char*    values = "";      // short decoded values
+    // reception quality (statistics in the file header)
+    uint32_t       nominalMs = 0;    // the sensor's send interval (rfNominalIntervalMs()), 0 = unknown
+    bool           hasReadDelay = false;
+    uint32_t       readDelayMs = 0;  // packet interrupt -> read by the firmware
 };
+
+// A second OK frame of the same ID within this time is the sensor's repeat
+// of the same transmission (WH31, WH51, WN32, ... send each packet twice).
+constexpr uint32_t RF_TRACE_REPEAT_MS   = 1500;
+constexpr uint32_t RF_TRACE_LATE_READ_MS = 100;
 
 struct RfTraceStatus {
     bool     allocated = false;   // a capture (running or finished) is in memory

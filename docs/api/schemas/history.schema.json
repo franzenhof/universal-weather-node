@@ -34,7 +34,25 @@
     "tempUnit": { "type": "string", "enum": ["C", "F"], "description": "Unit of temp and ds18b20_*.", "x-present": "always" },
     "pressureUnit": { "type": "string", "enum": ["hPa", "inHg"], "description": "Unit of pressureQnh.", "x-present": "always" },
     "uvSensorVoltsUnit": { "type": "string", "const": "V", "description": "Unit of uvSensorVolts.", "x-present": "always" },
-    "uvIndexUnit": { "type": "string", "const": "index", "description": "Unit of uvIndex.", "x-present": "always" }
+    "uvIndexUnit": { "type": "string", "const": "index", "description": "Unit of uvIndex.", "x-present": "always" },
+    "series": {
+      "type": "array", "maxItems": 8,
+      "description": "Custom series (Settings -> Sensors -> Custom series), one object per defined series; values aligned with ageSec. Temperatures in tempUnit.",
+      "x-present": "only with at least one custom series",
+      "items": {
+        "type": "object",
+        "required": ["slot", "name", "value", "decimals", "values"],
+        "properties": {
+          "slot": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Slot number on the settings page." },
+          "name": { "type": "string", "description": "Free-text name (chart title)." },
+          "value": { "type": "string", "enum": ["temp", "hum", "moist", "leaf", "strikes", "dist", "pm25", "pm10", "co2", "ec", "press", "lux", "uv", "batt", "supercap", "ds1", "ds2", "ds3"], "description": "Which value of the source." },
+          "unit": { "type": "string", "description": "Unit of the values; absent if none (e.g. lightning strikes, UV index)." },
+          "decimals": { "type": "integer", "description": "Decimals to show." },
+          "perBucket": { "type": "boolean", "description": "true = a count per bucket (lightning strikes), not a level; the range total is their sum." },
+          "values": { "$ref": "#/$defs/series", "description": "One value per bucket, aligned with ageSec; null = no value." }
+        }
+      }
+    }
   },
   "$defs": {
     "series": {

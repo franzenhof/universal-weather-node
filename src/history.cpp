@@ -6,6 +6,7 @@
 #include "uv_calibration.h"
 #include "api_info.h"
 #include "time_sync.h"
+#include "psram.h"
 #include <Arduino.h>
 #include <DallasTemperature.h>
 #include <esp_timer.h>
@@ -90,6 +91,9 @@ struct OpenBucket {
     uint16_t uvCount = 0, uvIndexCount = 0;   // uvCount: board voltage samples
     float    ds18b20Sum[3] = {0, 0, 0};
     uint16_t ds18b20Count[3] = {0, 0, 0};
+    // custom series (series_def.h): mean = sum / count, SA_SUM = sum, SA_MIN = minimum
+    float    sAcc[SERIES_MAX] = {};
+    uint16_t sCount[SERIES_MAX] = {};
 };
 
 // One tier: a ring of finished buckets, one entry per bucket window - also
@@ -103,12 +107,29 @@ struct Tier {
     size_t   head;
     size_t   count;
     OpenBucket open;
+    int16_t* ser[SERIES_MAX];   // custom series: one value per ring entry (same index), nullptr = slot unused
 };
 
-HistorySample fineRing[HISTORY_FINE_CAPACITY];
-HistorySample coarseRing[HISTORY_COARSE_CAPACITY];
-Tier fine   = { fineRing,   HISTORY_FINE_CAPACITY,   HISTORY_FINE_BUCKET_SEC,   0, 0, OpenBucket{} };
-Tier coarse = { coarseRing, HISTORY_COARSE_CAPACITY, HISTORY_COARSE_BUCKET_SEC, 0, 0, OpenBucket{} };
+// The configured custom series (historySeriesConfigure()): a copy, so the
+// rings and their meaning change together under historyMutex.
+SeriesDef serDef[SERIES_MAX];
+uint32_t  serKey[SERIES_MAX] = {};   // 0 = slot unused
+
+// The rings (~14.5 KB) come from bigAlloc() (psram.h): PSRAM on a board that
+// has it, internal RAM otherwise - allocated in setup() (historyAllocate(),
+// after the core has started the PSRAM), at the latest on first use.
+Tier fine   = { nullptr, HISTORY_FINE_CAPACITY,   HISTORY_FINE_BUCKET_SEC,   0, 0, OpenBucket{}, {} };
+Tier coarse = { nullptr, HISTORY_COARSE_CAPACITY, HISTORY_COARSE_BUCKET_SEC, 0, 0, OpenBucket{}, {} };
+
+void ensureRings()
+{
+    for (Tier* t : { &fine, &coarse }) {
+        if (t->ring) continue;
+        t->ring = (HistorySample*)bigAlloc(t->capacity * sizeof(HistorySample));
+        if (!t->ring) abort();   // ~14.5 KB right after the start: cannot fail on a working board
+        memset(t->ring, 0, t->capacity * sizeof(HistorySample));
+    }
+}
 
 // Bucket alignment. Buckets are fixed windows of the "aligned clock" =
 // uptime + clockOffset: (k x bucketSec, (k + 1) x bucketSec]. Before the
@@ -129,6 +150,35 @@ bool    clockOffsetFromEpoch = false;
 // stale value, so this needs a real mutex rather than just visibility
 // guarantees.
 SemaphoreHandle_t historyMutex = xSemaphoreCreateMutex();
+
+void mergeSeries(OpenBucket& b, const float* v, const bool* ok)
+{
+    if (!v || !ok) return;
+    for (int i = 0; i < SERIES_MAX; i++) {
+        if (!serKey[i] || !ok[i]) continue;
+        const uint8_t agg = SERIES_FIELDS[serDef[i].field].agg;
+        if (agg == SA_MIN) b.sAcc[i] = b.sCount[i] ? fminf(b.sAcc[i], v[i]) : v[i];
+        else               b.sAcc[i] += v[i];
+        b.sCount[i]++;
+    }
+}
+
+// The bucket's value per slot as ring entries (SERIES_GAP without one)
+void seriesFromBucket(const OpenBucket& b, int16_t out[SERIES_MAX])
+{
+    for (int i = 0; i < SERIES_MAX; i++) {
+        out[i] = SERIES_GAP;
+        if (!serKey[i] || !b.sCount[i]) continue;
+        const uint8_t f = serDef[i].field;
+        out[i] = seriesEncode(f, SERIES_FIELDS[f].agg == SA_MEAN ? b.sAcc[i] / b.sCount[i] : b.sAcc[i]);
+    }
+}
+
+bool anySeries(const OpenBucket& b)
+{
+    for (int i = 0; i < SERIES_MAX; i++) if (serKey[i] && b.sCount[i]) return true;
+    return false;
+}
 
 void mergeIntoBucket(OpenBucket& b)
 {
@@ -229,20 +279,28 @@ bool sampleFromBucket(const OpenBucket& b, unsigned long endSec, HistorySample& 
     return true;
 }
 
-void appendSample(Tier& t, const HistorySample& s)
+// sv: the custom series' entries for it, nullptr = all gaps
+void appendSample(Tier& t, const HistorySample& s, const int16_t* sv = nullptr)
 {
     t.ring[t.head] = s;
+    for (int i = 0; i < SERIES_MAX; i++) if (t.ser[i]) t.ser[i][t.head] = sv ? sv[i] : SERIES_GAP;
     t.head = (t.head + 1) % t.capacity;
     if (t.count < t.capacity) t.count++;
 }
 
-// A window without any value: every field null in the JSON.
-void appendGap(Tier& t, uint32_t endSec)
+HistorySample gapSample(uint32_t endSec)
 {
     HistorySample s{};
     s.bucketEndSec = endSec;
     for (int i = 0; i < 3; i++) s.ds18b20X10[i] = DS18B20_INVALID_X10;
-    appendSample(t, s);
+    return s;
+}
+
+// A window without any main value: those fields null in the JSON (the
+// custom series may still have one: sv).
+void appendGap(Tier& t, uint32_t endSec, const int16_t* sv = nullptr)
+{
+    appendSample(t, gapSample(endSec), sv);
 }
 
 int64_t floorDiv(int64_t a, int64_t b)
@@ -272,15 +330,17 @@ int64_t alignedNow(uint32_t nowSec)
 // run of fake gaps. After a step backwards a window can come again: it is
 // a new entry then, and the closed bucket's end is clamped to now so the
 // ring stays in time order.
-void pushTier(Tier& t, uint32_t nowSec, int64_t aligned)
+void pushTier(Tier& t, uint32_t nowSec, int64_t aligned, const float* sv, const bool* sok)
 {
     int64_t idx = floorDiv(aligned - 1, t.bucketSec);
     OpenBucket& b = t.open;
     if (b.started && idx != b.index) {
         uint32_t endSec = (int32_t)(nowSec - b.endSec) >= 0 ? b.endSec : nowSec;
         HistorySample s;
-        if (sampleFromBucket(b, endSec, s)) appendSample(t, s);
-        else                                appendGap(t, endSec);
+        int16_t ser[SERIES_MAX];
+        seriesFromBucket(b, ser);
+        if (sampleFromBucket(b, endSec, s)) appendSample(t, s, ser);
+        else                                appendGap(t, endSec, ser);
         if (idx > b.index) {
             uint64_t skipped = (uint64_t)(idx - b.index - 1);
             uint64_t fit = (nowSec - endSec) / t.bucketSec;
@@ -303,6 +363,7 @@ void pushTier(Tier& t, uint32_t nowSec, int64_t aligned)
         }
     }
     mergeIntoBucket(b);
+    mergeSeries(b, sv, sok);
 }
 
 // Shared by both tiers in buildHistoryJson() — capacity/ring/head/count
@@ -335,9 +396,42 @@ void serializeTier(JsonDocument& doc, unsigned long nowSec, const Tier& tier)
     JsonArray ds18b20_1   = doc["ds18b20_1"].to<JsonArray>();
     JsonArray ds18b20_2   = doc["ds18b20_2"].to<JsonArray>();
     JsonArray ds18b20Arrays[3] = { ds18b20_0, ds18b20_1, ds18b20_2 };
+    // custom series: {"name", "key", "unit", "decimals", "values": [...]} per defined slot
+    JsonArray serVals[SERIES_MAX];
+    bool anyDefined = false;
+    for (int i = 0; i < SERIES_MAX; i++) anyDefined |= serKey[i] && tier.ser[i];
+    if (anyDefined) {
+        JsonArray series = doc["series"].to<JsonArray>();
+        for (int i = 0; i < SERIES_MAX; i++) {
+            if (!serKey[i] || !tier.ser[i]) continue;
+            const SeriesFieldInfo& fi = SERIES_FIELDS[serDef[i].field];
+            JsonObject o = series.add<JsonObject>();
+            o["slot"] = i + 1;
+            o["name"] = serDef[i].name;
+            o["value"] = fi.key;
+            char tu[8];
+            snprintf(tu, sizeof(tu), "\xC2\xB0%s", temperatureUnitLabel(gCfg));
+            if (fi.isTemp) o["unit"] = tu;
+            else if (fi.unit[0]) o["unit"] = fi.unit;
+            o["decimals"] = fi.decimals;
+            if (fi.agg == SA_SUM) o["perBucket"] = true;   // a count per bucket (lightning), not a level
+            serVals[i] = o["values"].to<JsonArray>();
+        }
+    }
+    auto addSeries = [&](const int16_t* sv) {
+        for (int i = 0; i < SERIES_MAX; i++) {
+            if (serVals[i].isNull()) continue;
+            const int16_t raw = sv ? sv[i] : SERIES_GAP;
+            if (raw == SERIES_GAP) { serVals[i].add(nullptr); continue; }
+            const uint8_t f = serDef[i].field;
+            const float v = seriesDecode(f, raw);
+            serVals[i].add(SERIES_FIELDS[f].isTemp ? temperatureForOutput(v, gCfg) : v);
+        }
+    };
 
-    auto addSample = [&](const HistorySample& s, unsigned long ageSecVal) {
+    auto addSample = [&](const HistorySample& s, unsigned long ageSecVal, const int16_t* sv) {
         ageSec.add(ageSecVal);
+        addSeries(sv);
 
         if (s.validMask & VALID_WIND) {
             windSpeed.add(windSpeedForOutput(s.windSpeedX100 / 100.0f, gCfg));
@@ -384,14 +478,20 @@ void serializeTier(JsonDocument& doc, unsigned long nowSec, const Tier& tier)
     // Oldest-first: before the buffer first wraps, that's simply index 0;
     // once full, head already points at the oldest (next-to-overwrite) slot.
     size_t start = (count < capacity) ? 0 : head;
+    int16_t sv[SERIES_MAX];
     for (size_t i = 0; i < count; i++) {
-        const HistorySample& s = ring[(start + i) % capacity];
-        addSample(s, (uint32_t)((uint32_t)nowSec - s.bucketEndSec));   // modulo 2^32: restored ends may lie before the start
+        const size_t at = (start + i) % capacity;
+        const HistorySample& s = ring[at];
+        for (int k = 0; k < SERIES_MAX; k++) sv[k] = tier.ser[k] ? tier.ser[k][at] : SERIES_GAP;
+        addSample(s, (uint32_t)((uint32_t)nowSec - s.bucketEndSec), sv);   // modulo 2^32: restored ends may lie before the start
     }
 
     HistorySample liveSample;
-    if (sampleFromBucket(openBucket, nowSec, liveSample)) {
-        addSample(liveSample, 0);
+    const bool liveMain = sampleFromBucket(openBucket, nowSec, liveSample);
+    if (liveMain || anySeries(openBucket)) {
+        if (!liveMain) liveSample = gapSample(nowSec);
+        seriesFromBucket(openBucket, sv);
+        addSample(liveSample, 0, sv);
     }
 
     doc["windUnit"]     = windSpeedUnitLabel(gCfg);
@@ -405,19 +505,50 @@ void serializeTier(JsonDocument& doc, unsigned long nowSec, const Tier& tier)
 
 } // namespace
 
+void historyAllocate()
+{
+    xSemaphoreTake(historyMutex, portMAX_DELAY);
+    ensureRings();
+    xSemaphoreGive(historyMutex);
+}
+
 void historyClear()
 {
     for (Tier* t : { &fine, &coarse }) { t->head = 0; t->count = 0; t->open = OpenBucket{}; }
 }
 
-void pushHistorySample()
+void pushHistorySample(const float* seriesV, const bool* seriesOk)
 {
     uint32_t nowSec = uptimeSec();
 
     xSemaphoreTake(historyMutex, portMAX_DELAY);
+    ensureRings();
     int64_t aligned = alignedNow(nowSec);
-    pushTier(fine, nowSec, aligned);
-    pushTier(coarse, nowSec, aligned);
+    pushTier(fine, nowSec, aligned, seriesV, seriesOk);
+    pushTier(coarse, nowSec, aligned, seriesV, seriesOk);
+    xSemaphoreGive(historyMutex);
+}
+
+void historySeriesConfigure(const SeriesDef defs[SERIES_MAX], int limit)
+{
+    xSemaphoreTake(historyMutex, portMAX_DELAY);
+    ensureRings();
+    for (int i = 0; i < SERIES_MAX; i++) {
+        const SeriesDef d = defs[i];
+        const uint32_t key = (i < limit && d.used()) ? seriesKey(d) : 0;
+        if (key == serKey[i]) { serDef[i] = d; continue; }   // same data: e.g. only re-saved
+        for (Tier* t : { &fine, &coarse }) {
+            if (key && !t->ser[i]) t->ser[i] = (int16_t*)bigAlloc(t->capacity * sizeof(int16_t));
+            if (!key && t->ser[i]) { free(t->ser[i]); t->ser[i] = nullptr; }
+            if (t->ser[i]) for (size_t k = 0; k < t->capacity; k++) t->ser[i][k] = SERIES_GAP;
+            t->open.sAcc[i] = 0;
+            t->open.sCount[i] = 0;
+        }
+        // no memory for the rings: the slot stays off
+        serKey[i] = (key && fine.ser[i] && coarse.ser[i]) ? key : 0;
+        if (key && !serKey[i]) for (Tier* t : { &fine, &coarse }) { free(t->ser[i]); t->ser[i] = nullptr; }
+        serDef[i] = d;
+    }
     xSemaphoreGive(historyMutex);
 }
 
@@ -432,6 +563,7 @@ void buildHistoryJson(JsonDocument& doc, bool coarseRange)
     // short (at most a few hundred iterations of scaling math) and
     // infrequent (one request at a time, one push per uplink cycle).
     xSemaphoreTake(historyMutex, portMAX_DELAY);
+    ensureRings();
     serializeTier(doc, nowSec, coarseRange ? coarse : fine);
     xSemaphoreGive(historyMutex);
 }
@@ -462,6 +594,7 @@ const HistorySample* fineSampleAgo(unsigned long nowSec, uint32_t ageSec, uint8_
 bool historyPressureAgo(uint32_t ageSec, float& qnhHpa)
 {
     xSemaphoreTake(historyMutex, portMAX_DELAY);
+    ensureRings();
     const HistorySample* s = fineSampleAgo(uptimeSec(), ageSec, VALID_PRESS);
     if (s) qnhHpa = s->pressureQnhX10 / 10.0f;
     xSemaphoreGive(historyMutex);
@@ -471,6 +604,7 @@ bool historyPressureAgo(uint32_t ageSec, float& qnhHpa)
 bool historyTempAgo(uint32_t ageSec, float& tempC)
 {
     xSemaphoreTake(historyMutex, portMAX_DELAY);
+    ensureRings();
     const HistorySample* s = fineSampleAgo(uptimeSec(), ageSec, VALID_BME280);
     if (s) tempC = s->tempCx10 / 10.0f;
     xSemaphoreGive(historyMutex);
@@ -487,6 +621,7 @@ float historyRainSum(uint32_t windowSec)
     uint32_t nowSec = uptimeSec();
     float mm = 0.0f;
     xSemaphoreTake(historyMutex, portMAX_DELAY);
+    ensureRings();
     for (size_t k = 0; k < fine.count; k++) {   // newest first
         const HistorySample& s = fine.ring[(fine.head + fine.capacity - 1 - k) % fine.capacity];
         if ((uint32_t)(nowSec - s.bucketEndSec + fine.bucketSec) > windowSec) break;
@@ -498,27 +633,35 @@ float historyRainSum(uint32_t windowSec)
 }
 
 // ---- Persistence (history_store.cpp writes the blobs to NVS) ----
-// Blob: 12-byte header "UWH" + version 1, u16 count, u16 bucketSec,
-// u32 epoch at saving; then `count` HistorySamples, oldest first, whose
-// bucketEndSec is the wall-clock (epoch) end of the window instead of the
-// uptime. Little endian (ESP32 and the host tests).
+// Blob: 12-byte header "UWH" + version, u16 count, u16 bucketSec, u32 epoch
+// at saving; then `count` HistorySamples, oldest first, whose bucketEndSec
+// is the wall-clock (epoch) end of the window instead of the uptime.
+// Version 2 adds the custom series: u8 n, then per series u32 key
+// (seriesKey) + `count` int16 entries in the same order; a restore takes a
+// series only into a slot with the same key. Version 1 (rc.8 and older) is
+// still read. Little endian (ESP32 and the host tests).
 namespace {
-constexpr uint8_t HISTORY_BLOB_VERSION = 1;
+constexpr uint8_t HISTORY_BLOB_VERSION = 2;
 }
 
 size_t historyBlobMaxSize(bool coarseTier)
 {
-    return HISTORY_BLOB_HEADER + (coarseTier ? HISTORY_COARSE_CAPACITY : HISTORY_FINE_CAPACITY) * sizeof(HistorySample);
+    const size_t cap = coarseTier ? HISTORY_COARSE_CAPACITY : HISTORY_FINE_CAPACITY;
+    return HISTORY_BLOB_HEADER + cap * sizeof(HistorySample) + 1 + SERIES_MAX * (4 + cap * sizeof(int16_t));
 }
 
 size_t historyExport(bool coarseTier, uint8_t* out, size_t cap)
 {
     const uint32_t nowSec = uptimeSec();
     xSemaphoreTake(historyMutex, portMAX_DELAY);
+    ensureRings();
     alignedNow(nowSec);
     const Tier& t = coarseTier ? coarse : fine;
     size_t n = 0;
-    if (clockOffsetFromEpoch && t.count && cap >= HISTORY_BLOB_HEADER + t.count * sizeof(HistorySample)) {
+    int nSer = 0;
+    for (int i = 0; i < SERIES_MAX; i++) nSer += serKey[i] && t.ser[i];
+    const size_t need = HISTORY_BLOB_HEADER + t.count * sizeof(HistorySample) + 1 + nSer * (4 + t.count * sizeof(int16_t));
+    if (clockOffsetFromEpoch && t.count && cap >= need) {
         const uint16_t count = (uint16_t)t.count, bucket = (uint16_t)t.bucketSec;
         const uint32_t savedEpoch = (uint32_t)((int64_t)nowSec + clockOffset);
         out[0] = 'U'; out[1] = 'W'; out[2] = 'H'; out[3] = HISTORY_BLOB_VERSION;
@@ -533,6 +676,16 @@ size_t historyExport(bool coarseTier, uint8_t* out, size_t cap)
             memcpy(out + n, &s, sizeof(s));
             n += sizeof(s);
         }
+        out[n++] = (uint8_t)nSer;
+        for (int k = 0; k < SERIES_MAX; k++) {
+            if (!serKey[k] || !t.ser[k]) continue;
+            memcpy(out + n, &serKey[k], 4);
+            n += 4;
+            for (size_t i = 0; i < t.count; i++) {
+                memcpy(out + n, &t.ser[k][(start + i) % t.capacity], 2);
+                n += 2;
+            }
+        }
     }
     xSemaphoreGive(historyMutex);
     return n;
@@ -543,15 +696,33 @@ size_t historyExport(bool coarseTier, uint8_t* out, size_t cap)
 // spaced; the newest `capacity` entries are kept.
 int historyImport(bool coarseTier, const uint8_t* in, size_t n)
 {
-    if (n < HISTORY_BLOB_HEADER || in[0] != 'U' || in[1] != 'W' || in[2] != 'H' || in[3] != HISTORY_BLOB_VERSION) return -1;
+    if (n < HISTORY_BLOB_HEADER || in[0] != 'U' || in[1] != 'W' || in[2] != 'H' || (in[3] != 1 && in[3] != 2)) return -1;
     uint16_t count, bucket;
     memcpy(&count, in + 4, 2);
     memcpy(&bucket, in + 6, 2);
     Tier& t = coarseTier ? coarse : fine;
-    if (bucket != t.bucketSec || count > t.capacity || n != HISTORY_BLOB_HEADER + count * sizeof(HistorySample)) return -1;
+    const size_t samplesEnd = HISTORY_BLOB_HEADER + count * sizeof(HistorySample);
+    if (bucket != t.bucketSec || count > t.capacity) return -1;
+    // version 2: the series section after the samples - its blob offset per slot (0 = not in the blob)
+    size_t serAt[SERIES_MAX] = {};
+    if (in[3] == 1) {
+        if (n != samplesEnd) return -1;
+    } else {
+        if (n < samplesEnd + 1) return -1;
+        const uint8_t ns = in[samplesEnd];
+        const size_t per = 4 + count * sizeof(int16_t);
+        if (ns > SERIES_MAX || n != samplesEnd + 1 + ns * per) return -1;
+        for (int j = 0; j < ns; j++) {
+            uint32_t key;
+            memcpy(&key, in + samplesEnd + 1 + j * per, 4);
+            for (int k = 0; k < SERIES_MAX; k++)
+                if (key && serKey[k] == key && !serAt[k]) serAt[k] = samplesEnd + 1 + j * per + 4;
+        }
+    }
 
     const uint32_t nowSec = uptimeSec();
     xSemaphoreTake(historyMutex, portMAX_DELAY);
+    ensureRings();
     alignedNow(nowSec);
     if (!clockOffsetFromEpoch) { xSemaphoreGive(historyMutex); return -1; }
     const int64_t bs = (int64_t)t.bucketSec;
@@ -567,11 +738,17 @@ int historyImport(bool coarseTier, const uint8_t* in, size_t n)
     }
 
     HistorySample* merged = new (std::nothrow) HistorySample[t.capacity];
-    if (!merged) { xSemaphoreGive(historyMutex); return -1; }
+    // where each merged entry came from: >= 0 ring index of this run, -1 a
+    // gap, <= -2 blob sample -2 - i (for the custom series)
+    int16_t* origin = new (std::nothrow) int16_t[t.capacity];
+    if (!merged || !origin) { delete[] merged; delete[] origin; xSemaphoreGive(historyMutex); return -1; }
     // newest first into a temporary ring: this run's entries, gaps, restored
     size_t m = 0;
-    for (size_t k = 0; k < t.count && m < t.capacity; k++)
-        merged[m++] = t.ring[(t.head + t.capacity - 1 - k) % t.capacity];
+    for (size_t k = 0; k < t.count && m < t.capacity; k++) {
+        const size_t at = (t.head + t.capacity - 1 - k) % t.capacity;
+        origin[m] = (int16_t)at;
+        merged[m++] = t.ring[at];
+    }
     int64_t lastRestored = INT64_MIN;
     for (int i = count - 1; i >= 0; i--) {
         HistorySample s;
@@ -582,26 +759,40 @@ int historyImport(bool coarseTier, const uint8_t* in, size_t n)
     if (lastRestored != INT64_MIN) {
         int64_t gaps = (boundary - lastRestored) / bs;
         for (int64_t g = 0; g < gaps && m < t.capacity; g++) {
-            HistorySample s{};
-            s.bucketEndSec = (uint32_t)(boundary - g * bs - clockOffset);
-            for (int j = 0; j < 3; j++) s.ds18b20X10[j] = DS18B20_INVALID_X10;
-            merged[m++] = s;
+            origin[m] = -1;
+            merged[m++] = gapSample((uint32_t)(boundary - g * bs - clockOffset));
         }
         for (int i = count - 1; i >= 0 && m < t.capacity; i--) {
             HistorySample s;
             memcpy(&s, in + HISTORY_BLOB_HEADER + (size_t)i * sizeof(s), sizeof(s));
             if ((int64_t)s.bucketEndSec > boundary) continue;
             s.bucketEndSec = (uint32_t)((int64_t)s.bucketEndSec - clockOffset);   // uptime (may wrap: ages are modulo 2^32)
+            origin[m] = (int16_t)(-2 - i);
             merged[m++] = s;
             restoredCount++;
         }
     }
     if (restoredCount) {
+        // the series first (their values of this run are read from the ring positions before they move)
+        int16_t* tmp = new (std::nothrow) int16_t[t.capacity];
+        for (int k = 0; k < SERIES_MAX; k++) {
+            if (!t.ser[k]) continue;
+            for (size_t i = 0; i < m; i++) {
+                const int o = origin[m - 1 - i];
+                int16_t v = SERIES_GAP;
+                if (o >= 0) v = t.ser[k][o];
+                else if (o <= -2 && serAt[k]) memcpy(&v, in + serAt[k] + (size_t)(-2 - o) * 2, 2);
+                if (tmp) tmp[i] = v;
+            }
+            for (size_t i = 0; i < t.capacity; i++) t.ser[k][i] = (tmp && i < m) ? tmp[i] : SERIES_GAP;
+        }
+        delete[] tmp;
         for (size_t i = 0; i < m; i++) t.ring[i] = merged[m - 1 - i];   // oldest first
         t.count = m;
         t.head = m % t.capacity;
     }
     delete[] merged;
+    delete[] origin;
     xSemaphoreGive(historyMutex);
     return restoredCount;
 }

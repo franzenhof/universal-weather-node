@@ -1,4 +1,5 @@
 #include "gz_send.h"
+#include "psram.h"
 #include "serial_log.h"
 #include <WebServer.h>
 #include <esp_heap_caps.h>
@@ -23,7 +24,7 @@ bool acceptsGzip(WebServer& srv)
 bool sendInflated(WebServer& srv, const uint8_t* gz, size_t gzLen, size_t rawLen, const char* type)
 {
     if (gzLen < GZ_HEADER + GZ_TRAILER || gz[0] != 0x1f || gz[1] != 0x8b || gz[3] != 0) return false;
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < TINFL_LZ_DICT_SIZE + 1024) return false;
+    if (bigAllocLargest() < TINFL_LZ_DICT_SIZE + 1024) return false;   // > 4 KB: PSRAM if active
     tinfl_decompressor* d = (tinfl_decompressor*)malloc(sizeof(tinfl_decompressor));
     uint8_t* win = (uint8_t*)malloc(TINFL_LZ_DICT_SIZE);
     if (!d || !win) { free(d); free(win); return false; }

@@ -16,14 +16,17 @@ bool ipValid(const char* s)
 }
 
 StaticIpOutcome staticIpCheck(bool en, const char* ip, const char* gw, const char* sn, const char* dns, bool changed,
-                              bool& effectiveEn)
+                              bool& effectiveEn, StaticIpField* bad)
 {
     effectiveEn = en;
+    if (bad) *bad = SIPF_NONE;
     if (!en) return SIP_APPLY;
     if (!ip || !*ip) { effectiveEn = false; return SIP_APPLY; }
     if (!changed) return SIP_KEEP;
-    const bool ok = ipValid(ip) && ipValid(gw) && ipValid(sn) && (!dns || !*dns || ipValid(dns));
-    return ok ? SIP_APPLY : SIP_INVALID;
+    const StaticIpField f = !ipValid(ip) ? SIPF_IP : !ipValid(gw) ? SIPF_GATEWAY : !ipValid(sn) ? SIPF_SUBNET
+                          : (dns && *dns && !ipValid(dns)) ? SIPF_DNS : SIPF_NONE;
+    if (bad) *bad = f;
+    return f == SIPF_NONE ? SIP_APPLY : SIP_INVALID;
 }
 
 RadioOffOutcome radioOffCheck(bool offRequested, bool confirmed, bool loraEnAfter, bool loraJoined)

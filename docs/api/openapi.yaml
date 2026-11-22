@@ -597,6 +597,94 @@ paths:
             text/plain:
               schema: { type: string }
 
+  /api/display/preview:
+    post:
+      tags: [admin]
+      operationId: postDisplayPreview
+      summary: Preview a custom OLED screen
+      description: |
+        Draws a custom screen of the built-in display from the posted
+        (possibly unsaved) fields with the current values, off-screen - the
+        preview on the settings page (Display tab). Form fields: `m` layout
+        (0 = title + 5 small lines, 1 = title + large value + 2 lines), `t`
+        title, `l0`-`l4` lines (placeholder templates, docs/settings.md).
+        Answer: 2048 hex digits, the 1024 bytes of the 128 x 64 SSD1306
+        buffer (byte x + 128 * page, bit n = row 8 * page + n). Same-origin.
+      security: [{ digest: [] }]
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                m: { type: string, enum: ["0", "1"] }
+                t: { type: string, maxLength: 23 }
+                l0: { type: string, maxLength: 39 }
+                l1: { type: string, maxLength: 39 }
+                l2: { type: string, maxLength: 39 }
+                l3: { type: string, maxLength: 39 }
+                l4: { type: string, maxLength: 39 }
+      responses:
+        "200":
+          description: The display buffer as 2048 lowercase hex digits.
+          content:
+            text/plain:
+              schema: { type: string, pattern: "^[0-9a-f]{2048}$" }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403":
+          description: No admin password configured, or a cross-site request.
+          content:
+            text/plain:
+              schema: { type: string }
+        "503":
+          description: Not enough memory for the canvas right now.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /api/placeholders:
+    get:
+      tags: [admin]
+      operationId: getPlaceholders
+      summary: Placeholders that have a value now
+      description: |
+        For the settings page's "Available placeholders" lists. `for=display`:
+        as on a custom OLED screen (device units, plus `clock`, `date`, `ip`
+        and the unit labels `u_*`); `upload` / `alarm`: as in the custom
+        uploads and alarm texts (metric). Only names with a value right now;
+        wireless sensors as `rf<N>_<field>` with `s` = the sensor's name, or
+        model and ID. `alarm` adds `event`: the names filled in at the time
+        of an alarm.
+      security: [{ digest: [] }]
+      parameters:
+        - name: for
+          in: query
+          required: false
+          schema: { type: string, enum: [display, upload, alarm] }
+      responses:
+        "200":
+          description: The list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [n, v]
+                      properties:
+                        n: { type: string, description: "name without braces" }
+                        v: { type: string, description: "current value as the placeholder renders it, without unit" }
+                        u: { type: string, description: "unit, if any" }
+                        s: { type: string, description: "wireless sensor (name, or model and ID)" }
+                  event:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+
   /api/settings/restore:
     post:
       tags: [admin]

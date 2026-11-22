@@ -52,6 +52,21 @@ void phFormat(const PhValue& v, const char* suffix, char* out, size_t len)
     float x = v.v;
     int dec = v.decimals;
     bool unitSet = false;
+    auto unit = [&](const char* tok) {
+        switch (v.kind) {
+            case PK_TEMP:  if (!strcmp(tok, "f")) { x = x * 1.8f + 32.0f; } break;
+            case PK_SPEED:
+                if      (!strcmp(tok, "kmh")) { x *= 3.6f; }
+                else if (!strcmp(tok, "mph")) { x *= 2.236936f; }
+                else if (!strcmp(tok, "kn"))  { x *= 1.943844f; }
+                break;
+            case PK_RAIN: case PK_RATE:
+                if (!strcmp(tok, "in")) { x /= 25.4f; if (dec < 0) dec = 2; }
+                break;
+            case PK_PRESS: if (!strcmp(tok, "inhg")) { x /= 33.8639f; if (dec < 0) dec = 2; } break;
+            default: break;
+        }
+    };
     // suffix tokens separated by ':'
     char buf[24];
     snprintf(buf, sizeof(buf), "%s", suffix ? suffix : "");
@@ -59,24 +74,10 @@ void phFormat(const PhValue& v, const char* suffix, char* out, size_t len)
         char* next = strchr(tok, ':');
         if (next) *next++ = '\0';
         if (tok[0] == '.' && tok[1] >= '0' && tok[1] <= '4' && !tok[2]) dec = tok[1] - '0';
-        else if (!unitSet) {
-            unitSet = true;
-            switch (v.kind) {
-                case PK_TEMP:  if (!strcmp(tok, "f")) { x = x * 1.8f + 32.0f; } break;
-                case PK_SPEED:
-                    if      (!strcmp(tok, "kmh")) { x *= 3.6f; }
-                    else if (!strcmp(tok, "mph")) { x *= 2.236936f; }
-                    else if (!strcmp(tok, "kn"))  { x *= 1.943844f; }
-                    break;
-                case PK_RAIN: case PK_RATE:
-                    if (!strcmp(tok, "in")) { x /= 25.4f; if (dec < 0) dec = 2; }
-                    break;
-                case PK_PRESS: if (!strcmp(tok, "inhg")) { x /= 33.8639f; if (dec < 0) dec = 2; } break;
-                default: break;
-            }
-        }
+        else if (!unitSet) { unitSet = true; unit(tok); }
         tok = next;
     }
+    if (!unitSet && v.defUnit) unit(v.defUnit);
     if (dec < 0) dec = v.kind == PK_PLAIN ? 0 : 1;
     if (dec > 4) dec = 4;
     snprintf(out, len, "%.*f", dec, (double)x);

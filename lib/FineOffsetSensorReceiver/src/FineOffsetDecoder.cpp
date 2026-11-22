@@ -43,6 +43,15 @@ const Family FAMILIES[] = {
     { FO_FAMILY_WH46,  21, "WH46" },
     { FO_FAMILY_WH55,  10, "WH55" },   // followed by 2 bytes of unknown meaning (not checked)
     { FO_FAMILY_WH52,  24, "WH52" },
+    // LDS01: 19-byte frames (CRC-8 at byte 17, sum at 18) every 80 s, seen in
+    // a forum radio trace (rc.8, 2026-11-21); the field meanings are not
+    // confirmed yet - recognised and listed, no values
+    { FO_FAMILY_LDS01, 19, "LDS01" },
+    // Radio-clock time of a WH31 with a time receiver (rtl_433 ambientweather_wh31e.c,
+    // "RCC", type 0x52; seen there from a WWVB WH31E, the DCF77 version - e.g. DNT -
+    // is assumed to send the same): YY II UU YY MM DD HH mm SS CC XX, date and
+    // time in BCD. Sent after a battery change and when the clock syncs.
+    { FO_FAMILY_RCC,   11, "RCC" },
 };
 
 const Family* findFamily(uint8_t code)
@@ -242,7 +251,21 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             // 0 % is outside the WH31's range (1-99 %): treated as "no humidity",
             // e.g. a temperature-only sensor sending the WH31 frame (WN30)
             if (b[4]) setHumidity(o, b[4]);
+            else if (f->code == FO_FAMILY_WH31) o.model = "WN30";   // temperature only: the WN30 sends this frame
             break;
+        case FO_FAMILY_RCC: {
+            auto bcd = [](uint8_t v, uint8_t mask) { v &= mask; return (int)((v >> 4) * 10 + (v & 0x0F)); };
+            const int y = bcd(b[3], 0xFF), mo = bcd(b[4], 0x1F), d = bcd(b[5], 0x3F);
+            const int h = bcd(b[6], 0x3F), mi = bcd(b[7], 0x7F), s = bcd(b[8], 0x7F);
+            if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) return false;
+            o.id = b[1];
+            o.hasClock = true;
+            o.clockYear = (uint16_t)(2000 + y);
+            o.clockMonth = (uint8_t)mo; o.clockDay = (uint8_t)d;
+            o.clockHour = (uint8_t)h; o.clockMinute = (uint8_t)mi; o.clockSecond = (uint8_t)s;
+            o.batteryKnown = false;
+            break;
+        }
         case FO_FAMILY_WN34: case FO_FAMILY_WN38: {
             o.id = be24(b + 1);
             // 12-bit two's complement, tenths; sub-type 4 (WN34D, WN38) without the +40 offset
@@ -362,6 +385,10 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             // battery: not decoded (the published byte / scaling are not settled)
             break;
         }
+        case FO_FAMILY_LDS01:                         // 54 II II II then 13 bytes not decoded yet, CC SS
+            o.id = be24(b + 1);
+            o.batteryKnown = false;
+            break;
         default:
             return false;
     }

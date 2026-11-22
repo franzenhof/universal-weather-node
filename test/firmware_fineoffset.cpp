@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 
 #include "config.h"
 Config gCfg;   // rf_sensors_data.cpp reads the sensor lists (runtime.cpp is not linked here)
@@ -437,5 +438,94 @@ int main()
     assert(foDecode(wh65b, sizeof(wh65b), f));
     v = rfFineOffsetValues(f);
     assert(near(rfStoreValues(r, v, 17000, gap), 0.508f) && gap == 0);
+
+    // ---- Real frames from a forum radio trace (rc.8 on a Heltec V4, 21 Nov 2026) ----
+    // Each frame as received, with the values the node showed - a regression
+    // check of every decoder against real sensors, not only published examples.
+    {
+        struct Real { const char* hex; uint32_t id; const char* model; };
+        auto ok = [&](const char* h, uint32_t id, const char* model) {
+            const bool d = dec(h, f);
+            if (!(d && rfFineOffsetId(f) == id && !strcmp(f.model, model) && f.batteryKnown))
+                printf("REAL FRAME %s: decoded %d id %08lX model %s\n", h, d, (unsigned long)rfFineOffsetId(f), f.model);
+            assert(d && rfFineOffsetId(f) == id && !strcmp(f.model, model) && f.batteryKnown);
+        };
+        ok("900181A20000A089C25908F00C003FFFB4E50F01965D0A4F943737F3FDA315D9", 0x900181A2, "WS90");
+        assert(near(f.tempC, 5.0f, 0.05f) && f.humidity == 89 && near(f.windAvgMs, 0.8f, 0.05f) && near(f.windGustMs, 1.2f, 0.05f));
+        assert(f.windDirDeg == 240 && near(f.rainMm, 40.6f, 0.05f) && f.uvIndex == 0.0f && f.lightLux == 0.0f);
+        assert(near(f.supercapV, 2.9f, 0.01f) && f.batteryMv == 3200 && f.batteryOk);
+        ok("4500394902662B4014801B0201B0FC", 0x45003949, "WH45");
+        assert(near(f.tempC, 21.4f, 0.05f) && f.humidity == 43 && near(f.pm25, 2.0f, 0.51f) && near(f.pm10, 3.0f, 0.51f) && f.co2Ppm == 513);
+        ok("35002C1D0003D05D55ADB0", 0x35002C1D, "WN35");
+        assert(f.leafWetnessPct == 93 && f.batteryMv == 1700);
+        ok("34007A6F40B54A57B3", 0x34007A6F, "WN34");          // sub-type 4: no +40 offset
+        assert(near(f.tempC, 18.1f, 0.05f) && f.batteryMv == 1480);
+        ok("3400A3C901BC4829CE", 0x3400A3C9, "WN34");          // sub-type 0: +40 offset
+        assert(near(f.tempC, 4.4f, 0.05f) && f.batteryMv == 1440);
+        ok("380029174020556592", 0x38002917, "WN38");
+        assert(near(f.tempC, 3.2f, 0.05f) && f.batteryMv == 1700);
+        ok("30DBB2812970D7", 0x300004DB, "WH31");
+        assert(f.channel == 4 && near(f.tempC, 24.1f, 0.05f) && f.humidity == 41 && f.batteryOk);
+        ok("40018EB8911C9AA674", 0x40018EB8, "WH40");
+        assert(near(f.rainMm, 732.2f, 0.05f) && f.batteryMv == 1700);
+        ok("40018EB8901C9AE0AD", 0x40018EB8, "WH40");
+        assert(near(f.rainMm, 732.2f, 0.05f) && f.batteryMv == 1600);
+        ok("20002AA492159D047FB5", 0x20002AA4, "WN20");
+        assert(near(f.rainMm, 553.3f, 0.05f) && f.batteryMv == 2920);
+        ok("5500ED880302BB3EE4AC", 0x5500ED88, "WH55");
+        assert(f.channel == 1 && f.hasLeak && !f.leak);
+        ok("510F651B0F7F11F87FFFFFFF9C8F", 0x510F651B, "WH51");
+        assert(f.moisture == 17 && f.batteryMv == 1500);
+        ok("57413CFF033F5968D6", 0x57013CFF, "WH57");
+        assert(f.hasLightning && f.lightningCount == 89 && f.stormDistanceKm == FO_LIGHTNING_NO_DISTANCE);
+        ok("A20042FF01CA1C3C300CAE1604FC5352854A7AD55304B2D2", 0xA20042FF, "WH52");
+        assert(near(f.tempC, 5.8f, 0.05f) && f.moisture == 28 && near(f.conductivityUsCm, 127.0f, 0.5f));
+        ok("A200825202661761302E2126764A938674D67BD84A0930F4", 0xA2008252, "WH52");
+        assert(near(f.tempC, 21.4f, 0.05f) && f.moisture == 23 && near(f.conductivityUsCm, 461.0f, 0.5f));
+        ok("ECE267242761E105", 0x250000CE, "WN32P");           // WN32P: WH25 frame (type 0xE)
+        assert(f.family == FO_FAMILY_WH25 && near(f.tempC, 21.5f, 0.05f) && f.humidity == 36 && near(f.pressureHpa, 1008.1f, 0.05f));
+        ok("D6C1BF5AFFFFAE6C", 0x3200006C, "WN32");           // WN32: WH32 frame (type 0xD)
+        assert(f.family == FO_FAMILY_WH32 && near(f.tempC, 4.7f, 0.05f) && f.humidity == 90 && !f.hasPressure);
+
+        // LDS01 (family 0x54): 19-byte frames every 80 s, CRC-8 at 17 and sum
+        // at 18; recognised by ID, the fields are not decoded yet
+        assert(foFrameLength(FO_FAMILY_LDS01) == 19);
+        const char* const lds[] = { "548028018C64052940000007093FEC1A66FF15", "548028018C64052A400000070946B61A66866E",
+                                    "548028018C64052A4000000A094CCA1A66292E", "548028018C6405294000000B0948FD1A6690C4",
+                                    "548028018C64052A4000000E0947BD1A6608FF" };
+        for (const char* h : lds) {
+            assert(dec(h, f) && !strcmp(f.model, "LDS01") && f.family == FO_FAMILY_LDS01 && f.id == 0x802801);
+            assert(rfFineOffsetId(f) == 0x54802801 && !f.batteryKnown && !f.hasTemp && !f.hasRain);
+        }
+        uint8_t bad[19];
+        hex(lds[0], bad); bad[10] ^= 0x01;   // one bit off: CRC and sum fail
+        assert(!foDecode(bad, rx(buf, bad, sizeof(bad)), f));
+        RfSensorReading nr; nr.proto = RF_PROTO_FINEOFFSET; nr.id = 0x54802801;
+        assert(rfNominalIntervalMs(nr) == 80000);
+    }
+    // WN30: the WH31 frame with humidity 0 = temperature only, named WN30
+    {
+        uint8_t fr[7] = { 0x30, 0xA3, 0x02, 0x72, 0x00, 0, 0 }, buf[FO_MAX_FRAME_LEN];
+        seal(fr, 7);
+        FoFrame w;
+        assert(foDecode(buf, rx(buf, fr, 7), w));
+        assert(!strcmp(w.model, "WN30") && w.hasTemp && !w.hasHumidity && near(w.tempC, 22.6f));
+        fr[4] = 41; seal(fr, 7);
+        assert(foDecode(buf, rx(buf, fr, 7), w) && !strcmp(w.model, "WH31") && w.hasHumidity);
+    }
+    // Radio-clock time (family 0x52, rtl_433 "RCC"): BCD date / time, no sensor values
+    {
+        uint8_t fr[11] = { 0x52, 0xA3, 0x4A, 0x26, 0x11, 0x22, 0x18, 0x05, 0x09, 0, 0 }, buf[FO_MAX_FRAME_LEN];
+        seal(fr, 11);
+        FoFrame c;
+        assert(foFrameLength(FO_FAMILY_RCC) == 11);
+        assert(foDecode(buf, rx(buf, fr, 11), c));
+        assert(c.hasClock && c.id == 0xA3 && c.clockYear == 2026 && c.clockMonth == 11 && c.clockDay == 22 &&
+               c.clockHour == 18 && c.clockMinute == 5 && c.clockSecond == 9 && !c.hasTemp);
+        fr[4] = 0x13; seal(fr, 11);   // month 13: rejected
+        assert(!foDecode(buf, rx(buf, fr, 11), c));
+        fr[4] = 0x11; fr[6] = 0x24; seal(fr, 11);   // hour 24: rejected
+        assert(!foDecode(buf, rx(buf, fr, 11), c));
+    }
     return 0;
 }

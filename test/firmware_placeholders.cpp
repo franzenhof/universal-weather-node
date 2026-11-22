@@ -19,6 +19,15 @@ static bool lookup(const char* n, PhValue& o, void*)
     return false;   // unknown, or "missing" (not available now)
 }
 
+// as the OLED lookup does: the device's units unless the placeholder names one
+static bool lookupImperial(const char* n, PhValue& o, void* ctx)
+{
+    if (!lookup(n, o, ctx)) return false;
+    o.defUnit = o.kind == PK_TEMP ? "f" : o.kind == PK_SPEED ? "mph" : o.kind == PK_RAIN || o.kind == PK_RATE ? "in"
+              : o.kind == PK_PRESS ? "inhg" : nullptr;
+    return true;
+}
+
 static std::string r(const char* tpl, PhEnc enc = PE_NONE, int* empty = nullptr, size_t len = 256)
 {
     char out[256];
@@ -53,5 +62,11 @@ int main()
     phRender("{temp}", tiny, sizeof(tiny), PE_NONE, lookup, nullptr);
     assert(tiny[0] == '\0');
     puts("placeholders ok");
+    // default unit (defUnit): applied without a unit suffix, an explicit one wins
+    {
+        char out[128];
+        phRender("{temp} {wind} {rain_day} {qnh} {hum} {temp:c} {wind:kmh:.0} {temp:.0}", out, sizeof(out), PE_NONE, lookupImperial, nullptr);
+        assert(std::string(out) == "70.5 11.2 0.50 29.92 63 21.4 18 70");
+    }
     return 0;
 }

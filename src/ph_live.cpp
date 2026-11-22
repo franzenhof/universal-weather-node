@@ -97,3 +97,12 @@ bool phLiveLookup(const char* n, PhValue& o, void* ctx)
     if (!strcmp(n, "lon"))        return text(o, gCfg.longitude);
     return false;
 }
+
+const char* const PH_LIVE_NAMES[] = {
+    "temp", "hum", "dew", "feels", "qnh", "press", "ptend3h", "wind", "gust", "dir",
+    "rain_day", "rain_1h", "rain_24h", "rain_rate", "uv", "lux", "solar",
+    "time_local", "time_utc", "epoch", "station", "lat", "lon",
+};
+const int PH_LIVE_NAME_COUNT = sizeof(PH_LIVE_NAMES) / sizeof(PH_LIVE_NAMES[0]);
+const char* const PH_RF_FIELDS[] = { "temp", "hum", "wind", "gust", "dir", "rain", "uv", "lux", "batt" };
+const int PH_RF_FIELD_COUNT = sizeof(PH_RF_FIELDS) / sizeof(PH_RF_FIELDS[0]);

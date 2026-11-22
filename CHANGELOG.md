@@ -4,21 +4,82 @@ Release notes of the Universal Weather Node firmware, newest first. Binaries are
 
 [← back to README](README.md)
 
+## 2.0.0
+
+Firmware: [`universal-weather-node-2.0.0.bin`](firmware/universal-weather-node-2.0.0.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-factory.bin`](firmware/universal-weather-node-2.0.0-factory.bin) (first installation, USB at `0x0`). For the **Heltec WiFi LoRa 32 V3 and V4** (V4: ESP32-S3R2; not the V4-R8). The first release since **1.1.1** — it sums up 1.2.0-beta.1, 1.3.0-beta.1/2 and all 2.0.0 betas and release candidates (details in their sections below; the beta and release-candidate binaries were removed with this release — use 2.0.0).
+
+**Updating**
+- **From 1.1.1 (or a 1.x / 2.0.0 beta):** OTA with **`universal-weather-node-2.0.0.bin`** (the file *without* `-factory`; 1.x and 2.0.0-beta.2 or older must never get the factory file). The partition table is unchanged since 1.1.1, settings, LoRaWAN session and rain totals are kept. **Update the payload decoder on ChirpStack / TTN first** — compact binary format version 4 ([`decoder.js`](chirpstack/decoder.js) reads versions 1–4).
+- **From a 2.0.0 release candidate:** either file over *Settings → System → Firmware update*. From rc.5 or older, check the notes of [rc.6](#200-rc6) (value source *Off*, *Auto* with ★ sensors).
+- New functions are off or keep the previous behaviour by default. New: the values are evaluated every **30 s** (*Measurement cycle*), independent of the LoRaWAN interval, which stays as it was.
+
+**Hardware**
+- **Heltec WiFi LoRa 32 V4** (V4.2 / V4.3) next to the V3: detected by itself, RF front end (GC1109 / KCT8103L) controlled, transmit power corrected for the PA, native-USB log; its **2 MB PSRAM is used** (chart history, large buffers, HTTPS) — custom series and memory have more room there.
+- **PCB v2.0** (KiCad, SMD, sockets for a V3 *or* a V4): own power supply, heater and fan outputs with temperature control, AUX analog / pulse inputs, UV input, isolated Victron VE.Direct, second wind sensor, switched 1-Wire and vane supply, hardware revision ID (detected by itself). Rev 1.2 / 1.3 keep working.
+- **Low-power mode** for LoRa-only nodes (light sleep between samples).
+
+**Wireless sensors — received directly with the LoRa chip, no extra hardware**
+- **Bresser** (5/6/7-in-1, thermo-hygro, soil, lightning, leak …), **Ecowitt / Froggit (Fine Offset)** — WS90, WS85, WS80, WS68, WH65/WS69, WH24, WH31/WN31/DP50, WN30, WN32/WN32P, WN34, WN38, WH40, WN20, WH51, WH52, WH55, WH57, WN35, WH41/WH43/WH45/WH46, LDS01 (listed) —, **TFA / LaCrosse IT+**, **Davis** Vantage Pro2 / Vue (experimental).
+- Up to **32 sensors**: *Mine* (★) / *Received* / *Hidden*, names, Ecowitt IDs, battery and signal, auto search for the sensor type, timed switching between families (e.g. Bresser and Ecowitt together), *Only my sensors*.
+- **Value sources** per value group (temperature/humidity, wind, rain, UV, light, pressure): board, a wireless sensor 1–32 or *Auto* (your ★ order, Ecowitt's sensor hierarchy).
+- **Calibration** per sensor (offsets, factors, WN20 rain correction), WH51 two-point calibration, wind-direction calibration wizard.
+- **Radio trace** for support: every packet with raw bytes, reception rate and read delay per sensor ([how a frame is decoded](docs/fineoffset-frames.md)).
+- **Custom series:** soil moisture, lightning, leaf wetness, PM, CO₂, probes … with their own charts (up to 4 on a V3, 8 on a V4).
+
+**Outputs**
+- **LoRaWAN:** compact binary format version 4 (variable presence mask, fitted to the data rate) or CayenneLPP; duty-cycle aware.
+- **MQTT and Home Assistant** (discovery, one device per wireless sensor, TLS), **Loxone** UDP.
+- **Weather networks:** AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap, Met Office WOW — plus **custom uploads** (GET / POST with placeholders).
+- **Alarms and notifications:** up to 12 rules (values, wireless sensors, frost, fog, sultry, leak, battery …) to ntfy, Pushover, Telegram, MQTT or a webhook.
+- Per-output **send status**; each output keeps its own interval and wind / rain window.
+
+**Web interface**
+- **Dashboard:** live values, wind compass and rose, rain totals, sun and moon, records (today to all time), trend charts for 24 h and 7 days kept across restarts and updates, derived values (dew point, feels like, vapour pressure deficit, trends, weather trend, rain week / month / year).
+- **Settings in tabs**, setup wizard, five languages (EN, DE, FR, ES, PT), **firmware update in the browser**, settings backup / restore, install as an app, dark mode.
+- **Display:** weather screens, two custom screens with live preview, orientation, battery voltage, heartbeat LED.
+- **HTTP API** as a documented, versioned contract (`/api/data`, `/api/history`, `/api/info`, `/api/records`, CORS, mDNS), with a mock server for your own displays.
+
+**System**
+- Arduino-ESP32 2.0.17 (ESP-IDF 4.4.7); HTTPS only with enough memory; free heap and stack on the status page; settings storage checked at the start (data of another firmware is cleared); many robustness fixes from a review of the whole firmware.
+
+### Changes since 2.0.0-rc.8
+
+- **Free stack on the status page:** the lowest free stack so far of the loop, web and upload tasks (FreeRTOS high-water mark), also in `/api/info` as `system.stackFree` (`loop`, `web`, `wxUpload`, bytes) — a value near 0 warns before a stack overflow like the one fixed in rc.8.
+- **Reset buttons: cross-site check added** — `POST /api/settings/reset` (rc.6) was missing the same-origin check every other state-changing request has; a foreign web page could have reset the records or deleted the chart history in a browser logged in to the node.
+- **Static IP: the message names the field** — a rejected static IP now says which field is missing or invalid (e.g. *static IP: gateway missing or invalid – nothing changed*) instead of only "invalid address"; on a newly set-up node the gateway is empty and has to be filled in together with the address (forum report).
+- **PSRAM (Heltec V4) is used – it never was before:** up to rc.8 the build lacked the switch that lets the Arduino core start the PSRAM (`BOARD_HAS_PSRAM`), so a V4 ran with the V3's memory (the V4 radio trace in the forum: 87 KiB free). Now: the chart history, the 10-min wind window and – automatically – every buffer of 4 KB and more (radio trace, HTTPS / TLS, Wi-Fi) go to the PSRAM; on a V3 they stay in internal RAM as before. The memory figures (status page, `/api/info` `heapFree` / `heapMin` / `heapLargest`, the HTTPS memory guard) now count internal RAM only; a running PSRAM shows as its own status-page row and as `system.psram` in `/api/info`. A V4 whose PSRAM still does not start says so on the status page, and the boot log repeats the driver's reason (it goes to UART0 only, never seen over the V4's USB log).
+- **Radio trace of a tester evaluated (forum, rc.8 with 21 Ecowitt sensors), and what came of it:**
+  - **LDS01 recognised:** the laser distance sensor sends 19-byte Fine Offset frames (family `0x54`) every 80 s; it now appears in the sensor table with ID, signal and packets (mark it ★, name it). Its values are not decoded yet – the trace file shows the raw bytes.
+  - **The trace file shows the reception rate:** per sensor, how many of the transmissions expected from its send interval arrived (`5 of 6 sent (83 %)`, the repeat that WH31, WH51, WN32, … send ~60 ms later is not counted twice), and how long packets waited for the firmware (*read delay*). Reason: the WS90 in the trace arrived only about one time in three although it was one of the strongest sensors – the next trace shows where that comes from.
+  - Real frames of all 15 sensor models in the trace are now regression tests of the decoders; WH57 counts strikes as a running total (stays at its value between storms).
+- **Display: the bottom line is fully visible again** — the six text lines of the classic screen (and of the config portal and the LoRaWAN result) were 11 px apart, so the last one (*RF: n sensor(s)* / uplink result) was cut off at the bottom on every V3 and V4 since the first version; now they fit the 64 px (forum report). The big-value screens moved their last line up by one pixel.
+- **Display: three new options** under *Settings → Display* (all off by default, existing nodes look as before): **orientation** rotated by 180° (a V4 held like in Meshtastic showed the text upside down), **battery voltage top right** on every screen (the Heltec's LiPo, *USB* without one — also without the LiPo measurement for the outputs) and a **heartbeat LED** (the Heltec's white LED on GPIO35 flashes every 2 s while the firmware runs, also with the display off). Forum suggestions.
+- **Settings page: typing in the Display and System tabs no longer lags** — every keystroke there cost the browser 0.2–0.4 s (Safari, Chrome on macOS and Windows; with a few characters the Mac's spinning wheel). Cause: the ~350 fields of the Alarms tab sat inside the settings form, reassociated with their own form by `form='aform'`; the browsers' autofill / password handling went through them on every keystroke in a field after them. The Alarms tab is now its own form after the settings form (measured: 0–1 ms per keystroke in every tab). Present since the Alarms tab exists.
+- **Own measurement cycle, decoupled from LoRaWAN:** new setting *Measurement cycle* (*Settings → Measurement*, 10–600 s, default **30 s**). The values — status page, REST API, display, chart, records, alarms — are evaluated that often; LoRaWAN, MQTT and Loxone send on their own intervals as before, each with its own wind and rain window (a 300-s uplink still covers 300 s). Up to rc.8 the cycle was the LoRaWAN interval, even with LoRaWAN off — on a node with the default 300 s the dashboard values changed only every 5 minutes. The first cycle now completes 30 s after a start (was a whole interval), so values, display and the chart's first point are there at once. LoRa-only low-power mode keeps the LoRaWAN interval as its cycle. The setting formerly called *LoRaWAN / measurement interval* is now *LoRaWAN uplink interval*.
+- **Log: cycle summary at most once a minute** (`[Cycle … wind samples] …`), and *Wind: no valid sample* only when it starts — with a short measurement cycle these lines pushed everything else out of the 4-KB log.
+- **WN30 by its name:** a WH31 frame without humidity is the temperature-only WN30 (forum note) — model *WN30*, on the dashboard a temperature probe instead of a thermo-hygro sensor; IT+ and other temperature-only sensors likewise.
+- **Radio-clock time of a WH31 with a time receiver** (e.g. the DNT version with DCF77, forum question): its time frame (family `0x52`, decoded as in rtl_433) is recognised and shown on the status page (*Radio-clock time*, with the sensor's ID and how long ago) and in the radio trace — it no longer appears as an unknown frame. Not used as the node's clock yet.
+- **Custom series — own charts for soil moisture, lightning & co.:** *Settings → Sensors → Custom series*: a free-text name, a source (wireless sensor or the board's DS18B20 probes) and a value — soil moisture, leaf wetness, lightning (strikes per bucket from the sensor's counter), storm distance, PM2.5 / PM10, CO₂, soil conductivity, temperature, humidity, pressure, illuminance, UV, battery or super capacitor voltage. Each gets its own chart on the dashboard (24 h / 7 days), with the series' name as title. Up to 4 series on a V3, 8 with PSRAM (V4); memory (~0.9 KB each) only for series that are set up; saved with the history (format version 2, older saved histories are still read). `/api/history` carries them as `series`.
+- **Available placeholders, with their current values:** a list under the custom screens, the custom uploads and the alarm texts shows every placeholder that has a value right now (wireless sensors with their name); a click inserts it at the cursor of the field used last. Loaded only when opened (`GET /api/placeholders`).
+- **Display: two custom screens** under *Settings → Display*: title plus 5 small lines, or title plus a large value and 2 lines, filled with placeholders as for the custom uploads (`Garden {rf2_temp:.1}{u_temp}`) — in the device's units, with `{clock}`, `{date}`, `{ip}` and the unit labels on top; a missing value shows as `--`. A preview below each screen draws it with the current values, also before saving (redrawn while typing, at most one request at a time, or with a button) (`POST /api/display/preview`). Tick them under *Screens* to include them in the rotation.
+- **Framework: Arduino-ESP32 2.0.17 (ESP-IDF 4.4.7)** instead of 2.0.11 (4.4.5) – the last 2.x release (PlatformIO `espressif32 @ 6.11.0`), no code changes needed. Measured on a V3: 1–4 KB more free internal RAM (after start 256 instead of 247 KB, lowest value 132 instead of 128 KB, largest block 127 instead of 123 KB). The new bootloader comes with the factory image; an OTA update keeps the old one, which works too (tested).
+- **Dashboard names WN32P and WN32 by their role:** *Indoor sensor (temperature, humidity, pressure)* and *Outdoor sensor (temperature, humidity)* instead of the generic thermo-hygro sensor of the WH31 (forum suggestion).
+
 ## 2.0.0-rc.8
 
-Firmware: [`universal-weather-node-2.0.0-rc.8.bin`](firmware/universal-weather-node-2.0.0-rc.8.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.8-factory.bin`](firmware/universal-weather-node-2.0.0-rc.8-factory.bin) (first installation, USB at `0x0`). **Fix release — needed for every new installation** (rc.5 to rc.7 could not start on a new node); running nodes: update when convenient, nothing to check afterwards.
+Firmware: `universal-weather-node-2.0.0-rc.8.bin` (OTA / USB at `0x10000`) and `universal-weather-node-2.0.0-rc.8-factory.bin` (first installation, USB at `0x0`). **Fix release — needed for every new installation** (rc.5 to rc.7 could not start on a new node); running nodes: update when convenient, nothing to check afterwards.
 
 - **New nodes did not start (restart loop, no `WeatherNode` Wi-Fi) — since 2.0.0-rc.5:** the settings structure has grown to about 7 KB (alarms, custom uploads, sensor names, MQTT certificate), and the setup portal held four copies of it on the 24-KB loop-task stack — on the first start of a new node (and with the PRG button) it overflowed (`Stack overflow in task loopTask`). The portal now writes the settings in place and keeps its snapshot on the heap; saving the wind-direction calibration from the web settings (8-KB web task) no longer puts a copy on the stack either. The log shows the free stack when the portal starts and saves. Thanks to Dirk for the log. (The rc.7 fix for a settings area left by another firmware stays — it was not the cause here.)
 
 ## 2.0.0-rc.7
 
-Firmware: [`universal-weather-node-2.0.0-rc.7.bin`](firmware/universal-weather-node-2.0.0-rc.7.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.7-factory.bin`](firmware/universal-weather-node-2.0.0-rc.7-factory.bin) (first installation, USB at `0x0`). A small fix release on top of rc.6; nothing to check after the update.
+Firmware: `universal-weather-node-2.0.0-rc.7.bin` (OTA / USB at `0x10000`) and `universal-weather-node-2.0.0-rc.7-factory.bin` (first installation, USB at `0x0`). A small fix release on top of rc.6; nothing to check after the update.
 
 - **Settings storage with data of another firmware:** if *cfgdata* is not usable as settings storage — e.g. after Meshtastic, whose file system lies at the same flash address, and flashing only the factory image without erasing — the node now erases that partition at the start and comes up like a new one (setup portal) instead of failing to start. Erasing the whole chip when flashing (ESPHome web flasher: *Erase device*) still is the cleanest way.
 
 ## 2.0.0-rc.6
 
-Firmware: [`universal-weather-node-2.0.0-rc.6.bin`](firmware/universal-weather-node-2.0.0-rc.6.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.6-factory.bin`](firmware/universal-weather-node-2.0.0-rc.6-factory.bin) (first installation, USB at `0x0`). Update from rc.5 under Settings → System → Firmware update; from rc.4 or older through the config portal (in a normal browser, see [installation](docs/installation.md#firmware-update-ota)).
+Firmware: `universal-weather-node-2.0.0-rc.6.bin` (OTA / USB at `0x10000`) and `universal-weather-node-2.0.0-rc.6-factory.bin` (first installation, USB at `0x0`). Update from rc.5 under Settings → System → Firmware update; from rc.4 or older through the config portal (in a normal browser, see [installation](docs/installation.md#firmware-update-ota)).
 
 **Check after the update** (release candidate: no conversion of old settings):
 - a **value source set to *Off*** has to be set again (the value changed from `6` to `34`; otherwise it reads *Wireless 5*);
@@ -41,7 +102,7 @@ Firmware: [`universal-weather-node-2.0.0-rc.6.bin`](firmware/universal-weather-n
 
 ## 2.0.0-rc.5
 
-Firmware: [`universal-weather-node-2.0.0-rc.5.bin`](firmware/universal-weather-node-2.0.0-rc.5.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.5-factory.bin`](firmware/universal-weather-node-2.0.0-rc.5-factory.bin) (first installation, USB at `0x0`).
+Firmware: `universal-weather-node-2.0.0-rc.5.bin` (OTA / USB at `0x10000`) and `universal-weather-node-2.0.0-rc.5-factory.bin` (first installation, USB at `0x0`).
 
 Payload format unchanged except two new bits in the value-source field; existing nodes keep their settings and behave as before (pressure source *Auto* = the BME280 when one is detected).
 
@@ -158,7 +219,7 @@ Payload format unchanged except two new bits in the value-source field; existing
 
 ## 2.0.0-rc.4
 
-Firmware: [`universal-weather-node-2.0.0-rc.4.bin`](firmware/universal-weather-node-2.0.0-rc.4.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.4-factory.bin`](firmware/universal-weather-node-2.0.0-rc.4-factory.bin) (first installation, USB at `0x0`). Payload format unchanged; existing nodes keep their settings (also the sensor ID list and the *Wireless 1–4* value-source choices).
+Firmware: `universal-weather-node-2.0.0-rc.4.bin` (OTA / USB at `0x10000`) and `universal-weather-node-2.0.0-rc.4-factory.bin` (first installation, USB at `0x0`). Payload format unchanged; existing nodes keep their settings (also the sensor ID list and the *Wireless 1–4* value-source choices).
 
 **Up to 32 wireless sensors** — see [Wireless sensors](docs/wireless-sensors.md).
 * The node now receives up to **32** wireless sensors at the same time (was 4) and *Wireless sensor IDs* takes up to 32 IDs — a fixed table reserved at start, no per-sensor memory allocation at run time (no heap fragmentation). Each sensor has a number 1–32 (`rfSensors[].slot`): its position in the ID list, else the reception order. Only 1–4 can be value sources — *Wireless 1–4*, *Auto* and parameters 45–49 keep their meaning; sensors 5–32 are reported everywhere but never feed the main values.
@@ -209,7 +270,7 @@ Firmware: [`universal-weather-node-2.0.0-rc.4.bin`](firmware/universal-weather-n
 
 ## 2.0.0-rc.3
 
-Firmware: [`universal-weather-node-2.0.0-rc.3.bin`](firmware/universal-weather-node-2.0.0-rc.3.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.3-factory.bin`](firmware/universal-weather-node-2.0.0-rc.3-factory.bin) (first installation, USB at `0x0`). Payload format and settings unchanged.
+Firmware: `universal-weather-node-2.0.0-rc.3.bin` (OTA / USB at `0x10000`) and `universal-weather-node-2.0.0-rc.3-factory.bin` (first installation, USB at `0x0`). Payload format and settings unchanged.
 
 **Heltec WiFi LoRa 32 V4**
 * Same firmware image for V3 and V4; the board is detected by flash size (setting *Heltec board*: Auto / V3 / V4). The V4's RF front end (V4.2 GC1109 / V4.3 KCT8103L, detected at boot) is switched for receive and transmit like Meshtastic does, put to sleep with the radio, and the radio's TX power is reduced by the amplifier gain so LoRaWAN stays at the regional limit (EU868 16 dBm).
@@ -220,7 +281,7 @@ Firmware: [`universal-weather-node-2.0.0-rc.3.bin`](firmware/universal-weather-n
 
 ## 2.0.0-rc.2
 
-Firmware: [`universal-weather-node-2.0.0-rc.2.bin`](firmware/universal-weather-node-2.0.0-rc.2.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.2-factory.bin`](firmware/universal-weather-node-2.0.0-rc.2-factory.bin) (first installation, USB at `0x0`). Payload format unchanged (no decoder update needed); existing nodes keep their settings.
+Firmware: `universal-weather-node-2.0.0-rc.2.bin` (OTA / USB at `0x10000`) and `universal-weather-node-2.0.0-rc.2-factory.bin` (first installation, USB at `0x0`). Payload format unchanged (no decoder update needed); existing nodes keep their settings.
 
 **Easier start for a Wi-Fi station with a wireless sensor**
 * **New defaults for new nodes** (existing nodes keep their settings): Wi-Fi and web dashboard **on**, LoRaWAN **off**, wireless sensors **on**, board wind / rain sensors **off**. Enter the Wi-Fi in the portal — done.
@@ -241,7 +302,7 @@ Firmware: [`universal-weather-node-2.0.0-rc.2.bin`](firmware/universal-weather-n
 
 ## 2.0.0-rc.1
 
-Firmware: [`universal-weather-node-2.0.0-rc.1.bin`](firmware/universal-weather-node-2.0.0-rc.1.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-rc.1-factory.bin`](firmware/universal-weather-node-2.0.0-rc.1-factory.bin) (first installation, USB at `0x0`). Release candidate for 2.0.0; settings and payload format unchanged since 2.0.0-beta.3.
+Firmware: `universal-weather-node-2.0.0-rc.1.bin` (OTA / USB at `0x10000`) and `universal-weather-node-2.0.0-rc.1-factory.bin` (first installation, USB at `0x0`). Release candidate for 2.0.0; settings and payload format unchanged since 2.0.0-beta.3.
 
 * **OTA with either file:** the portal's firmware upload also accepts the `-factory` image and writes only its firmware part (from `0x10000`), after checking that its partition table matches the node's; otherwise refused with a hint to flash over USB. Nodes on 2.0.0-beta.2 or older still need the file without `-factory`.
 * **Fine Offset WS85 / WS90:** the voltage of the solar-charged super capacitor as `supercapV` in `rfSensors` and on the status page — only for these stations, other sensors don't get the key.
@@ -249,7 +310,7 @@ Firmware: [`universal-weather-node-2.0.0-rc.1.bin`](firmware/universal-weather-n
 
 ## 2.0.0-beta.3
 
-Firmware binary: [`universal-weather-node-2.0.0-beta.3.bin`](firmware/universal-weather-node-2.0.0-beta.3.bin) (application image for OTA or USB). Same hardware support and beta status as 2.0.0-beta.2; existing settings keep their meaning, payload format unchanged (no decoder update needed).
+Firmware binary: `universal-weather-node-2.0.0-beta.3.bin` (application image for OTA or USB). Same hardware support and beta status as 2.0.0-beta.2; existing settings keep their meaning, payload format unchanged (no decoder update needed).
 
 **Ecowitt / Froggit (Fine Offset)**
 * **868 MHz sensors:** WH65/WS69, WS68, WS80, WS85, WS90, WH31/DP50, WN34, WN38, WH40, WN20, WH51, WH57 — received in the same 17.241 kbit/s phase as IT+ (*Wireless sensor type* values 8, 10, 14, 9). New library `lib/FineOffsetSensorReceiver` (own, MIT). `rfSensors` gains `model`, `channel`, `soilMoisturePct`, `lightningCount`, `lightningDistKm`. Not yet tested with real sensors.
@@ -261,7 +322,7 @@ Firmware binary: [`universal-weather-node-2.0.0-beta.3.bin`](firmware/universal-
 
 ## 2.0.0-beta.2
 
-Firmware binary: [`universal-weather-node-2.0.0-beta.2.bin`](firmware/universal-weather-node-2.0.0-beta.2.bin) (application image for OTA or USB). Same hardware support and beta status as 2.0.0-beta.1. **Update the payload decoder on ChirpStack/TTN first** (binary format version 4). New settings keep the previous behavior by default (MQTT interval 0 = like the LoRaWAN interval, wind values *interval*, value sources *Auto*, wireless sensors off); the wind sample interval default changes to 1 s for new installations, stored values are mapped to 1 s or 3 s.
+Firmware binary: `universal-weather-node-2.0.0-beta.2.bin` (application image for OTA or USB). Same hardware support and beta status as 2.0.0-beta.1. **Update the payload decoder on ChirpStack/TTN first** (binary format version 4). New settings keep the previous behavior by default (MQTT interval 0 = like the LoRaWAN interval, wind values *interval*, value sources *Auto*, wireless sensors off); the wind sample interval default changes to 1 s for new installations, stored values are mapped to 1 s or 3 s.
 
 **Wireless sensors and value sources**
 * **Wireless sensors (Bresser, 868 MHz):** the LoRa chip receives Bresser 5/6/7-in-1 stations and other Bresser sensors between LoRaWAN uplinks (setting *Wireless sensors*, parameter 44, optional ID filter). Values on the status page and as `rfSensors` in `/api/data` / MQTT. Uses a fork of BresserWeatherSensorReceiver (MIT) in `lib/`, adapted to the shared transceiver and RadioLib 7.
@@ -311,7 +372,7 @@ Firmware binary: [`universal-weather-node-2.0.0-beta.2.bin`](firmware/universal-
 
 ## 2.0.0-beta.1
 
-Firmware binary: [`universal-weather-node-2.0.0-beta.1.bin`](firmware/universal-weather-node-2.0.0-beta.1.bin) (application image for OTA or USB with the existing compatible partition table). First firmware for the PCB v2.0 prototype order; still supports Rev 1.2 and 1.3 (select the revision manually on older boards). Beta: nothing has been tested on v2.0 hardware yet; a release candidate follows after prototype bring-up and a field test.
+Firmware binary: `universal-weather-node-2.0.0-beta.1.bin` (application image for OTA or USB with the existing compatible partition table). First firmware for the PCB v2.0 prototype order; still supports Rev 1.2 and 1.3 (select the revision manually on older boards). Beta: nothing has been tested on v2.0 hardware yet; a release candidate follows after prototype bring-up and a field test.
 
 **Changes since 1.3.0-beta.2:**
 * Heater output J12: 0.1 Hz time-proportional control (10 s cycle, 1 % steps) from an independent timer task instead of 100 Hz PWM; the cycle keeps running during blocking sensor/LoRa calls, duty changes keep the cycle phase, the portal/OTA still latches both outputs off. Fan PWM stays at 100 Hz.
@@ -323,7 +384,7 @@ Firmware binary: [`universal-weather-node-2.0.0-beta.1.bin`](firmware/universal-
 
 ## 1.3.0-beta.2
 
-Firmware binary: [`universal-weather-node-1.3.0-beta.2.bin`](firmware/universal-weather-node-1.3.0-beta.2.bin) (application image for OTA or USB with the existing compatible partition table). Supports PCB Rev 1.2, 1.3 and 2.0; select **1.2** or **1.3** manually on older boards, since hardware auto-detection only identifies v2.0. If the installed partition table lacks `cfgdata`, perform a full USB flash with the current partition table rather than application-only OTA. Field testing on these boards remains outstanding.
+Firmware binary: `universal-weather-node-1.3.0-beta.2.bin` (application image for OTA or USB with the existing compatible partition table). Supports PCB Rev 1.2, 1.3 and 2.0; select **1.2** or **1.3** manually on older boards, since hardware auto-detection only identifies v2.0. If the installed partition table lacks `cfgdata`, perform a full USB flash with the current partition table rather than application-only OTA. Field testing on these boards remains outstanding.
 
 **Reliability fixes:**
 * Abort a stuck DS18B20 conversion after 1 s and retry next cycle instead of indefinitely blocking measurements and telemetry.

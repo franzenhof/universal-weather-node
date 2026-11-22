@@ -45,9 +45,15 @@ public:
     // 0x24 family: scale as WH24 / HP1000 instead of WH65 / WS69 (see foDecode()).
     bool wh24Units = false;
 
+    // Time from the packet interrupt to the getRaw() that read it, ms: a
+    // packet arriving meanwhile replaces the unread one (diagnostics).
+    static uint32_t lastReadDelayMs() { return readDelayMs; }
+
 private:
     static SX1262* radio;
     static volatile bool received;
+    static volatile uint32_t irqMs;
+    static uint32_t readDelayMs;
     static void onPacket();
     uint8_t frameLen = FO_MAX_FRAME_LEN;
 };

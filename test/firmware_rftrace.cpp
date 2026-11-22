@@ -163,6 +163,29 @@ int main()
     assert(file().find("only ID") == std::string::npos);   // (status page text, not the file)
     assert(file().find("one sensor ID 300001C3") != std::string::npos);
 
+    // ---- reception rate per ID (repeats not counted) and read delay ----
+    assert(rfTraceStart(30 * 60000UL, RF_TRACE_ALL, 0, false, err, sizeof(err)));
+    {
+        auto tx = [&](uint32_t readDelay) {
+            RfTracePacket q = okPacket(0x300009A1, wh31, sizeof(wh31));
+            q.nominalMs = 61000; q.hasReadDelay = true; q.readDelayMs = readDelay;
+            rfTracePacket(q);
+        };
+        // 6 transmissions expected over 5 intervals: one missing, one sent twice (repeat 60 ms later)
+        tx(5);  delay(60); tx(4);      // t = 0 and its repeat
+        delay(60940); tx(250);         // t = 61 s, read 250 ms late
+        delay(61000);                  // t = 122 s: missed
+        delay(61000); tx(6);           // t = 183 s
+        delay(61000); tx(7);           // t = 244 s
+        delay(61000); tx(3);           // t = 305 s
+        // a sensor of unknown interval and one seen only twice: no rate
+        RfTracePacket u = okPacket(0x77000001, wh31, sizeof(wh31)); rfTracePacket(u); delay(5000); rfTracePacket(u);
+    }
+    f = file();
+    assert(f.find("#   300009A1 FSK17   WH31              6 / 0 / 0   -71..-71 -71 dBm   5 of 6 sent (83 %)\n") != std::string::npos);
+    assert(f.find("#   77000001 FSK17   WH31              2 / 0 / 0   -71..-71 -71 dBm\n") != std::string::npos);
+    assert(f.find("# Read delay (packet to firmware, Fine Offset / IT+): avg 45 ms, max 250 ms, 1 of 6 reads later than 100 ms") != std::string::npos);
+
     // ---- ring wrap: the newest lines stay, the file starts at a whole line ----
     assert(rfTraceStart(60 * 60000UL, RF_TRACE_ALL, 0, false, err, sizeof(err)));
     int lines = 0;

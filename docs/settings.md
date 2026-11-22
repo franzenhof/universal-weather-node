@@ -21,7 +21,7 @@ The page has six **tabs** (links: `/api/settings#basics`, `#sensors`, `#outputs`
 | Tab | Sections |
 |-----|----------|
 | **Basics** | Language, Device (name), Location (altitude, latitude / longitude), Time, Units, Web access (admin password) |
-| **Sensors** | Wireless receiver (on/off, sensor type, *Only my sensors*), the **wireless sensor table** (★ Mine / ○ Received / ✕ Hidden, order of the ★ sensors — see [Wireless sensors](wireless-sensors.md#mine-received-hidden)), Value sources, Measurement (interval, board wind / rain, rain statistics, LiPo), Sensor calibration (incl. the link to the [wind-direction calibration wizard](#wind-direction-calibration)), Inputs & outputs (PCB v2.0), Davis (diagnostics) |
+| **Sensors** | Wireless receiver (on/off, sensor type, *Only my sensors*), the **wireless sensor table** (★ Mine / ○ Received / ✕ Hidden, order of the ★ sensors — see [Wireless sensors](wireless-sensors.md#mine-received-hidden)), Value sources, [Custom series](#custom-series), Measurement (interval, board wind / rain, rain statistics, LiPo), Sensor calibration (incl. the link to the [wind-direction calibration wizard](#wind-direction-calibration)), Inputs & outputs (PCB v2.0), Davis (diagnostics) |
 | **Outputs** | Send intervals and wind values (MQTT, LoRaWAN), MQTT / Home Assistant, Weather networks, Custom uploads, Loxone, LoRaWAN (incl. the payload decoder download) |
 | **Alarms** | Alarm rules (12 slots, ready-made rules) and notification channels (ntfy, Pushover, Telegram, MQTT, webhook) with test buttons — see [Alarms](alarms.md). This tab has its own *Save* button (it is a separate form) |
 | **Display** | The built-in OLED: when it is on, which screens, rotation, brightness, night-off hours — see [Display](#display) |
@@ -63,7 +63,8 @@ Switching them on again is only possible in the config portal (fields `wifien`, 
 | Low-power mode | Light sleep between sub-samples (LoRa only, Wi-Fi off) — see [Low-Power Mode](lorawan.md#low-power-mode-lora-only) | off |
 | Low-power: switch wind-vane supply off | PCB v2.0: vane potentiometer only powered around each reading | on |
 | **Measurement** | | |
-| LoRaWAN / measurement interval | Seconds between LoRaWAN uplinks (5–3600); stretched automatically if the data rate would exceed 1 % airtime | 300 |
+| Measurement cycle | Seconds between evaluations of the values (10–600): status page, REST API, display, dashboard history, records, alarms. Independent of the send intervals below — see [base cycle](values.md#measurement-and-aggregation) | 30 |
+| LoRaWAN uplink interval | Seconds between LoRaWAN uplinks (5–3600); stretched automatically if the data rate would exceed 1 % airtime | 300 |
 | Wind sample interval | **1 s** or **3 s** — see [Measurement and Aggregation](values.md#measurement-and-aggregation) | 1 |
 | LoRaWAN wind values | *Interval* (mean, 3-s gust and direction since the last uplink) or *10 min* (WMO values of the last 10 minutes) | interval |
 | MQTT interval | Seconds between MQTT publishes; `0` = like the LoRaWAN interval, else 2–3600 | 0 |
@@ -137,6 +138,18 @@ Switching them on again is only possible in the config portal (fields `wifien`, 
 | Backup and restore | see [Backup and Restore](#backup-and-restore) | – |
 | Time zone, NTP server | POSIX time zone string and time server | Central Europe, `pool.ntp.org` |
 
+### Custom series
+
+*Settings → Sensors → Custom series* — values that are none of the weather sources (soil moisture, lightning, leaf wetness, particulate matter, CO₂, a temperature probe …) get their **own chart** on the dashboard, 24 h and 7 days like the other histories. Per series:
+
+| Field | Meaning |
+|-------|---------|
+| Name | free text, the chart title (empty: the value's name) |
+| Source | a wireless sensor (the list shows the received and ★ sensors, plus a configured one that is out of range), or *Board* for the DS18B20 probes; *off* frees the slot |
+| Value | temperature, humidity, soil moisture, leaf wetness, **lightning** (strikes per bucket — from the sensor's running counter; the chart title shows the range total), **storm distance** (closest per bucket), PM2.5, PM10, CO₂, soil conductivity, pressure, illuminance, UV index, battery voltage, super capacitor, DS18B20 probe 1–3. The hint shows the value now — "no value" if the sensor does not send it |
+
+Each bucket holds the mean over the measurement cycles in it (lightning: the sum, storm distance: the minimum). **Up to 4 series** on a Heltec V3 (internal RAM), **up to 8** with PSRAM (Heltec V4) — about 0.9 KB per series, only for series that are set up. The 7-day history of the series is saved with the rest of the history (every 24 h and before a planned restart). Renaming a series or changing its source or value starts its history empty; the other series keep theirs. In `/api/history` the series come as `series` ([schema](api/schemas/history.schema.json)).
+
 ### Display
 
 *Settings → Display* — the Heltec's built-in 128 × 64 OLED. All live.
@@ -145,10 +158,31 @@ Switching them on again is only possible in the config portal (fields `wifien`, 
 |---------|---------|---------|
 | Display on | **for 20 s after PRG** (as before), **always** (except the night hours), or **for N minutes after PRG** | 20 s after PRG |
 | Minutes after PRG | for the third mode, 1–120 | 5 |
-| Screens | **classic status** (wind, rain, temperature, battery, LoRaWAN uplink result or IP / receiver state — the screen of older firmware), **temperature** (big, with humidity, dew point, feels like), **wind** (mean, gust, compass point and degrees), **rain** (today, last hour, rate), **pressure** (QNH, 3-h change with an arrow and the weather trend word), **status** (IP and RSSI, `.local` name, number of wireless sensors and active alarms) | classic only |
+| Screens | **custom screens 1 and 2** (see below) and **classic status** (wind, rain, temperature, battery, LoRaWAN uplink result or IP / receiver state — the screen of older firmware), **temperature** (big, with humidity, dew point, feels like), **wind** (mean, gust, compass point and degrees), **rain** (today, last hour, rate), **pressure** (QNH, 3-h change with an arrow and the weather trend word), **status** (IP and RSSI, `.local` name, number of wireless sensors and active alarms) | classic only |
 | Next screen every | rotation through the ticked screens, 2–60 s; while the display is on, a short PRG press shows the next screen | 5 s |
 | Brightness | OLED contrast 1–255 | 200 |
+| Orientation | **normal** (as older firmware drew it) or **rotated by 180°** — e.g. a Heltec V4 held with the RST button bottom left, as Meshtastic shows it | normal |
+| Battery voltage top right | the voltage of a LiPo on the Heltec module's battery connector at the end of the title line of every screen (*USB* without a battery; on the classic screen in its battery line). Measured once per send cycle, also with the LiPo measurement (*Sensors*) off — that one still decides whether LoRaWAN / MQTT send it | off |
+| Heartbeat LED | the Heltec's white LED (GPIO35, not used by the PCBs) flashes for 40 ms every 2 s while the firmware's main loop runs — with the display off you still see that the node works; a hang or crash stops it | off |
 | Night off from / until | local hours 0–23 (e.g. 22 and 6); equal = never. Against burn-in and to save power in *always* mode; a PRG press still switches the display on for 20 s | 0 / 0 |
+
+#### Custom screens
+
+Two screens with lines of your own, each with a **title** and a **layout**: *title + 5 small lines*, or *title + large value + 2 lines* (line 1 in large type, about 8 characters). Tick them under *Screens* to include them in the rotation. Below each one a **preview** shows it with the current values, also before saving: drawn when the tab is opened and redrawn shortly after you stop typing (or with *Update preview*).
+
+A line is text with placeholders, as for the [custom uploads](weather-networks.md): `Garden {rf2_temp:.1}{u_temp}  {rf2_hum:.0} %`.
+
+| Placeholders | |
+|---|---|
+| `{temp} {hum} {dew} {feels} {qnh} {press} {ptend3h}` | the main values (selected sources) |
+| `{wind} {gust} {dir}` · `{rain_day} {rain_1h} {rain_24h} {rain_rate}` · `{uv} {lux} {solar}` | |
+| `{rfN_temp} {rfN_hum} {rfN_wind} {rfN_gust} {rfN_dir} {rfN_rain} {rfN_uv} {rfN_lux} {rfN_batt}` | wireless sensor N (1–32, the number in the sensor list) |
+| `{clock} {date} {ip}` | local time HH:MM, date, IP address (display only) |
+| `{u_temp} {u_wind} {u_rain} {u_rate} {u_press}` | the device's unit labels (display only) |
+
+Above the first screen's fields, *Available placeholders* lists every placeholder that has a value right now, with that value; a click inserts it into the field used last. The custom uploads (*Outputs*) and the alarm texts have the same list.
+
+Unlike the uploads, values come **in the device's units** (*Basics → Units*). A suffix sets decimals or another unit: `{temp:.0}`, `{wind:kmh}`, `{qnh:inhg:.1}`. A value that is not there right now — or a misspelt name — shows as `--`. A small line holds about 20 characters (128 pixels, proportional font); the preview shows what fits. Title up to 23, lines up to 39 bytes of template text.
 
 Texts on the screens follow the device language (*Settings → Basics → Language*; *Auto* = English). Existing nodes keep the old behaviour until something is changed here.
 

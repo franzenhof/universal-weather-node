@@ -197,6 +197,10 @@ uint8_t fineOffsetType(uint8_t family)
     }
 }
 
+// the last radio-clock time (rfRadioClock())
+static RfRadioClock lastClock;
+static bool haveClock = false;
+
 RfTraceResult storeFineOffset(const FoFrame& f, float rssi)
 {
     uint32_t id = rfFineOffsetId(f);
@@ -288,18 +292,36 @@ void readFsk()
     uint8_t b[FO_MAX_FRAME_LEN];
     size_t len;
     if (!fo.getRaw(b, sizeof(b), len, rssi)) return;
+    tp.hasReadDelay = true; tp.readDelayMs = FineOffsetSensor::lastReadDelayMs();
     FoFrame f;
     ItPlusFrame it;
     tp.rssi = rssi; tp.raw = b; tp.rawLen = len;
     switch (rfFsk17Decode(b, len, true, protoSet & RF_PROTO_ITPLUS17, f, it)) {
         case RF_FSK_FINEOFFSET: {
-            tp.result = storeFineOffset(f, rssi);
+            if (f.hasClock) {   // radio-clock time (family 0x52): remembered, no sensor entry
+                lastClock.stationId = (uint8_t)f.id;
+                lastClock.year = f.clockYear; lastClock.month = f.clockMonth; lastClock.day = f.clockDay;
+                lastClock.hour = f.clockHour; lastClock.minute = f.clockMinute; lastClock.second = f.clockSecond;
+                lastClock.rxMs = millis();
+                if (!haveClock) dbgSerial.printf("RF: radio-clock time from sensor ID 0x%02X: %04u-%02u-%02u %02u:%02u:%02u\n",
+                                                 lastClock.stationId, lastClock.year, lastClock.month, lastClock.day,
+                                                 lastClock.hour, lastClock.minute, lastClock.second);
+                haveClock = true;
+                tp.result = RF_TR_OK;
+            } else {
+                tp.result = storeFineOffset(f, rssi);
+            }
             if (!rfTraceRunning()) return;
             size_t fl = f.family == FO_FAMILY_WH25 || f.family == FO_FAMILY_WH32 ? FO_WH25_FRAME_LEN : foFrameLength(f.family);
             if (fl && fl < len) tp.rawLen = fl;   // the frame; the rest of the fixed-length read is noise
             tp.protocol = "Fine Offset"; tp.model = f.model;
             tp.check = tp.result == RF_TR_OK ? "CRC ok, sum ok" : ignoredText(tp.result);
             tp.hasId = true; tp.id = rfFineOffsetId(f);
+            {
+                RfSensorReading nr;
+                nr.proto = RF_PROTO_FINEOFFSET; nr.id = tp.id;
+                tp.nominalMs = rfNominalIntervalMs(nr);
+            }
             rfTraceFoValues(f, vals, sizeof(vals)); tp.values = vals;
             break;
         }
@@ -605,3 +627,5 @@ bool     rfSensorsReceiving()   { return gCfg.rfEn && gCfg.rfEn == activeMode &&
 int16_t  rfSensorsLastError()   { return lastError; }
 int      rfSensorsScheduled()   { return (rfPhaseSet(protoSet) & (rfPhaseSet(protoSet) - 1)) ? schedTracked : 0; }
 uint32_t rfSensorsPacketsTotal() { return packetsTotal; }
+
+bool rfRadioClock(RfRadioClock& out) { if (haveClock) out = lastClock; return haveClock; }

@@ -39,7 +39,9 @@ constexpr uint8_t FO_FAMILY_WH65 = 0x24,   // WH24 / WH65 / WS69 7-in-1 array (W
                   FO_FAMILY_WH45 = 0x45,   // WH45 / WH0295 / DP250: CO2, PM2.5, PM10, temperature, humidity
                   FO_FAMILY_WH46 = 0x46,   // WH46: as WH45 plus PM1 and PM4
                   FO_FAMILY_WH55 = 0x55,   // WH55 / DP70 water leak
-                  FO_FAMILY_WH52 = 0xA2;   // WH52 soil moisture / temperature / EC
+                  FO_FAMILY_WH52 = 0xA2,   // WH52 soil moisture / temperature / EC
+                  FO_FAMILY_LDS01 = 0x54,  // LDS01 laser distance: frame recognised (ID), values not decoded yet
+                  FO_FAMILY_RCC = 0x52;    // radio-clock time of a WH31 with a time receiver (DCF77 / WWVB): no sensor values
 
 // The thermo-hygro(-baro) sensors WH25 / WH32 / WH32B / WN32B / WN32P / WN32
 // send an 8-byte frame without a family byte: a 4-bit type (0xE indoor with
@@ -86,6 +88,12 @@ struct FoFrame {
     uint16_t leakRaw = 0;                                // raw capacitance value (lower = wetter)
     bool  hasLeafWetness = false; uint8_t leafWetnessPct = 0;      // WN35
     bool  hasConductivity = false; float conductivityUsCm = 0.0f;  // WH52, uS/cm
+    bool  batteryKnown = true;                                     // false: the frame's battery field is not known (LDS01)
+    // FO_FAMILY_RCC: the time the sensor's radio-clock receiver decoded (local
+    // time of the time signal, e.g. CET/CEST for DCF77); no sensor values
+    bool  hasClock = false;
+    uint16_t clockYear = 0;
+    uint8_t  clockMonth = 0, clockDay = 0, clockHour = 0, clockMinute = 0, clockSecond = 0;
 };
 
 uint8_t foCrc8(const uint8_t* data, size_t len);

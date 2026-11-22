@@ -2,11 +2,13 @@
 
 SX1262* FineOffsetSensor::radio = nullptr;
 volatile bool FineOffsetSensor::received = false;
+volatile uint32_t FineOffsetSensor::irqMs = 0;
+uint32_t FineOffsetSensor::readDelayMs = 0;
 
 #if defined(ESP32)
-void IRAM_ATTR FineOffsetSensor::onPacket() { received = true; }
+void IRAM_ATTR FineOffsetSensor::onPacket() { irqMs = millis(); received = true; }
 #else
-void FineOffsetSensor::onPacket() { received = true; }
+void FineOffsetSensor::onPacket() { irqMs = millis(); received = true; }
 #endif
 
 int16_t FineOffsetSensor::startReceive(const RxConfig& cfg)
@@ -35,6 +37,7 @@ bool FineOffsetSensor::getRaw(uint8_t* buf, size_t cap, size_t& len, float& rssi
 {
     if (!radio || !received) return false;
     received = false;
+    readDelayMs = millis() - irqMs;
     len = frameLen <= cap ? frameLen : cap;
     uint8_t b[256];
     int16_t st = radio->readData(b, frameLen);

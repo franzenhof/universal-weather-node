@@ -45,8 +45,8 @@ static std::vector<uint8_t> run(const std::vector<uint8_t>& file, size_t chunk, 
 
 int main()
 {
-    auto app = load("firmware/universal-weather-node-2.0.0-beta.3.bin");
-    auto fac = load("firmware/universal-weather-node-2.0.0-beta.3-factory.bin");
+    auto app = load("firmware/universal-weather-node-2.0.0.bin");
+    auto fac = load("firmware/universal-weather-node-2.0.0-factory.bin");
     assert(app.size() > 0x10000 && fac.size() == 0x10000 + app.size());
     std::vector<uint8_t> devicePt(fac.begin() + OTA_FACTORY_PT_OFFSET, fac.begin() + OTA_FACTORY_PT_OFFSET + OTA_FACTORY_PT_LEN);
 

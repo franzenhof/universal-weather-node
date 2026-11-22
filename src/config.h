@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 #include <stdint.h>
+#include "oled_custom.h"
+#include "series_def.h"
 
 // MQTT transport security. Standard broker ports: 1883 = plain (no TLS),
 // 8883 = TLS — but the broker's actual configuration is what matters, not
@@ -76,7 +78,7 @@ struct Config {
     // deliberately doesn't use std::atomic, since Config is copied by value
     // throughout (loadConfig() return, portal.cpp's `Config c = cur`), and
     // atomics aren't copyable.
-    volatile int uplinkIntervalSec = 300;  // LoRaWAN uplink / measurement interval (s)
+    volatile int uplinkIntervalSec = 300;  // LoRaWAN uplink interval (s); the measurement cycle is measureSec
     volatile int sampleSec         = 1;    // wind sample interval (s): 1 or 3 (see wind_window.h)
     volatile int mqttIntervalSec   = 0;    // MQTT publish interval (s); 0 = same as uplinkIntervalSec
     volatile int loraWindAgg       = 0;    // LoRaWAN wind values: 0 = interval since last uplink, 1 = 10-min (WMO)
@@ -130,6 +132,12 @@ struct Config {
     volatile int dispContrast  = 200;   // 1-255
     volatile int dispNightFrom = 0;     // night off [from, to) local hours; equal = never
     volatile int dispNightTo   = 0;
+    volatile int measureSec    = 30;    // measurement cycle (s), 10-600: values, display, chart, records; the outputs send on their own intervals
+    volatile int dispFlip      = 0;     // 1 = rotated by 180° (0 = the orientation of older firmware)
+    volatile int dispBattery   = 0;     // 1 = battery voltage top right on every screen (measures even with lipoEn off)
+    volatile int dispLed       = 0;     // 1 = heartbeat: the Heltec's white LED (GPIO35) flashes every 2 s
+    OledCustom   dispCustom[OLED_CUSTOM_COUNT];
+    SeriesDef    series[SERIES_MAX];               // custom series (series_def.h): own charts, Settings -> Sensors   // custom screens 1-2 (oled_custom.h), dispScreens bits 6-7
     volatile int windDirSensorType = 0;     // 0 = continuous potentiometer (linear map), 1 = calibrated lookup table (e.g. reed-switch/resistor-ladder vanes)
     int      windDirCalCount   = 0;         // number of valid entries in the calibration table below (0 = not calibrated)
     uint16_t windDirCalAdc[16] = {};        // raw ADC reading captured per calibration position

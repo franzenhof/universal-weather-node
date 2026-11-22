@@ -1,4 +1,5 @@
 #include "config.h"
+#include "oled_screens.h"
 #include "sources.h"
 #include "ha_rf.h"
 #include "loxone.h"
@@ -154,11 +155,15 @@ void sanitizeConfig(Config& c)
     choice(c.sunMethod, d.sunMethod, 0, 1);
     range (c.dispMode, 0, 2);
     range (c.dispMinutes, 1, 120);
-    range (c.dispScreens, 0, 63);
+    range (c.dispScreens, 0, (1 << OS_COUNT) - 1);
     if (!c.dispScreens) c.dispScreens = 1;
     range (c.dispRotateSec, 2, 60);
     range (c.dispContrast, 1, 255);
     range (c.dispNightFrom, 0, 23);
+    range (c.dispFlip, 0, 1);
+    range (c.measureSec, 10, 600);
+    range (c.dispBattery, 0, 1);
+    range (c.dispLed, 0, 1);
     range (c.dispNightTo, 0, 23);
     choice(c.windDirSensorType, d.windDirSensorType, 0, 1);
     range (c.windDirCalCount, 0, 16);
@@ -294,6 +299,21 @@ void loadConfigInto(Config& c)
     c.dispRotateSec    = prefs.getInt    ("disprot",   c.dispRotateSec);
     c.dispContrast     = prefs.getInt    ("dispcon",   c.dispContrast);
     c.dispNightFrom    = prefs.getInt    ("dispnf",    c.dispNightFrom);
+    c.dispFlip         = prefs.getInt    ("dispflip",  c.dispFlip);
+    c.measureSec       = prefs.getInt    ("measec",    c.measureSec);
+    c.dispBattery      = prefs.getInt    ("dispbat",   c.dispBattery);
+    c.dispLed          = prefs.getInt    ("displed",   c.dispLed);
+    {   // custom series (series_def.h)
+        char s[480] = "";
+        if (prefs.isKey("series")) prefs.getString("series", s, sizeof(s));
+        seriesUnpack(s, c.series);
+    }
+    for (int i = 0; i < OLED_CUSTOM_COUNT; i++) {   // "dcus0", "dcus1", oled_custom.h
+        char key[8], s[300] = "";
+        snprintf(key, sizeof(key), "dcus%d", i);
+        if (prefs.isKey(key)) prefs.getString(key, s, sizeof(s));
+        oledCustomUnpack(s, c.dispCustom[i]);
+    }
     c.dispNightTo      = prefs.getInt    ("dispnt",    c.dispNightTo);
     prefs.getString("rfcal", c.rfCal, sizeof(c.rfCal));
     prefs.getString("rfnames", c.rfNames, sizeof(c.rfNames));
@@ -475,6 +495,21 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("disprot",     prefs.putInt    ("disprot",   c.dispRotateSec), 4);
     ok &= checkWrite   ("dispcon",     prefs.putInt    ("dispcon",   c.dispContrast), 4);
     ok &= checkWrite   ("dispnf",      prefs.putInt    ("dispnf",    c.dispNightFrom), 4);
+    ok &= checkWrite   ("dispflip",    prefs.putInt    ("dispflip",  c.dispFlip), 4);
+    ok &= checkWrite   ("measec",      prefs.putInt    ("measec",    c.measureSec), 4);
+    ok &= checkWrite   ("dispbat",     prefs.putInt    ("dispbat",   c.dispBattery), 4);
+    ok &= checkWrite   ("displed",     prefs.putInt    ("displed",   c.dispLed), 4);
+    {
+        char s[480];
+        seriesPack(c.series, s, sizeof(s));
+        ok &= checkWriteStr("series", prefs.putString("series", s), s);
+    }
+    for (int i = 0; i < OLED_CUSTOM_COUNT; i++) {
+        char key[8], s[300];
+        snprintf(key, sizeof(key), "dcus%d", i);
+        oledCustomPack(c.dispCustom[i], s, sizeof(s));
+        ok &= checkWriteStr(key, prefs.putString(key, s), s);
+    }
     ok &= checkWrite   ("dispnt",      prefs.putInt    ("dispnt",    c.dispNightTo), 4);
     ok &= checkWriteStr("rfcal",       prefs.putString ("rfcal",     c.rfCal), c.rfCal);
     ok &= checkWriteStr("rfnames",     prefs.putString ("rfnames",   c.rfNames), c.rfNames);

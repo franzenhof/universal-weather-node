@@ -14,11 +14,33 @@
       "description": "Uptime and memory, for watching a node over days (a steadily falling heapMin or heapLargest points to a leak or fragmentation).",
       "properties": {
         "uptimeSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last start (same as device.uptimeSec).", "x-unit": "s" },
-        "heapFree": { "type": "integer", "minimum": 0, "description": "Free heap now (8-bit capable).", "x-unit": "bytes" },
-        "heapMin": { "type": "integer", "minimum": 0, "description": "Lowest free heap since start.", "x-unit": "bytes" },
-        "heapLargest": { "type": "integer", "minimum": 0, "description": "Largest free block now - HTTPS needs about 40 KB in one block.", "x-unit": "bytes" },
+        "heapFree": { "type": "integer", "minimum": 0, "description": "Free internal RAM now (8-bit capable; a PSRAM is counted separately in psram).", "x-unit": "bytes" },
+        "heapMin": { "type": "integer", "minimum": 0, "description": "Lowest free internal RAM since start.", "x-unit": "bytes" },
+        "heapLargest": { "type": "integer", "minimum": 0, "description": "Largest free block of internal RAM now. Without PSRAM, HTTPS needs a 24 KB block and 70 KB free; with PSRAM its large buffers go there.", "x-unit": "bytes" },
+        "psram": {
+          "type": "object",
+          "x-present": "PSRAM found and in use (Heltec V4)",
+          "description": "PSRAM in the heap (Heltec V4: 2 MB in the chip). Buffers of 4 KB and more (history, wind window, radio trace, TLS, Wi-Fi) prefer it. Left out on a board without PSRAM, or if it did not start - the status page and the boot log then say so.",
+          "additionalProperties": false,
+          "required": ["total", "free", "largest"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0, "description": "PSRAM added to the heap.", "x-unit": "bytes" },
+            "free": { "type": "integer", "minimum": 0, "description": "PSRAM free now.", "x-unit": "bytes" },
+            "largest": { "type": "integer", "minimum": 0, "description": "Largest free PSRAM block now.", "x-unit": "bytes" }
+          }
+        },
         "settingsStoreUsed": { "type": "integer", "minimum": 0, "description": "Settings flash partition (cfgdata, 64 KB NVS): bytes in use - settings, alarms, records, rain statistics, saved history.", "x-unit": "bytes" },
-        "settingsStoreFree": { "type": "integer", "minimum": 0, "description": "Settings flash partition: bytes free. The saved history is skipped when less than 16 KB would stay free.", "x-unit": "bytes" }
+        "settingsStoreFree": { "type": "integer", "minimum": 0, "description": "Settings flash partition: bytes free. The saved history is skipped when less than 16 KB would stay free.", "x-unit": "bytes" },
+        "stackFree": {
+          "type": "object",
+          "description": "Stack of each task never used so far (FreeRTOS high-water mark, bytes) - a value near 0 is the warning before a stack overflow. Tasks: loop (24 KB, measuring / sending / setup portal), web (8 KB, web server), wxUpload (12 KB, weather networks / notifications). A task that does not run is left out.",
+          "additionalProperties": false,
+          "properties": {
+            "loop":     { "type": "integer", "minimum": 0, "description": "Loop task (24 KB): measuring, sending, setup portal.", "x-unit": "bytes" },
+            "web":      { "type": "integer", "minimum": 0, "description": "Web server task (8 KB).", "x-unit": "bytes" },
+            "wxUpload": { "type": "integer", "minimum": 0, "description": "Weather-network upload / notification task (12 KB).", "x-unit": "bytes" }
+          }
+        }
       }
     },
     "device": {

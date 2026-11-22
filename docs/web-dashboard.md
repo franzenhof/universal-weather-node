@@ -18,6 +18,7 @@ With **Wi-Fi** and the **web API** enabled, open the node's IP address in a brow
 **Dashboard highlights:**
 
 - 🖱️ **Hover over a chart** (or tap/drag on a phone): a crosshair appears in *all* charts at the same moment, with a tooltip showing time, values and wind direction.
+- 📈 **Custom series:** soil moisture, lightning, leaf wetness, PM2.5, CO₂ … get a chart each, titled with the name you gave them — set up under [Settings → Sensors → Custom series](settings.md#custom-series).
 - 🌧️ **Rain totals:** the rain tile and the rain amount chart show the sum over the selected range (Σ 24 h or Σ 7 days); after a restart the actually buffered span is named instead (e.g. Σ 5.2h). The tile also shows the last hour and today.
 - 🌡️ **Derived values in the tiles:** temperature with *feels like* and dew point, pressure with the 3-h tendency (↗ / → / ↘).
 - 🌍 5 languages (English, German, French, Spanish, Portuguese) — like every page of the node (status, settings, log): the device's *Language* setting ([Settings → Basics](settings.md#web-settings-page)), and a per-browser choice in the language menu that the dashboard and the other pages share. Light/dark theme and Metric/Imperial are saved in your browser only, the device settings stay untouched.

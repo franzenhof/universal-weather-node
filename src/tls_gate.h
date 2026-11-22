@@ -20,14 +20,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// With PSRAM (V4, psram.h) the two record buffers (calloc of > 4 KB) come
+// from the PSRAM; internal RAM then only needs the small handshake pieces,
+// Wi-Fi and lwIP: TLS_MIN_FREE_PSRAM. All figures are internal RAM unless
+// named psram.
 constexpr size_t   TLS_MIN_LARGEST   = 24 * 1024;
 constexpr size_t   TLS_MIN_FREE      = 70 * 1024;
+constexpr size_t   TLS_MIN_FREE_PSRAM = 32 * 1024;
 constexpr size_t   WEB_LOW_HEAP      = 50 * 1024;   // heavy page refused (503) below this while TLS runs
 constexpr uint32_t WEB_BUSY_MAX_MS   = 20000;       // a forgotten busy mark expires (no deadlock)
 
 enum TlsDecision : uint8_t { TLS_GO = 0, TLS_WAIT_HEAP, TLS_WAIT_WEB };
 
-TlsDecision tlsDecide(size_t freeHeap, size_t largest, bool webBusy);
+TlsDecision tlsDecide(size_t internalFree, size_t internalLargest, size_t psramLargest, bool webBusy);
 bool webShouldRefuse(bool tlsRunning, size_t freeHeap);
 
 // ---- shared state (any task) ----

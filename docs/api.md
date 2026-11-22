@@ -48,7 +48,7 @@ if ('windSpeed' in d) show('Wind', d.windSpeed.toFixed(1) + ' ' + d.windUnit + '
 | `GET /api/alarms` | – | `*` | [Alarm rules](alarms.md) with thresholds, channels (configured yes / no only) and state ([schema](api/schemas/alarms.schema.json)) |
 | `GET /api/records` | – | `*` | [Records](values.md#records): min / max with time of today, yesterday, month, year, all time ([schema](api/schemas/records.schema.json)) |
 | `OPTIONS` on the five above | – | `*` | CORS preflight (204) |
-| `/api/settings`, `/api/settings/backup`, `/api/settings/restore`, `/api/alarms/save`, `/api/alarms/test`, `/api/log`, `/api/log/raw`, `/api/log/clear`, `/api/rf/trace`, `/api/davis/log` | Digest (`admin`) | none | Settings, log and [radio trace](wireless-sensors.md#capturing-a-radio-trace-for-us) for the owner — not for third-party UIs; POSTs are same-origin only |
+| `/api/settings`, `/api/settings/backup`, `/api/settings/restore`, `/api/display/preview`, `/api/placeholders`, `/api/alarms/save`, `/api/alarms/test`, `/api/log`, `/api/log/raw`, `/api/log/clear`, `/api/rf/trace`, `/api/davis/log` | Digest (`admin`) | none | Settings, log and [radio trace](wireless-sensors.md#capturing-a-radio-trace-for-us) for the owner — not for third-party UIs; POSTs are same-origin only |
 | `/`, `/status`, `/help`, `/help.md` | – | none | The node's own pages |
 
 All JSON is UTF-8 `application/json`, sent with chunked transfer encoding and `Cache-Control: no-store`. A JSON allocation failure (very low memory) answers `500` with a plain-text message — retry later. Unknown paths answer `404`. Details of every status code: [`openapi.yaml`](api/openapi.yaml).

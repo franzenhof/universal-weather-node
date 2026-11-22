@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ArduinoJson.h>
+#include "series_def.h"
 
 // Two-tier in-RAM ring buffer of bucketed measurement values, feeding the
 // /chart web page and /api/history endpoint. Kept across restarts by
@@ -30,7 +31,20 @@ constexpr unsigned long HISTORY_COARSE_BUCKET_SEC = 3600;
 // Call once per completed measurement cycle (same point mqttPublishTelemetry()
 // consumes the finished cycle's values from) — reads already-computed
 // globals, no new sensor access.
-void pushHistorySample();
+//
+// Custom series (series_def.h): seriesV / seriesOk = the cycle's value per
+// slot (series.cpp seriesCycleValues()), nullptr = none.
+void pushHistorySample(const float* seriesV = nullptr, const bool* seriesOk = nullptr);
+
+// Custom series: which slots exist (defs, first `limit` usable). A slot
+// whose definition changed (seriesKey) starts empty; its rings (int16 per
+// bucket, ~0.9 KB for both tiers, bigAlloc) exist only while it is defined.
+// In setup() after the config, and after the settings were saved.
+void historySeriesConfigure(const SeriesDef defs[SERIES_MAX], int limit);
+
+// Allocates the rings (PSRAM if active, psram.h) - once in setup(), after
+// the core has started the PSRAM; every other call also does it on first use.
+void historyAllocate();
 
 // Serializes one tier's ring buffer (oldest first) as parallel arrays plus
 // one set of sibling *Unit fields, converting from stored base units via

@@ -16,6 +16,19 @@ int hostProbeCount=0;
 bool hostConversionComplete=false;
 float hostProbeTemps[3]={10.5f,12.5f,14.5f};
 HostESP ESP;
+// PSRAM / internal RAM (src/psram.h): the host has no PSRAM, big buffers come from malloc
+#include "psram.h"
+#include <stdlib.h>
+bool   psramActive()     { return false; }
+size_t psramTotal()      { return 0; }
+size_t psramFree()       { return 0; }
+size_t psramLargest()    { return 0; }
+size_t internalFree()    { return 150000; }
+size_t internalMinFree() { return 120000; }
+size_t internalLargest() { return 90000; }
+void*  bigAlloc(size_t n) { return malloc(n); }
+size_t bigAllocLargest() { return 90000; }
+void   psramLogStatus(int) {}
 #include "system_restart.h"   // the real one (rain flush) is in wx_upload.cpp, not built here
 void systemRestart(const char*) { ESP.restart(); }
 HostSerial Serial1;

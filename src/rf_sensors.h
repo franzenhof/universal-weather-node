@@ -221,6 +221,17 @@ bool    rfSensorsReceiving();
 int16_t rfSensorsLastError();
 int     rfSensorsScheduled();   // sensors followed by the receive schedule (rf_schedule.h), 0 = rotation only
 uint32_t rfSensorsPacketsTotal();
+
+// The last radio-clock time a Fine Offset sensor sent (WH31 with a DCF77 /
+// WWVB receiver, family 0x52): shown on the status page; not used as the
+// node's clock (yet). false = none received since the start.
+struct RfRadioClock {
+    uint8_t  stationId = 0;      // the sensor's 8-bit ID (as in its WH31 frames)
+    uint16_t year = 0;
+    uint8_t  month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    unsigned long rxMs = 0;      // millis() of the reception
+};
+bool rfRadioClock(RfRadioClock& out);
 const char* rfSensorsListening();      // protocol currently listened to, e.g. "IT+ 17.241 kbit/s"
 const char* rfProtoName(int proto);    // "Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset", "Davis"
 

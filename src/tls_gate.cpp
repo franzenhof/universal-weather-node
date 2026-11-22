@@ -1,10 +1,12 @@
 #include "tls_gate.h"
 #include <atomic>
 
-TlsDecision tlsDecide(size_t freeHeap, size_t largest, bool webBusy)
+TlsDecision tlsDecide(size_t internalFree, size_t internalLargest, size_t psramLargest, bool webBusy)
 {
     if (webBusy) return TLS_WAIT_WEB;
-    if (largest < TLS_MIN_LARGEST || freeHeap < TLS_MIN_FREE) return TLS_WAIT_HEAP;
+    if (psramLargest >= 2 * TLS_MIN_LARGEST)   // record buffers fit in the PSRAM
+        return internalFree >= TLS_MIN_FREE_PSRAM ? TLS_GO : TLS_WAIT_HEAP;
+    if (internalLargest < TLS_MIN_LARGEST || internalFree < TLS_MIN_FREE) return TLS_WAIT_HEAP;
     return TLS_GO;
 }
 

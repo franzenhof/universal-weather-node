@@ -12,7 +12,12 @@
     "heapMin": 120000,
     "heapLargest": 90000,
     "settingsStoreUsed": 14000,
-    "settingsStoreFree": 45000
+    "settingsStoreFree": 45000,
+    "stackFree": {
+      "loop": 15000,
+      "web": 2800,
+      "wxUpload": 6500
+    }
   },
   "firmware": {
     "version": "2.0.0",

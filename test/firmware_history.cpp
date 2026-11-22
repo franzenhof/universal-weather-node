@@ -174,11 +174,12 @@ int main()
     runFor(30 * 3600, 300, 0.1f);
     {
         assert(historyExport(false, nullptr, 0) == 0);   // too small
-        static uint8_t fineBlob[HISTORY_BLOB_HEADER + HISTORY_FINE_CAPACITY * sizeof(HistorySample)];
-        static uint8_t coarseBlob[HISTORY_BLOB_HEADER + HISTORY_COARSE_CAPACITY * sizeof(HistorySample)];
+        static uint8_t fineBlob[HISTORY_BLOB_HEADER + HISTORY_FINE_CAPACITY * sizeof(HistorySample) + 1];   // + series count (none)
+        static uint8_t coarseBlob[HISTORY_BLOB_HEADER + HISTORY_COARSE_CAPACITY * sizeof(HistorySample) + 1];
+        assert(historyBlobMaxSize(false) >= sizeof(fineBlob));
         size_t nf = historyExport(false, fineBlob, sizeof(fineBlob));
         size_t nc = historyExport(true, coarseBlob, sizeof(coarseBlob));
-        assert(nf == sizeof(fineBlob) && nc > HISTORY_BLOB_HEADER);
+        assert(nf == sizeof(fineBlob) && nc > HISTORY_BLOB_HEADER && fineBlob[3] == 2 && fineBlob[nf - 1] == 0);
         int64_t savedEpoch;
         assert(epochNow(savedEpoch));
 
@@ -186,7 +187,7 @@ int main()
         assert(historyImport(false, fineBlob, nf) == -1);     // no clock yet
         hostSynced = true;
         hostEpochAtZero = savedEpoch + 600 - 1;               // 10 min later
-        fineBlob[3] = 99; assert(historyImport(false, fineBlob, nf) == -1); fineBlob[3] = 1;   // version
+        fineBlob[3] = 99; assert(historyImport(false, fineBlob, nf) == -1); fineBlob[3] = 2;   // version
         assert(historyImport(false, fineBlob, nf - 1) == -1);                                  // size
         int rf = historyImport(false, fineBlob, nf);
         int rc = historyImport(true, coarseBlob, nc);
@@ -209,6 +210,86 @@ int main()
         hostSynced = true;
         hostEpochAtZero = savedEpoch + 3 * 86400;
         assert(historyImport(false, fineBlob, nf) == 0);
+        // a version-1 blob (rc.8 and older: no series section) is still read
+        resetHistory(1000);
+        hostSynced = true;
+        hostEpochAtZero = savedEpoch + 600 - 1;
+        fineBlob[3] = 1;
+        assert(historyImport(false, fineBlob, nf - 1) > 250);
+        assert(historyImport(false, fineBlob, nf) == -1);   // v1 with a trailing byte: size wrong
+        fineBlob[3] = 2;
+    }
+
+    // Custom series: one value per bucket next to the main values (mean,
+    // lightning strikes summed, minimum), gaps without a value, a slot only
+    // while defined, restored only into a slot with the same definition.
+    {
+        SeriesDef defs[SERIES_MAX];
+        strcpy(defs[0].name, "Soil"); defs[0].rfId = 0x510F651B; defs[0].field = SF_MOIST;
+        strcpy(defs[1].name, "Strikes"); defs[1].rfId = 0x57013CFF; defs[1].field = SF_STRIKES;
+        strcpy(defs[2].name, "Dist"); defs[2].rfId = 0x57013CFF; defs[2].field = SF_DIST;
+        resetHistory(1000);
+        historySeriesConfigure(defs, 2);          // limit 2: the third slot stays off
+        assert(serKey[0] && serKey[1] && !serKey[2] && fine.ser[0] && !fine.ser[2]);
+        float v[SERIES_MAX] = {};
+        bool ok[SERIES_MAX] = {};
+        // 10 cycles of 60 s in two 5-min buckets: moisture 40 / 50 alternating, 1 strike each, the 5th cycle no value
+        for (int c = 0; c < 10; c++) {
+            delay(60000);
+            rainMM = 0.0f;
+            v[0] = (c % 2) ? 50.0f : 40.0f; ok[0] = c != 4;
+            v[1] = 1.0f; ok[1] = c != 4;
+            pushHistorySample(v, ok);
+        }
+        JsonDocument doc;
+        buildHistoryJson(doc, false);
+        JsonArray ser = doc["series"];
+        assert(ser.size() == 2);
+        assert(!strcmp(ser[0]["name"], "Soil") && !strcmp(ser[0]["value"], "moist") && !strcmp(ser[0]["unit"], "%"));
+        assert(ser[1]["perBucket"] == true && ser[0]["perBucket"].isNull());
+        JsonArray s0 = ser[0]["values"], s1 = ser[1]["values"], age = doc["ageSec"];
+        assert(s0.size() == age.size() && s1.size() == age.size());
+        // finished buckets: means of 40/50 (whole %), strike sums; the newest (open) bucket too
+        float strikes = 0;
+        for (size_t i = 0; i < s1.size(); i++) if (!s1[i].isNull()) strikes += s1[i].as<float>();
+        assert(near(strikes, 9.0f));                        // 10 cycles, one without a value
+        for (size_t i = 0; i < s0.size(); i++) if (!s0[i].isNull()) assert(s0[i].as<float>() >= 40 && s0[i].as<float>() <= 50);
+
+        // export / import with the series (clock synced)
+        hostSynced = true;
+        hostEpochAtZero = 1781000000;
+        for (int c = 0; c < 30; c++) { delay(300000); v[0] = 33.0f; ok[0] = true; ok[1] = false; pushHistorySample(v, ok); }
+        static uint8_t blob[HISTORY_BLOB_HEADER + HISTORY_FINE_CAPACITY * sizeof(HistorySample) + 1 + SERIES_MAX * (4 + HISTORY_FINE_CAPACITY * 2)];
+        size_t n = historyExport(false, blob, sizeof(blob));
+        assert(n > 0 && blob[HISTORY_BLOB_HEADER + fine.count * sizeof(HistorySample)] == 2);   // two series in it
+        int64_t savedEpoch;
+        assert(epochNow(savedEpoch));
+        // same definitions after a restart: restored
+        resetHistory(1000);
+        hostSynced = true;
+        hostEpochAtZero = savedEpoch + 600 - 1;
+        assert(historyImport(false, blob, n) > 20);
+        buildHistoryJson(doc, false);
+        JsonArray r0 = doc["series"][0]["values"];
+        size_t have = 0;
+        for (size_t i = 0; i < r0.size(); i++) if (!r0[i].isNull()) { have++; }
+        assert(have >= 25 && near(r0[r0.size() - 3].as<float>(), 33.0f));
+        // the soil series renamed: a new slot key - its old values are not taken
+        strcpy(defs[0].name, "Bed");
+        historySeriesConfigure(defs, 2);
+        resetHistory(1000);
+        hostSynced = true;
+        hostEpochAtZero = savedEpoch + 600 - 1;
+        assert(historyImport(false, blob, n) > 20);
+        buildHistoryJson(doc, false);
+        JsonArray r1 = doc["series"][0]["values"];
+        for (size_t i = 0; i < r1.size(); i++) assert(r1[i].isNull());
+        // slots removed: rings freed, no "series" in the JSON
+        SeriesDef none[SERIES_MAX];
+        historySeriesConfigure(none, SERIES_MAX);
+        assert(!fine.ser[0] && !coarse.ser[1]);
+        buildHistoryJson(doc, false);
+        assert(doc["series"].isNull());
     }
     return 0;
 }

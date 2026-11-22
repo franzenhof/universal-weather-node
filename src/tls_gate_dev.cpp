@@ -5,19 +5,20 @@
 #include "serial_log.h"
 #include <Arduino.h>
 #include <esp_heap_caps.h>
+#include "psram.h"
 
 void tlsLogHeap(const char* what, const char* when)
 {
     if (!gCfg.debugMode) return;
-    dbgSerial.printf("TLS %s %s: free %u B, largest %u B\n", what, when, (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    dbgSerial.printf("TLS %s %s: free %u B, largest %u B (internal RAM), PSRAM free %u B\n", what, when,
+                     (unsigned)internalFree(), (unsigned)internalLargest(), (unsigned)psramFree());
 }
 
 TlsDecision tlsMayStart(const char* what)
 {
-    const size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    const size_t largest  = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    const TlsDecision d = tlsDecide(freeHeap, largest, webHeavyActive(millis()) || otaUploadActive());   // also during a firmware upload
+    const size_t freeHeap = internalFree();
+    const size_t largest  = internalLargest();
+    const TlsDecision d = tlsDecide(freeHeap, largest, psramLargest(), webHeavyActive(millis()) || otaUploadActive());   // also during a firmware upload
     static uint32_t lastLogMs = 0;   // a deferred request is retried every few seconds: log at most every 30 s
     if (d != TLS_GO && (!lastLogMs || millis() - lastLogMs > 30000)) {
         lastLogMs = millis();

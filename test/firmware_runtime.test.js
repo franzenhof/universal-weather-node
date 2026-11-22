@@ -36,6 +36,8 @@ try {
     ['astro', ['src/astro.cpp']],
     ['backup', ['src/settings_backup.cpp']],
     ['placeholders', ['src/placeholders.cpp']],
+    ['oledcustom', ['src/oled_custom.cpp']],
+    ['seriesdef', ['src/series_def.cpp']],
     ['rfstats', ['src/rf_stats.cpp', 'test/host/runtime.cpp']],
     ['rfnames', ['src/rf_names.cpp', 'src/settings_backup.cpp', 'test/host/runtime.cpp']],
     ['netcheck', ['src/net_check.cpp']],
@@ -50,7 +52,7 @@ try {
     ['rftrace', [...common, 'src/rf_trace.cpp', 'lib/FineOffsetSensorReceiver/src/FineOffsetDecoder.cpp',
       'lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp']],
     ['harf', [...common, 'src/json_payload.cpp', 'src/units.cpp', 'src/ha_rf.cpp']],
-    ['history', [...common.filter((f) => f !== 'test/host/runtime.cpp'), 'src/units.cpp']],   // includes runtime.cpp + history.cpp
+    ['history', [...common.filter((f) => f !== 'test/host/runtime.cpp'), 'src/units.cpp', 'src/series_def.cpp']],   // includes runtime.cpp + history.cpp
     ['board', [...common, 'src/params.cpp']],
     ['payload', [...common, 'src/lora_payload.cpp', 'src/payload_binary.cpp', 'src/units.cpp',
       '.pio/libdeps/heltec_wifi_lora_32_V3/CayenneLPP/src/CayenneLPP.cpp',

@@ -21,3 +21,11 @@ struct PhLive {
 // Snapshot now. wind10: the 10-min WMO wind for uploads (nullptr = the last cycle's wind).
 void phLiveInit(PhLive& l, const WindStats* wind10);
 bool phLiveLookup(const char* name, PhValue& out, void* ctx);   // ctx = PhLive*
+
+// The names above, for the settings page's list of placeholders
+// (GET /api/placeholders): main values, and the fields of a wireless sensor
+// (rf<N>_<field>).
+extern const char* const PH_LIVE_NAMES[];
+extern const int         PH_LIVE_NAME_COUNT;
+extern const char* const PH_RF_FIELDS[];
+extern const int         PH_RF_FIELD_COUNT;

@@ -4,6 +4,7 @@
 #include "params.h"
 #include "board_io.h"
 #include "heltec_board.h"
+#include "psram.h"
 #include "sources.h"
 #include "lora_payload.h"
 #include "json_payload.h"
@@ -38,6 +39,9 @@
 #include "astro.h"
 #include "rf_stats.h"
 #include "rf_names.h"
+#include "ph_live.h"
+#include "series.h"
+#include "history.h"
 #include "sensors.h"
 #include "net_check.h"
 #include <esp_heap_caps.h>
@@ -46,7 +50,6 @@
 #include "custom_upload.h"
 #include "oled_screens.h"
 #include <memory>
-#include <new>
 #include "davis_diag.h"
 #include "derived_now.h"
 #include "api_info.h"
@@ -177,8 +180,9 @@ private:
 
 // Write-only fields are recorded by fieldSecret() (only when asked for); text
 // fields that may carry a key (webhook / custom-upload URLs) likewise.
-// Fields of the Alarms tab belong to their own form (form='aform'): the main
-// settings form stays small enough for the web server's argument parser.
+// Fields of the Alarms tab belong to their own form (form='aform', which also
+// encloses them - rendered after the settings form): the main settings form
+// stays small enough for the web server's argument parser.
 const char* gFieldForm = nullptr;
 void formAttr(HtmlOut& html) { if (gFieldForm) { html += "' form='"; html += gFieldForm; } }
 
@@ -257,7 +261,7 @@ void handleApiRecords()
 // again" instead of risking both (tls_gate.h). Never blocks.
 bool webBusyRefused()
 {
-    if (!webShouldRefuse(tlsRunning(), heap_caps_get_free_size(MALLOC_CAP_8BIT))) return false;
+    if (!webShouldRefuse(tlsRunning(), internalFree())) return false;
     server.sendHeader("Retry-After", "5");
     server.send(503, "text/plain; charset=utf-8", T(T_c_busy_retry));
     return true;
@@ -1072,6 +1076,15 @@ void handleStatusPage()
                         TF(T_st_packets_since_start, String(rfSensorsPacketsTotal())));
         else
             addStateRow(html, "bad", T(T_st_receiver), TF(T_st_not_receiving, String(rfSensorsLastError())));
+        {   // radio-clock time sent by a WH31 with a time receiver (family 0x52)
+            RfRadioClock rc;
+            if (rfRadioClock(rc)) {
+                char v[64];
+                snprintf(v, sizeof(v), "%04u-%02u-%02u %02u:%02u:%02u &middot; ID %02X &middot; ", rc.year, rc.month, rc.day,
+                         rc.hour, rc.minute, rc.second, rc.stationId);
+                addRow(html, T(T_st_rf_clock), String(v) + TF(T_st_rf_clock_ago, String((millis() - rc.rxMs) / 60000UL)));
+            }
+        }
         if (gCfg.rfProto == RF_PROTO_DAVIS)
             addRow(html, T(T_st_sensor_type), rfSensorTypeText(gCfg.rfProto));
         else if (gCfg.rfProto == RF_PROTO_AUTO) {
@@ -1208,9 +1221,24 @@ void handleStatusPage()
         addRow(html, T(T_st_firmware_update), v);
     }
     addRow(html, T(T_st_last_restart),       gResetReason);
-    addRow(html, T(T_st_free_heap),          TF(T_st_heap, String((float)ESP.getFreeHeap() / 1024.0f, 1),
-                                       String((float)ESP.getMinFreeHeap() / 1024.0f, 1)) + " &middot; " +
-                                       TF(T_st_heap_largest, String((float)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024.0f, 1)));
+    addRow(html, T(T_st_free_heap),          TF(T_st_heap, String((float)internalFree() / 1024.0f, 1),
+                                       String((float)internalMinFree() / 1024.0f, 1)) + " &middot; " +
+                                       TF(T_st_heap_largest, String((float)internalLargest() / 1024.0f, 1)));
+    if (psramActive())                      // V4: PSRAM in use (psram.h)
+        addRow(html, T(T_st_psram), TF(T_st_psram_val, String((unsigned)(psramTotal() / 1024)), String((unsigned)(psramFree() / 1024))));
+    else if (gBoard.psramCap > 0)           // on the chip but not started: the boot log says why
+        addRow(html, T(T_st_psram), TF(T_st_psram_failed, String(gBoard.psramCap == PSRAM_CAP_8MB ? 8 : 2)));
+    {   // stack never used per task (api_info.h): near 0 = close to a stack overflow
+        String v;
+        static const char* const tasks[][2] = { { "Loop", "loopTask" }, { "Web", "webApi" }, { "Upload", "wxUpload" } };
+        for (const auto& t : tasks) {
+            const int f = hostOrDeviceStackFree(t[1]);
+            if (f < 0) continue;
+            if (v.length()) v += " &middot; ";
+            v += String(t[0]) + " " + String((float)f / 1024.0f, 1) + " KiB";
+        }
+        if (v.length()) addRow(html, T(T_st_stack_free), v);
+    }
     html += "</table></section>";
 
     html += "<p class='dim'><a href='/api/data'>"; html += T(T_st_raw_json); html += "</a></p></body></html>";
@@ -1306,7 +1334,7 @@ void handleLogPage()
 void handleSettingsReset()
 {
     selectLanguage();
-    if (!requireAuth()) return;
+    if (!requireAuth() || !requireSameOrigin()) return;   // CSRF: like every state-changing POST
     const String w = server.arg("what");
     if (w == "records" || w == "recordsall") recordsResetRequest(w == "recordsall");
     else if (w == "history") historyClearRequest();
@@ -1932,6 +1960,84 @@ void addRfSensorTable(HtmlOut& html)
 
 // ---- Settings tab "Alarms" (alarms.h, docs/alarms.md) ----
 // Field names: a<i>_<x> per rule slot, nt* / po* / tg* / wh* for the channels.
+// Custom series (series.h): per slot a name, a source (none / the board's
+// probes / a known wireless sensor) and its value; the value now as hint.
+const TextId SERIES_FIELD_TEXT[SF_COUNT] = {
+    T_se_f_temp, T_se_f_hum, T_se_f_moist, T_se_f_leaf, T_se_f_strikes, T_se_f_dist, T_se_f_pm25, T_se_f_pm10,
+    T_se_f_co2, T_se_f_ec, T_se_f_press, T_se_f_lux, T_se_f_uv, T_se_f_batt, T_se_f_supercap,
+    T_se_f_ds1, T_se_f_ds2, T_se_f_ds3 };
+
+void renderSeriesSection(HtmlOut& html)
+{
+    sectionStart(html, T(T_se_title), false, T(T_se_note));
+    const int lim = seriesLimit();
+    char n[8];
+    for (int i = 0; i < lim; i++) {
+        const SeriesDef& d = gCfg.series[i];
+        html += "<h4>"; html += T(T_se_series); html += ' '; html += (unsigned)(i + 1); html += "</h4>";
+        snprintf(n, sizeof(n), "se%dn", i);
+        fieldText(html, n, T(T_se_name), String(d.used() ? d.name : ""), SERIES_NAME_LEN - 1, i == 0 ? T(T_se_name_hint) : nullptr);
+        // source: off, the board probes, the known wireless sensors (+ the configured one if not in range)
+        snprintf(n, sizeof(n), "se%ds", i);
+        char cur[12] = "";
+        if (d.used()) { if (SERIES_FIELDS[d.field].board) strcpy(cur, "B"); else snprintf(cur, sizeof(cur), "%08lX", (unsigned long)d.rfId); }
+        capture(n, cur);
+        labelStart(html, T(T_se_source), nullptr);
+        html += "<select name='"; html += n; formAttr(html); html += "'>";
+        auto opt = [&](const char* val, const String& text) {
+            html += "<option value='"; html += val; html += "'";
+            if (!strcmp(val, cur)) html += " selected";
+            html += ">"; html += text; html += "</option>";
+        };
+        opt("", T(T_se_off));
+        opt("B", T(T_se_board));
+        bool listed = !d.used() || SERIES_FIELDS[d.field].board;
+        for (const RfSensorReading& x : gRfSensors) {
+            if (!x.used) continue;
+            char hex[12];
+            snprintf(hex, sizeof(hex), "%08lX", (unsigned long)x.id);
+            String t;
+            const char* nm = rfNameOf(x.id);
+            if (nm[0]) appendEscaped(t, nm); else t = rfKindText(x);
+            t += " &middot; "; t += hex;
+            opt(hex, t);
+            if (!strcmp(hex, cur)) listed = true;
+        }
+        if (!listed) opt(cur, String(cur));   // not in range now
+        html += "</select></label>";
+        // value; the value now as hint
+        snprintf(n, sizeof(n), "se%df", i);
+        Option fopts[SF_COUNT];
+        for (int f = 0; f < SF_COUNT; f++) fopts[f] = { f, T(SERIES_FIELD_TEXT[f]) };
+        String hint;
+        float v;
+        if (d.used()) {
+            if (seriesValueNow(d, v)) {
+                const SeriesFieldInfo& fi = SERIES_FIELDS[d.field];
+                char b[24];
+                if (fi.isTemp) snprintf(b, sizeof(b), "%.1f \xC2\xB0%s", temperatureForOutput(v, gCfg), temperatureUnitLabel(gCfg));
+                else snprintf(b, sizeof(b), "%.*f %s", fi.decimals, v, fi.unit);
+                hint = TF(T_se_now, String(b));
+            } else hint = T(T_se_none_now);
+        }
+        fieldSelect(html, n, T(T_se_value), d.used() ? d.field : SF_MOIST, fopts, SF_COUNT, hint.length() ? hint.c_str() : nullptr);
+    }
+    if (lim < SERIES_MAX) { html += "<p class='dim'>"; html += TF(T_se_limit_v3, String(lim), String(SERIES_MAX)); html += "</p>"; }
+    html += "</section>";
+}
+
+// "Available placeholders" (GET /api/placeholders): loaded when opened; a
+// click inserts the placeholder into the last field (of those matching
+// fieldRe, a JS regular expression on the name) that had the focus. The
+// script is in renderSettings() - no code runs per keystroke.
+void placeholderBox(HtmlOut& html, const char* ctx, const char* fieldRe)
+{
+    html += "<details class='phb' data-ctx='"; html += ctx; html += "' data-f='"; html += fieldRe;
+    if (!strcmp(ctx, "alarm")) { html += "' data-ev='"; html += T(T_ph_event); }
+    html += "'><summary>"; html += T(T_ph_title); html += "</summary><p class='dim'>"; html += T(T_ph_hint);
+    html += "</p><div class='phl'></div></details>";
+}
+
 void renderAlarmsTab(HtmlOut& html)
 {
     static const TextId srcText[AS_COUNT] = { T_al_src_off, T_al_src_temp, T_al_src_feels, T_al_src_hum, T_al_src_dew,
@@ -2102,6 +2208,7 @@ void renderAlarmsTab(HtmlOut& html)
     fieldSelect(html, "whpost",  T(T_al_wh_method), ch.whPost, methods, 2);
     { DepScope dep("whpost=1"); fieldText(html, "whbody", T(T_al_wh_body), ch.whBody, sizeof(ch.whBody) - 1, T(T_al_wh_body_hint)); }
     testBtn(AC_WEBHOOK);
+    placeholderBox(html, "alarm", "^(a\\d+_c?msg|whurl|whbody)$");
     html += "</section>";
 }
 
@@ -2114,6 +2221,7 @@ void renderCustomUploads(HtmlOut& html)
     for (int i = 0; i < CUSTOM_UPLOADS; i++) u[i] = customUploads()[i];
     customUploadUnlock();
     sectionStart(html, T(T_cu_title), false, T(T_cu_note));
+    placeholderBox(html, "upload", "^cu\\d(url|body)$");   // above the first upload
     const Option methods[] = { { 0, "GET" }, { 1, "POST" } };
     char n[12];
     for (int i = 0; i < CUSTOM_UPLOADS; i++) {
@@ -2341,8 +2449,10 @@ void renderSettings(const String& message, bool isError, int httpCode)
                         g == SG_RAIN  ? T(T_set_switching_keeps_the_rain_totals) : nullptr);
     }
     html += "</section>";
+    renderSeriesSection(html);
 
     sectionStart(html, T(T_set_measurement), false);
+    fieldText  (html, "measuresec", T(T_set_measure_cycle), String(gCfg.measureSec), 3, T(T_set_measure_cycle_hint), "number");
     fieldText  (html, "uplinksec", T(T_set_lorawan_measurement_interval_s), String(gCfg.uplinkIntervalSec), 5,
                 T(T_set_interval_hint), "number");
     fieldSelect(html, "samplesec", T(T_set_wind_sample_interval), windSampleSecNormalized(gCfg.sampleSec), OPTS(windSamples),
@@ -2595,13 +2705,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
 
     html += "</div>";
 
-    // ======== Alarms ========
-    html += "<div class='tab' id='alarms'>";
-    gFieldForm = "aform";
-    renderAlarmsTab(html);
-    gFieldForm = nullptr;
-    html += "<p><button form='aform' type='submit'>"; html += T(T_set_save); html += "</button></p>";
-    html += "</div>";
+    // (the Alarms tab follows after this form, see below)
 
     // ======== Display (built-in OLED, oled_screens.h) ========
     html += "<div class='tab' id='display'>";
@@ -2610,20 +2714,55 @@ void renderSettings(const String& message, bool isError, int httpCode)
         sectionStart(html, T(T_set_disp_title), false, T(T_set_disp_note));
         fieldSelect(html, "dispmode", T(T_set_disp_mode), gCfg.dispMode, OPTS(modes));
         { DepScope dep("dispmode=2"); fieldText(html, "dispmin", T(T_set_disp_min), String(gCfg.dispMinutes), 3, "1&ndash;120", "number"); }
-        static const TextId scr[OS_COUNT] = { T_set_disp_s0, T_oled_temp, T_oled_wind, T_oled_rain, T_oled_press, T_oled_status };
+        static const TextId scr[OS_CUSTOM1] = { T_set_disp_s0, T_oled_temp, T_oled_wind, T_oled_rain, T_oled_press, T_oled_status };
         for (int k = 0; k < OS_COUNT; k++) {
             char n[8];
             snprintf(n, sizeof(n), "dsp%d", k);
-            fieldCheck(html, n, (String(T(T_set_disp_screen)) + ": " + T(scr[k])).c_str(), gCfg.dispScreens & (1 << k));
+            const String name = k < OS_CUSTOM1 ? String(T(scr[k])) : String(T(T_set_disp_cust)) + " " + (k - OS_CUSTOM1 + 1);
+            fieldCheck(html, n, (String(T(T_set_disp_screen)) + ": " + name).c_str(), gCfg.dispScreens & (1 << k));
         }
         fieldText  (html, "disprot",  T(T_set_disp_rot), String(gCfg.dispRotateSec), 3, "2&ndash;60", "number");
         fieldText  (html, "dispcon",  T(T_set_disp_con), String(gCfg.dispContrast), 3, "1&ndash;255", "number");
+        {
+            const Option flips[] = { { 0, T(T_set_disp_flip0) }, { 1, T(T_set_disp_flip1) } };
+            fieldSelect(html, "dispflip", T(T_set_disp_flip), gCfg.dispFlip, OPTS(flips));
+        }
+        fieldCheck (html, "dispbat",  T(T_set_disp_bat), gCfg.dispBattery, T(T_set_disp_bat_hint));
+        fieldCheck (html, "displed",  T(T_set_disp_led), gCfg.dispLed, T(T_set_disp_led_hint));
         {   // night off: only with "always on"
             DepScope dep("dispmode=1");
             fieldText  (html, "dispnf",   T(T_set_disp_nf), String(gCfg.dispNightFrom), 2, T(T_set_disp_night_hint), "number");
             fieldText  (html, "dispnt",   T(T_set_disp_nt), String(gCfg.dispNightTo), 2, nullptr, "number");
         }
         html += "</section>";
+        // custom screens (oled_custom.h): lines with placeholders, live preview (handleDisplayPreview)
+        static const char* const bigOnly[] = { "dc0m=0", "dc1m=0", "dc2m=0", "dc3m=0" };
+        static_assert(sizeof(bigOnly) / sizeof(bigOnly[0]) >= OLED_CUSTOM_COUNT, "one data-dep per custom screen");
+        const Option lays[] = { { OCL_SMALL, T(T_set_disp_cust_lay0) }, { OCL_BIG, T(T_set_disp_cust_lay1) } };
+        for (int k = 0; k < OLED_CUSTOM_COUNT; k++) {
+            const OledCustom& c = gCfg.dispCustom[k];
+            const String head = String(T(T_set_disp_cust)) + " " + (k + 1);
+            sectionStart(html, head.c_str(), false, k == 0 ? T(T_set_disp_cust_note) : nullptr);
+            if (k == 0) placeholderBox(html, "display", "^dc\\d(t|l\\d)$");   // above the first field, for both screens
+            char n[8];
+            snprintf(n, sizeof(n), "dc%dm", k);
+            fieldSelect(html, n, T(T_set_disp_cust_layout), c.layout, OPTS(lays));
+            snprintf(n, sizeof(n), "dc%dt", k);
+            fieldText(html, n, T(T_set_disp_cust_title), String(c.title), OLED_CUSTOM_TITLE - 1);
+            for (int j = 0; j < OLED_CUSTOM_LINES; j++) {
+                DepScope dep(j >= 3 ? bigOnly[k] : nullptr);
+                snprintf(n, sizeof(n), "dc%dl%d", k, j);
+                const String lab = String(T(T_set_disp_cust_line)) + " " + (j + 1);
+                fieldText(html, n, lab.c_str(), String(c.line[j]), OLED_CUSTOM_LINE - 1, j == 0 ? T(T_set_disp_cust_big) : nullptr);
+            }
+            html += "<p class='dim'>"; html += T(T_set_disp_cust_preview); html += "<br><canvas class='oledpv' data-k='";
+            html += (unsigned)k;
+            html += "' width='128' height='64' style='width:256px;max-width:100%;image-rendering:pixelated;background:#000;border-radius:3px'></canvas>"
+                    "<br><button type='button' class='sb' data-pv='";
+            html += (unsigned)k;
+            html += "'>"; html += T(T_set_disp_cust_pvbtn); html += "</button></p>";
+            html += "</section>";
+        }
     }
     html += "</div>";
 
@@ -2721,9 +2860,20 @@ void renderSettings(const String& message, bool isError, int httpCode)
     html += "</div>";
     #undef OPTS
 
-    html += "<button type='submit' id='ssave'>"; html += T(T_set_save); html += "</button></form>"
-            "<form id='aform' method='POST' action='/api/alarms/save'><input type='hidden' name='form' value='1'></form>"
-            "<form id='oform' method='POST' action='ota' enctype='multipart/form-data'></form>"
+    html += "<button type='submit' id='ssave'>"; html += T(T_set_save); html += "</button></form>";
+    // ======== Alarms ========
+    // Its own <form id='aform'> after the settings form, not ~350 fields
+    // inside it reassociated with form='aform': with them in front, every
+    // keystroke in a later field (Display, System tabs) cost the browsers'
+    // autofill / password logic 0.2-0.4 s (Chrome, Safari, Windows; measured
+    // 2026-11-22). The order of the tab links is unchanged.
+    html += "<div class='tab' id='alarms'><form id='aform' method='POST' action='/api/alarms/save'>"
+            "<input type='hidden' name='form' value='1'>";
+    gFieldForm = "aform";
+    renderAlarmsTab(html);
+    gFieldForm = nullptr;
+    html += "<p><button type='submit'>"; html += T(T_set_save); html += "</button></p></form></div>";
+    html += "<form id='oform' method='POST' action='ota' enctype='multipart/form-data'></form>"
             "<form id='rform' method='POST' action='/api/settings/reset'></form>"
             "<script>(function(){var d=document,ids=['basics','sensors','outputs','alarms','display','system'];"
             "d.documentElement.className+=' js';"
@@ -2741,7 +2891,46 @@ void renderSettings(const String& message, bool isError, int httpCode)
             "var bf=d.getElementById('bkfile');if(bf)bf.addEventListener('change',function(){var f=bf.files[0];if(!f)return;"
             "var r=new FileReader();r.onload=function(){var fm=d.createElement('form');fm.method='POST';"
             "fm.action='/api/settings/restore#system';var i=d.createElement('input');i.type='hidden';i.name='backup';"
-            "i.value=r.result;fm.appendChild(i);d.body.appendChild(fm);fm.submit();};r.readAsText(f);});";
+            "i.value=r.result;fm.appendChild(i);d.body.appendChild(fm);fm.submit();};r.readAsText(f);});"
+            // custom OLED screens: preview (handleDisplayPreview), drawn when the Display tab is opened,
+            // 600 ms after the last input and with the button - at most one request at a time
+            // (pvRun: a change during a request draws once more afterwards)
+            "var pv=d.querySelectorAll('canvas.oledpv'),pvOn=false;"
+            "function pvDraw(cv){var k=cv.getAttribute('data-k'),f=d.getElementById('sform').elements,b=new URLSearchParams();"
+            "b.append('m',f['dc'+k+'m'].value);b.append('t',f['dc'+k+'t'].value);"
+            "for(var j=0;j<5;j++)b.append('l'+j,f['dc'+k+'l'+j].value);"
+            "return fetch('/api/display/preview',{method:'POST',body:b,credentials:'same-origin'}).then(function(r){return r.ok?r.text():'';})"
+            ".then(function(h){if(h.length!=2048)return;var x=cv.getContext('2d'),im=x.createImageData(128,64),a=im.data;"
+            "for(var p=0;p<8;p++)for(var c=0;c<128;c++){var v=parseInt(h.substr((p*128+c)*2,2),16);"
+            "for(var t=0;t<8;t++){var o=((p*8+t)*128+c)*4,g=v>>t&1?255:0;a[o]=a[o+1]=a[o+2]=g;a[o+3]=255;}}"
+            "x.putImageData(im,0,0);}).catch(function(){});}"
+            "var pvBusy=false,pvWant={};"
+            "function pvRun(cv){pvWant[cv.getAttribute('data-k')]=cv;if(pvBusy)return;var k=Object.keys(pvWant)[0];if(k===undefined)return;"
+            "var c=pvWant[k];delete pvWant[k];pvBusy=true;pvDraw(c).then(function(){pvBusy=false;var n=Object.keys(pvWant)[0];if(n!==undefined)pvRun(pvWant[n]);});}"
+            "function pvAll(){if(pvOn||location.hash!='#display')return;pvOn=true;pv.forEach(function(cv){pvRun(cv);});}"
+            "pv.forEach(function(cv){var k=cv.getAttribute('data-k'),f=d.getElementById('sform').elements,tm;"
+            "['m','t','l0','l1','l2','l3','l4'].forEach(function(s){var e=f['dc'+k+s];if(!e)return;"
+            "['input','change'].forEach(function(ev){e.addEventListener(ev,function(){clearTimeout(tm);tm=setTimeout(function(){pvRun(cv);},600);});});});});"
+            "d.querySelectorAll('button[data-pv]').forEach(function(b){b.addEventListener('click',function(){"
+            "var cv=d.querySelector('canvas.oledpv[data-k=\"'+b.getAttribute('data-pv')+'\"]');if(cv)pvRun(cv);});});"
+            // placeholder lists (placeholderBox): last focused matching field per box; loaded when opened
+            "d.querySelectorAll('details.phb').forEach(function(bx){var re=new RegExp(bx.getAttribute('data-f')),last=null,L=bx.querySelector('.phl');"
+            "d.addEventListener('focusin',function(e){var t=e.target;if(t&&t.name&&re.test(t.name))last=t;});"
+            "function ins(n){var t=last;if(!t){d.querySelectorAll('input,textarea').forEach(function(x){if(!t&&x.name&&re.test(x.name)&&x.offsetParent)t=x;});}if(!t)return;"
+            "var s='{'+n+'}',a=t.selectionStart==null?t.value.length:t.selectionStart,b=t.selectionEnd==null?a:t.selectionEnd;"
+            "t.value=t.value.slice(0,a)+s+t.value.slice(b);t.focus();t.setSelectionRange(a+s.length,a+s.length);"
+            "t.dispatchEvent(new Event('input',{bubbles:true}));}"
+            "bx.addEventListener('toggle',function(){if(!bx.open)return;L.textContent='\u2026';"
+            "fetch('/api/placeholders?for='+bx.getAttribute('data-ctx'),{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.ok?r.json():null;})"
+            ".then(function(j){L.textContent='';if(!j)return;var grp=null;"
+            "j.items.forEach(function(e){var g=e.s||'';if(g!==grp){grp=g;if(g){var h=d.createElement('div');h.className='dim';h.style.marginTop='0.4rem';h.textContent=g;L.appendChild(h);}}"
+            "var r=d.createElement('div'),b=d.createElement('button');b.type='button';b.className='sb';b.textContent='{'+e.n+'}';"
+            "b.addEventListener('click',function(){ins(e.n);});r.appendChild(b);r.appendChild(d.createTextNode(' '+e.v+(e.u?' '+e.u:'')));L.appendChild(r);});"
+            "if(j.event){var h=d.createElement('div');h.className='dim';h.style.marginTop='0.4rem';h.textContent=bx.getAttribute('data-ev')||'';L.appendChild(h);"
+            "j.event.forEach(function(n){var b=d.createElement('button');b.type='button';b.className='sb';b.textContent='{'+n+'}';"
+            "b.addEventListener('click',function(){ins(n);});L.appendChild(b);});}"
+            "}).catch(function(){L.textContent='';});});});"
+            "window.addEventListener('hashchange',pvAll);pvAll();";
     // firmware upload with a progress bar (XHR); without XHR / FormData the
     // form is posted normally and the node answers with a page
     html += "var O={up:"; jsString(html, T(T_ota_uploading)); html += ",rs:"; jsString(html, T(T_ota_restart_in));
@@ -3046,6 +3235,124 @@ void handleSetupDone()
     }
     server.sendHeader("Location", "/");
     server.send(303);
+}
+
+// Placeholders that have a value now, for the settings page's list
+// (placeholderBox): for=display - as on a custom screen (device units, plus
+// clock, date, ip, unit labels); upload / alarm - as in the custom uploads and
+// alarm texts (metric, the cycle's wind); alarm also lists the event names
+// (value at the time of the alarm). JSON {"items":[{"n","v","u"[,"s"]}],
+// "event":[...]}; "s" = the wireless sensor's name or model + ID. Admin.
+namespace {
+struct PhOut { JsonArray items; bool display; const char* sensor; const char* name; };
+
+const char* phUnit(uint8_t kind, const char* name, bool display)
+{
+    static char t[8];
+    const char* f = strrchr(name, '_');
+    if (!strcmp(name, "hum") || (f && !strcmp(f, "_hum"))) return "%";
+    switch (kind) {
+        case PK_TEMP:  if (!display) return "\xC2\xB0" "C"; snprintf(t, sizeof(t), "\xC2\xB0%s", temperatureUnitLabel(gCfg)); return t;
+        case PK_SPEED: return display ? windSpeedUnitLabel(gCfg) : "m/s";
+        case PK_RAIN:  return display ? rainUnitLabel(gCfg) : "mm";
+        case PK_RATE:  return display ? rainRateUnitLabel(gCfg) : "mm/h";
+        case PK_PRESS: return display ? pressureUnitLabel(gCfg) : "hPa";
+        default:       return "";
+    }
+}
+
+void phAdd(PhOut& o, const char* name, const char* text, uint8_t kind)
+{
+    JsonObject e = o.items.add<JsonObject>();
+    e["n"] = name;
+    e["v"] = text;
+    const char* u = phUnit(kind, name, o.display);
+    if (*u) e["u"] = u;
+    if (o.sensor) e["s"] = o.sensor;
+}
+} // namespace
+
+void handlePlaceholders()
+{
+    if (webBusyRefused()) return;
+    if (!requireAuth()) return;
+    const String forWhat = server.arg("for");
+    const bool display = forWhat == "display";
+    JsonDocument doc;
+    PhOut o{ doc["items"].to<JsonArray>(), display, nullptr, nullptr };
+    std::unique_ptr<PhLive> live(display ? nullptr : new (std::nothrow) PhLive());
+    if (!display) { if (!live) { server.send(503, "text/plain; charset=utf-8", "low memory"); return; } phLiveInit(*live, nullptr); }
+    auto addAll = [&](const char* const* names, int n) {
+        if (display) {
+            oledPlaceholderValues(names, n, [](int i, const char* t, uint8_t k, void* a) {
+                PhOut& x = *static_cast<PhOut*>(a); phAdd(x, x.name ? x.name : "", t, k); }, &o);
+            return;
+        }
+        for (int i = 0; i < n; i++) {
+            PhValue v;
+            if (!phLiveLookup(names[i], v, live.get())) continue;
+            char t[48];
+            phFormat(v, nullptr, t, sizeof(t));
+            phAdd(o, names[i], t, v.kind);
+        }
+    };
+    // the display callback has no name: one call per name
+    auto addEach = [&](const char* const* names, int n) {
+        if (!display) { addAll(names, n); return; }
+        for (int i = 0; i < n; i++) { o.name = names[i]; addAll(&names[i], 1); }
+        o.name = nullptr;
+    };
+    addEach(PH_LIVE_NAMES, PH_LIVE_NAME_COUNT);
+    if (display) addEach(OLED_PH_NAMES, OLED_PH_NAME_COUNT);
+    for (int slot = 1; slot <= RF_MAX_SENSORS; slot++) {
+        const int idx = rfSensorIndexForSlot(slot - 1);
+        if (idx < 0 || !gRfSensors[idx].used) continue;
+        const RfSensorReading& r = gRfSensors[idx];
+        char label[48];
+        const char* nm = rfNameOf(r.id);
+        if (nm && *nm) snprintf(label, sizeof(label), "%s", nm);
+        else snprintf(label, sizeof(label), "%s %08lX", r.model ? r.model : "", (unsigned long)r.id);
+        o.sensor = label;
+        char names[PH_RF_FIELD_COUNT][16];
+        const char* ptrs[PH_RF_FIELD_COUNT];
+        for (int f = 0; f < PH_RF_FIELD_COUNT; f++) { snprintf(names[f], sizeof(names[f]), "rf%d_%s", slot, PH_RF_FIELDS[f]); ptrs[f] = names[f]; }
+        addEach(ptrs, PH_RF_FIELD_COUNT);
+        o.sensor = nullptr;
+    }
+    if (forWhat == "alarm") {
+        JsonArray ev = doc["event"].to<JsonArray>();
+        for (const char* n : { "name", "value", "unit", "threshold", "state", "priority", "rule", "time", "sensor", "message" }) ev.add(n);
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    sendJsonDoc(doc, "placeholders");
+}
+
+// Preview of a custom OLED screen (settings page, Display tab): the posted,
+// possibly unsaved fields (m layout, t title, l0-l4 lines) drawn off-screen
+// with the current values - 2048 hex digits, the 1024 bytes of the SSD1306
+// buffer (byte x + 128 * page, bit = row in the page). Admin + same origin,
+// like the settings themselves. ~5 KB heap for a moment.
+void handleDisplayPreview()
+{
+    if (webBusyRefused()) return;
+    if (!requireAuth()) return;
+    if (!sameOriginRequest()) { server.send(403, "text/plain; charset=utf-8", "cross-site request refused"); return; }
+    std::unique_ptr<OledCustom> c(new (std::nothrow) OledCustom());
+    std::unique_ptr<uint8_t[]>  px(new (std::nothrow) uint8_t[1024]);
+    if (!c || !px) { server.send(503, "text/plain; charset=utf-8", "low memory"); return; }
+    c->layout = server.arg("m").toInt() == OCL_BIG ? OCL_BIG : OCL_SMALL;
+    oledCustomClean(server.arg("t").c_str(), c->title, sizeof(c->title));
+    for (int j = 0; j < OLED_CUSTOM_LINES; j++) {
+        char n[4] = { 'l', (char)('0' + j), '\0' };
+        oledCustomClean(server.arg(n).c_str(), c->line[j], sizeof(c->line[j]));
+    }
+    if (!oledPreviewCustom(*c, px.get())) { server.send(503, "text/plain; charset=utf-8", "low memory"); return; }
+    static const char hex[] = "0123456789abcdef";
+    String out;
+    if (!out.reserve(2048)) { server.send(503, "text/plain; charset=utf-8", "low memory"); return; }
+    for (int i = 0; i < 1024; i++) { out += hex[px[i] >> 4]; out += hex[px[i] & 15]; }
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "text/plain", out);
 }
 
 void handleSettingsGet()
@@ -3416,6 +3723,55 @@ void handleSettingsPost()
         v = gCfg.dispContrast;  storeInt(v, "dispcon", 1, 255, T(T_set_disp_con), rejected, dummy);   gCfg.dispContrast = v;
         v = gCfg.dispNightFrom; storeInt(v, "dispnf", 0, 23, T(T_set_disp_nf), rejected, dummy);      gCfg.dispNightFrom = v;
         v = gCfg.dispNightTo;   storeInt(v, "dispnt", 0, 23, T(T_set_disp_nt), rejected, dummy);      gCfg.dispNightTo = v;
+        v = gCfg.dispFlip;      storeInt(v, "dispflip", 0, 1, T(T_set_disp_flip), rejected, dummy);   gCfg.dispFlip = v;
+        v = gCfg.measureSec;    storeInt(v, "measuresec", 10, 600, T(T_set_measure_cycle), rejected, dummy); gCfg.measureSec = v;   // live
+        if (present("dispmode")) {   // the display tab was in the form: unticked boxes are not sent
+            gCfg.dispBattery = checked("dispbat") ? 1 : 0;
+            gCfg.dispLed     = checked("displed") ? 1 : 0;
+        }
+        if (present("se0n")) {   // custom series (series.h): a slot needs a name, a source and a value that fit
+            SeriesDef defs[SERIES_MAX];
+            for (int i = 0; i < SERIES_MAX; i++) defs[i] = gCfg.series[i];
+            for (int i = 0; i < seriesLimit(); i++) {
+                char n[8];
+                SeriesDef d;
+                snprintf(n, sizeof(n), "se%dn", i);
+                seriesCleanName(formArg(n).c_str(), d.name, sizeof(d.name));
+                snprintf(n, sizeof(n), "se%ds", i);
+                const String src = formArg(n);
+                snprintf(n, sizeof(n), "se%df", i);
+                const long f = formArg(n).toInt();
+                d.field = (f >= 0 && f < SF_COUNT) ? (uint8_t)f : SF_COUNT;
+                if (src == "B") d.rfId = 0;
+                else if (src.length()) d.rfId = (uint32_t)strtoul(src.c_str(), nullptr, 16);
+                else d.field = SF_COUNT;   // off
+                if (d.field < SF_COUNT && (SERIES_FIELDS[d.field].board != (src == "B"))) {
+                    addRejected(rejected, (String(T(T_se_series)) + " " + (i + 1)).c_str());   // board value with a wireless sensor or the other way round
+                    continue;
+                }
+                if (d.field < SF_COUNT && !d.name[0]) {   // a source without a name: named after the value
+                    strncpy(d.name, T(SERIES_FIELD_TEXT[d.field]), sizeof(d.name) - 1);
+                    d.name[sizeof(d.name) - 1] = '\0';
+                    seriesCleanName(d.name, d.name, sizeof(d.name));
+                }
+                defs[i] = d.used() ? d : SeriesDef();
+            }
+            for (int i = 0; i < SERIES_MAX; i++) gCfg.series[i] = defs[i];
+            historySeriesConfigure(gCfg.series, seriesLimit());
+        }
+        for (int k = 0; k < OLED_CUSTOM_COUNT; k++) {   // custom screens (oled_custom.h)
+            char n[8];
+            snprintf(n, sizeof(n), "dc%dt", k);
+            if (!present(n)) continue;
+            OledCustom& c = gCfg.dispCustom[k];
+            oledCustomClean(formArg(n).c_str(), c.title, sizeof(c.title));
+            snprintf(n, sizeof(n), "dc%dm", k);
+            c.layout = formArg(n).toInt() == OCL_BIG ? OCL_BIG : OCL_SMALL;
+            for (int j = 0; j < OLED_CUSTOM_LINES; j++) {
+                snprintf(n, sizeof(n), "dc%dl%d", k, j);
+                if (present(n)) oledCustomClean(formArg(n).c_str(), c.line[j], sizeof(c.line[j]));
+            }
+        }
         if (present("dsp0")) {
             int mask = 0;
             for (int k = 0; k < OS_COUNT; k++) { char n[8]; snprintf(n, sizeof(n), "dsp%d", k); if (checked(n)) mask |= 1 << k; }
@@ -3618,9 +3974,13 @@ void handleSettingsPost()
         const bool changed = staticIpEn != next.staticIpEn || ip != next.staticIp || gw != next.staticGateway ||
                              sn != next.staticSubnet || dns != next.staticDns;
         bool en = staticIpEn != 0;
-        const StaticIpOutcome o = staticIpCheck(en, ip.c_str(), gw.c_str(), sn.c_str(), dns.c_str(), changed, en);
+        StaticIpField bad = SIPF_NONE;
+        const StaticIpOutcome o = staticIpCheck(en, ip.c_str(), gw.c_str(), sn.c_str(), dns.c_str(), changed, en, &bad);
         if (o == SIP_INVALID) {
-            addRejected(rejected, T(T_set_static_ip_invalid_address));
+            // name the field: "static IP: gateway missing or invalid" (an empty gateway is the usual case)
+            const TextId f = bad == SIPF_GATEWAY ? T_set_gateway : bad == SIPF_SUBNET ? T_set_subnet_mask
+                           : bad == SIPF_DNS ? T_set_dns_server : T_set_ip_address;
+            addRejected(rejected, TF(T_set_static_ip_bad_field, T(f)).c_str());
         } else if (o == SIP_APPLY) {
             if (next.staticIpEn != (int)en) { next.staticIpEn = en; restart = true; }
             storeText(next.staticIp,      "staticip",  restart);
@@ -4068,6 +4428,8 @@ void webApiSetup()
     server.on("/api/settings", HTTP_GET,  handleSettingsGet);
     server.on("/api/settings", HTTP_POST, handleSettingsPost);
     server.on("/api/settings/backup",  HTTP_GET,  handleSettingsBackup);
+    server.on("/api/display/preview",  HTTP_POST, handleDisplayPreview);
+    server.on("/api/placeholders",     HTTP_GET,  handlePlaceholders);
     server.on("/api/settings/rfsensors", HTTP_GET, handleRfSensorTable);
     server.on("/api/settings/reset", HTTP_POST, handleSettingsReset);
     server.on("/api/settings/restore", HTTP_POST, handleSettingsRestore);

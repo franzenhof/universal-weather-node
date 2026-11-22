@@ -160,6 +160,7 @@ unsigned long rfNominalIntervalMs(const RfSensorReading& r)
         case FO_FAMILY_WH57: return 79000;
         case FO_FAMILY_WN35: return 79500;
         case FO_FAMILY_WH55: return 60000;
+        case FO_FAMILY_LDS01: return 80000;
         case FO_FAMILY_WH41: case FO_FAMILY_WH0290: case FO_FAMILY_WH43:
         case FO_FAMILY_WH45: case FO_FAMILY_WH46:  return 600000;   // on battery (60 s on USB)
         default: return 0;

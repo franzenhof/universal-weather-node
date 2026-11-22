@@ -26,9 +26,11 @@
 #endif
 
 #if defined(ESP_PLATFORM)
-#include <esp_heap_caps.h>
-static size_t deviceFreeHeap()     { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
-static size_t deviceLargestBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
+#include "psram.h"
+// The capture is one block of > 4 KB: from the PSRAM if the board has one
+// (psram.h), else from internal RAM, which then must keep the reserve.
+static size_t deviceFreeHeap()     { return psramActive() ? psramFree() : internalFree(); }
+static size_t deviceLargestBlock() { return psramActive() ? psramLargest() : internalLargest(); }
 #else
 static size_t deviceFreeHeap()     { return 200 * 1024; }
 static size_t deviceLargestBlock() { return 100 * 1024; }
@@ -44,6 +46,9 @@ struct IdStat {
     const char* model;
     uint32_t    count[RF_TR_RESULTS];
     float       rssiMin, rssiMax, rssiLast;
+    uint32_t    tx;                  // OK transmissions, repeats (RF_TRACE_REPEAT_MS) not counted
+    uint32_t    firstOkMs, lastOkMs;
+    uint32_t    nominalMs;           // send interval, 0 = unknown
 };
 
 // Everything of one capture, one heap block (freed as a whole).
@@ -59,6 +64,7 @@ struct Trace {
     IdStat   ids[RF_TRACE_MAX_IDS];
     int      nIds = 0;
     uint32_t idsDropped = 0;
+    uint32_t reads = 0, readDelaySum = 0, readDelayMax = 0, lateReads = 0;   // RfTracePacket::readDelayMs
     char     stopReason[40] = "";
     char     ring[RF_TRACE_SIZE];
 };
@@ -79,7 +85,8 @@ bool wantsLocked(const Trace& t, RfTraceResult r, bool hasId, uint32_t id)
     }
 }
 
-void countLocked(Trace& t, uint8_t phase, RfTraceResult r, bool hasId, uint32_t id, const char* model, float rssi, bool hasRssi)
+void countLocked(Trace& t, uint8_t phase, RfTraceResult r, bool hasId, uint32_t id, const char* model, float rssi, bool hasRssi,
+                 uint32_t nominalMs = 0)
 {
     if (r == RF_TR_EVENT) return;
     t.seen++;
@@ -90,10 +97,17 @@ void countLocked(Trace& t, uint8_t phase, RfTraceResult r, bool hasId, uint32_t 
     if (!s) {
         if (t.nIds >= RF_TRACE_MAX_IDS) { t.idsDropped++; return; }
         s = &t.ids[t.nIds++];
-        *s = IdStat{ id, phase, model, {}, rssi, rssi, rssi };
+        *s = IdStat{ id, phase, model, {}, rssi, rssi, rssi, 0, 0, 0, 0 };
     }
     if (model && !s->model) s->model = model;
     if (r < RF_TR_RESULTS) s->count[r]++;
+    if (nominalMs) s->nominalMs = nominalMs;
+    if (r == RF_TR_OK) {
+        const uint32_t now = millis();
+        if (!s->tx) { s->firstOkMs = now; s->tx = 1; }
+        else if (now - s->lastOkMs >= RF_TRACE_REPEAT_MS) s->tx++;
+        s->lastOkMs = now;
+    }
     if (hasRssi) {
         if (rssi < s->rssiMin) s->rssiMin = rssi;
         if (rssi > s->rssiMax) s->rssiMax = rssi;
@@ -290,7 +304,13 @@ void rfTracePacket(const RfTracePacket& p)
 
     portENTER_CRITICAL(&mux);
     if (trace && trace->running) {
-        countLocked(*trace, p.phase, p.result, p.hasId, p.id, p.model, p.rssi, true);
+        countLocked(*trace, p.phase, p.result, p.hasId, p.id, p.model, p.rssi, true, p.nominalMs);
+        if (p.hasReadDelay) {
+            trace->reads++;
+            trace->readDelaySum += p.readDelayMs;
+            if (p.readDelayMs > trace->readDelayMax) trace->readDelayMax = p.readDelayMs;
+            if (p.readDelayMs > RF_TRACE_LATE_READ_MS) trace->lateReads++;
+        }
         if (wantsLocked(*trace, p.result, p.hasId, p.id)) appendLocked(*trace, line, (size_t)n);
     }
     portEXIT_CRITICAL(&mux);
@@ -377,6 +397,8 @@ void rfTraceFoValues(const FoFrame& f, char* out, size_t len)
     if (!len) return;
     out[0] = '\0';
     size_t n = 0;
+    if (f.hasClock)     addf(out, len, n, "radio clock %04u-%02u-%02u %02u:%02u:%02u ", f.clockYear, f.clockMonth, f.clockDay,
+                             f.clockHour, f.clockMinute, f.clockSecond);
     if (f.channel)      addf(out, len, n, "ch%u ", f.channel);
     if (f.hasTemp)      addf(out, len, n, "T %.1fC ", f.tempC);
     if (f.hasHumidity)  addf(out, len, n, "H %u%% ", f.humidity);
@@ -395,7 +417,8 @@ void rfTraceFoValues(const FoFrame& f, char* out, size_t len)
     if (f.hasConductivity) addf(out, len, n, "EC %.0fuS/cm ", f.conductivityUsCm);
     if (f.hasSupercap)  addf(out, len, n, "cap %.2fV ", f.supercapV);
     if (f.batteryMv)    addf(out, len, n, "bat %umV ", f.batteryMv);
-    addf(out, len, n, "%s", f.batteryOk ? "bat ok" : "BAT LOW");
+    if (!f.batteryKnown) addf(out, len, n, "values not decoded yet (raw bytes below)");
+    else                 addf(out, len, n, "%s", f.batteryOk ? "bat ok" : "BAT LOW");
 }
 
 void rfTraceItPlusValues(const ItPlusFrame& f, char* out, size_t len)
@@ -450,8 +473,17 @@ void rfTraceWriteFile(RfTraceWriter w, void* ctx, const char* hostname, const ch
     } else {
         o.str("# Time:            clock not synced (line times are uptime only)\n");
     }
+#if defined(ESP_PLATFORM)
+    o.fmt("# Free heap:       %u KiB (largest block %u KiB, internal RAM)\n", (unsigned)(internalFree() / 1024),
+          (unsigned)(internalLargest() / 1024));
+    if (psramActive())
+        o.fmt("# PSRAM:           %u KiB, %u KiB free\n", (unsigned)(psramTotal() / 1024), (unsigned)(psramFree() / 1024));
+    else
+        o.fmt("# PSRAM:           %s\n", gBoard.psramCap > 0 ? "on the chip, not started" : "none");
+#else
     o.fmt("# Free heap:       %u KiB (largest block %u KiB)\n", (unsigned)(rfTraceFreeHeap() / 1024),
           (unsigned)(rfTraceLargestFreeBlock() / 1024));
+#endif
     o.str("#\n# Receive settings\n");
     const char* pt = protoText(gCfg.rfProto);
     if (pt) o.fmt("#   wireless:      %s, sensor type %s\n", gCfg.rfEn ? "on" : "off", pt);
@@ -499,7 +531,8 @@ void rfTraceWriteFile(RfTraceWriter w, void* ctx, const char* hostname, const ch
           (unsigned long)st.overwrittenBytes);
 
     // statistics (whole capture, also what the filter or the ring dropped)
-    struct Snap { uint32_t counts[RF_TP_COUNT][RF_TR_RESULTS]; IdStat ids[RF_TRACE_MAX_IDS]; int nIds; uint32_t dropped; };
+    struct Snap { uint32_t counts[RF_TP_COUNT][RF_TR_RESULTS]; IdStat ids[RF_TRACE_MAX_IDS]; int nIds; uint32_t dropped;
+                  uint32_t reads, readDelaySum, readDelayMax, lateReads; };
     Snap* s = new (std::nothrow) Snap;
     if (s) {
         portENTER_CRITICAL(&mux);
@@ -508,6 +541,8 @@ void rfTraceWriteFile(RfTraceWriter w, void* ctx, const char* hostname, const ch
             memcpy(s->ids, trace->ids, sizeof(s->ids));
             s->nIds = trace->nIds;
             s->dropped = trace->idsDropped;
+            s->reads = trace->reads; s->readDelaySum = trace->readDelaySum;
+            s->readDelayMax = trace->readDelayMax; s->lateReads = trace->lateReads;
         } else {
             memset(s, 0, sizeof(*s));
         }
@@ -519,12 +554,25 @@ void rfTraceWriteFile(RfTraceWriter w, void* ctx, const char* hostname, const ch
             o.fmt("#   %-8s %10lu %8lu %8lu %8lu\n", PHASES[ph], (unsigned long)c[0], (unsigned long)c[1],
                   (unsigned long)c[2], (unsigned long)c[3]);
         }
-        o.str("#\n# Frames per ID (phase, model, OK / ignored / failed, RSSI min..max last)\n");
+        if (s->reads)
+            o.fmt("#\n# Read delay (packet to firmware, Fine Offset / IT+): avg %lu ms, max %lu ms, %lu of %lu reads later than %lu ms\n"
+                  "#   (a packet arriving before the read replaces the unread one)\n",
+                  (unsigned long)(s->readDelaySum / s->reads), (unsigned long)s->readDelayMax, (unsigned long)s->lateReads,
+                  (unsigned long)s->reads, (unsigned long)RF_TRACE_LATE_READ_MS);
+        o.str("#\n# Frames per ID (phase, model, OK / ignored / failed, RSSI min..max last; received of the transmissions\n"
+              "#   expected from the send interval between the first and the last one, the sensor's repeats not counted)\n");
         for (int i = 0; i < s->nIds; i++) {
             const IdStat& d = s->ids[i];
-            o.fmt("#   %08lX %-7s %-12s %6lu / %lu / %lu   %.0f..%.0f %.0f dBm\n", (unsigned long)d.id, PHASES[d.phase],
+            char rate[48] = "";
+            if (d.nominalMs && d.tx >= 2) {
+                const uint32_t expected = (uint32_t)(((uint64_t)(d.lastOkMs - d.firstOkMs) + d.nominalMs / 2) / d.nominalMs) + 1;
+                if (expected >= 3)
+                    snprintf(rate, sizeof(rate), "   %lu of %lu sent (%lu %%)", (unsigned long)d.tx, (unsigned long)expected,
+                             (unsigned long)(d.tx >= expected ? 100 : d.tx * 100 / expected));
+            }
+            o.fmt("#   %08lX %-7s %-12s %6lu / %lu / %lu   %.0f..%.0f %.0f dBm%s\n", (unsigned long)d.id, PHASES[d.phase],
                   d.model ? d.model : "-", (unsigned long)d.count[RF_TR_OK], (unsigned long)d.count[RF_TR_IGNORED],
-                  (unsigned long)d.count[RF_TR_FAILED], d.rssiMin, d.rssiMax, d.rssiLast);
+                  (unsigned long)d.count[RF_TR_FAILED], d.rssiMin, d.rssiMax, d.rssiLast, rate);
         }
         if (!s->nIds) o.str("#   (none)\n");
         if (s->dropped) o.fmt("#   ... %lu frames of further IDs not listed\n", (unsigned long)s->dropped);
