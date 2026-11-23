@@ -69,6 +69,7 @@ extern SPIClass* hspi;
 #include <WiFi.h>
 #include "config.h"
 #include "globals.h"
+#include "status_led.h"
 #include "params.h"
 #include "units.h"
 #include "wifi_mqtt.h"
@@ -105,7 +106,6 @@ extern SPIClass* hspi;
 // ============================================================================
 // Start + duration rather than an absolute end time, so the timeout stays
 // correct across the millis() wrap (every 49.7 days).
-static constexpr int PIN_HEARTBEAT_LED = 35;   // Heltec V3 / V4 white LED
 
 static bool          displayActive    = false;
 static unsigned long displayOnSinceMs = 0;
@@ -175,25 +175,6 @@ static void updateDisplayState()
             display.display();
         }
     }
-}
-
-// Heartbeat LED (Settings → Display): the Heltec's white LED on GPIO35
-// flashes for 40 ms every 2 s while the loop runs - a hanging loop (or a
-// crash) stops it, the display can stay off. Not on a V4-R8 (GPIO35 belongs
-// to its octal PSRAM). The PCBs do not use GPIO35.
-static void heartbeatPoll()
-{
-    static bool pinSet = false, on = false;
-    static unsigned long lastMs = 0;
-    const bool wanted = gCfg.dispLed && !boardIsR8();
-    if (!wanted) {
-        if (pinSet && on) { digitalWrite(PIN_HEARTBEAT_LED, LOW); on = false; }
-        return;
-    }
-    if (!pinSet) { pinMode(PIN_HEARTBEAT_LED, OUTPUT); pinSet = true; }
-    const unsigned long now = millis();
-    if (!on && now - lastMs >= 2000) { digitalWrite(PIN_HEARTBEAT_LED, HIGH); on = true; lastMs = now; }
-    else if (on && now - lastMs >= 40) { digitalWrite(PIN_HEARTBEAT_LED, LOW); on = false; }
 }
 
 // ============================================================================
@@ -1027,7 +1008,7 @@ void loop()
     esp_task_wdt_reset();
     handleButton();
     updateDisplayState();
-    heartbeatPoll();
+    statusLedPoll();
     wifiMqttPoll();   // non-blocking; no-op unless wifiEn is set
     ioPoll();         // PCB v2.0: VE.Direct, pulse counters, outputs
     timeSyncPoll();   // starts SNTP once WiFi is first up

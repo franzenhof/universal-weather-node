@@ -527,5 +527,12 @@ int main()
         fr[4] = 0x11; fr[6] = 0x24; seal(fr, 11);   // hour 24: rejected
         assert(!foDecode(buf, rx(buf, fr, 11), c));
     }
+    // A real DCF77 WH31 after a battery change (forum radio trace, 2026-11-23)
+    {
+        FoFrame c;
+        assert(dec("52801226112313432103B8", c));
+        assert(c.hasClock && c.id == 0x80 && c.clockYear == 2026 && c.clockMonth == 11 && c.clockDay == 23 &&
+               c.clockHour == 13 && c.clockMinute == 43 && c.clockSecond == 21 && !c.batteryKnown);
+    }
     return 0;
 }

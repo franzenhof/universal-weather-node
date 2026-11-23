@@ -288,9 +288,9 @@ void rfTracePacket(const RfTracePacket& p)
 {
     if (!rfTraceRunning()) return;
     // formatted outside the lock
-    char line[320], ts[32], raw[2 * 40 + 1];
+    char line[384], ts[32], raw[2 * RF_TRACE_FRAME_LEN + 1];
     timeStamp(ts, sizeof(ts));
-    hex(raw, sizeof(raw), p.raw, p.rawLen < 40 ? p.rawLen : 40);
+    hex(raw, sizeof(raw), p.raw, p.rawLen < RF_TRACE_FRAME_LEN ? p.rawLen : RF_TRACE_FRAME_LEN);
     int n = snprintf(line, sizeof(line), "%s %-7s %4.0f dBm", ts, rfTracePhaseName(p.phase), p.rssi);
     if (p.hasFreqErr) n += snprintf(line + n, sizeof(line) - n, " fe %+.1fk", p.freqErrKhz);
     n += snprintf(line + n, sizeof(line) - n, " %-7s", rfTraceResultName(p.result));
@@ -417,7 +417,7 @@ void rfTraceFoValues(const FoFrame& f, char* out, size_t len)
     if (f.hasConductivity) addf(out, len, n, "EC %.0fuS/cm ", f.conductivityUsCm);
     if (f.hasSupercap)  addf(out, len, n, "cap %.2fV ", f.supercapV);
     if (f.batteryMv)    addf(out, len, n, "bat %umV ", f.batteryMv);
-    if (!f.batteryKnown) addf(out, len, n, "values not decoded yet (raw bytes below)");
+    if (!f.batteryKnown) { if (!f.hasClock) addf(out, len, n, "values not decoded yet (raw bytes below)"); }   // a radio-clock frame carries only the time
     else                 addf(out, len, n, "%s", f.batteryOk ? "bat ok" : "BAT LOW");
 }
 

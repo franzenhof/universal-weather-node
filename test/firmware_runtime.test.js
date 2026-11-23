@@ -38,6 +38,7 @@ try {
     ['placeholders', ['src/placeholders.cpp']],
     ['oledcustom', ['src/oled_custom.cpp']],
     ['seriesdef', ['src/series_def.cpp']],
+    ['statusled', ['src/status_led.cpp']],
     ['rfstats', ['src/rf_stats.cpp', 'test/host/runtime.cpp']],
     ['rfnames', ['src/rf_names.cpp', 'src/settings_backup.cpp', 'test/host/runtime.cpp']],
     ['netcheck', ['src/net_check.cpp']],

@@ -23,6 +23,8 @@
 
 constexpr size_t   RF_TRACE_SIZE = 24 * 1024;            // text ring
 constexpr size_t   RF_TRACE_HEAP_RESERVE = 40 * 1024;    // free heap that must remain after allocating
+constexpr size_t   RF_TRACE_FRAME_LEN = 64;              // Fine Offset phase: bytes read per frame while a capture runs
+                                                         // (normally FO_MAX_FRAME_LEN = 32): longer unknown frames, e.g. Ecowitt IoT 0xB9, complete
 constexpr uint32_t RF_TRACE_MAX_MIN = 120;               // longest capture (minutes)
 constexpr int      RF_TRACE_MAX_IDS = 48;                // per-ID statistics
 

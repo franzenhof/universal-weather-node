@@ -8,7 +8,7 @@ Open work and ideas for the Universal Weather Node. Done items move to the [Chan
 
 ### 2.0.0 — stabilise sensors and system
 
-**Released 2026-11-22** (decided with most exit criteria met; the open ones — tester field tests, PSRAM on a real V4, long heap runs — continue on 2.0.x). `main` stays the 2.x line until the own Heltec V4 arrives; then the switch to the next major version (branch `2.x` from the 2.0.0 tag as planned below).
+**Released 2026-11-22** (decided with most exit criteria met; the open ones — tester field tests, PSRAM on a real V4, long heap runs — continue on 2.0.x). **Branches (2026-11-22):** `2.x` = the 2.0.x line (fixes, tags `2.0.1` …), `1.x` = the 1.x line from tag 1.1.1 (archive, no fixes planned), `main` = the next major version (work starts when the own Heltec V4 arrives).
 
 Exit criteria (2.0.0 final only when all are met):
 - [ ] Tester field tests done: Ecowitt values compared with the console, WS90 reception rate explained (rc.9 trace), Davis on site
@@ -19,7 +19,7 @@ Exit criteria (2.0.0 final only when all are met):
 
 **Done in 2.0.0: custom series** ("eigene Messreihen") — values that are not one of the main weather values (soil moisture, lightning, leaf wetness, PM2.5, CO₂, soil EC, a DS18B20 …) get a chart: a free-text name, a source (wireless sensor ID + value, or a board probe) and a fixed aggregation per value (mean; lightning: strikes per bucket from the running counter; distance: minimum). Rings only for defined series (int16, ~0.9 KB each for 24 h + 7 days), V3 up to 4, V4 with PSRAM up to 8; the 7-day tier is saved with the history as now (cfgdata NVS, 16 KB reserve). Then the last rc.9 or 2.0.0 directly.
 
-Afterwards: branch **`2.x`** from the 2.0.0 tag — small fixes there, or back-ported from the next major version (cherry-pick). `main` becomes the next major version. V3 users get fixes on 2.x for a stated time (decide: e.g. 12 months).
+Afterwards: branch **`2.x`** (created 2026-11-22 from `main` right after the 2.0.0 tag, which only added a docs entry) — small fixes there, or back-ported from the next major version (cherry-pick). `main` is the next major version. V3 users get fixes on 2.x for a stated time (decide: e.g. 12 months).
 
 ### Next major version (3.0.0 or 4.0.0 — see versioning) — V4 only
 

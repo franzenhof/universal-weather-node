@@ -152,6 +152,17 @@ int main()
     // statistics cover the filtered-out frame
     assert(f.find("#   FSK17             1        0        1        1") != std::string::npos);
     assert(f.find("#   300001C3 FSK17   WH31              1 / 0 / 0") != std::string::npos);
+    // a long unknown frame (Ecowitt IoT, first byte 0xB9) is recorded with all RF_TRACE_FRAME_LEN bytes
+    {
+        uint8_t iot[RF_TRACE_FRAME_LEN];
+        for (size_t i = 0; i < sizeof(iot); i++) iot[i] = (uint8_t)(0xB9 + i);
+        RfTracePacket l; l.phase = RF_TP_FSK17; l.raw = iot; l.rawLen = sizeof(iot);
+        rfTraceClassifyFsk17(iot, sizeof(iot), true, true, l, check, sizeof(check));
+        assert(l.result == RF_TR_UNKNOWN && strstr(check, "first byte 0xB9"));
+        rfTracePacket(l);
+        f = file();
+        assert(f.find("| 64B B9BABBBC") != std::string::npos && f.find("F5F6F7F8\n") != std::string::npos);   // last byte 0xB9 + 63 = 0xF8
+    }
 
     // ---- filter: one ID ----
     assert(rfTraceStart(15 * 60000UL, RF_TRACE_ONE_ID, 0x300001C3, false, err, sizeof(err)));

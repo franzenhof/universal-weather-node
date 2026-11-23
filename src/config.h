@@ -135,7 +135,7 @@ struct Config {
     volatile int measureSec    = 30;    // measurement cycle (s), 10-600: values, display, chart, records; the outputs send on their own intervals
     volatile int dispFlip      = 0;     // 1 = rotated by 180° (0 = the orientation of older firmware)
     volatile int dispBattery   = 0;     // 1 = battery voltage top right on every screen (measures even with lipoEn off)
-    volatile int dispLed       = 0;     // 1 = heartbeat: the Heltec's white LED (GPIO35) flashes every 2 s
+    volatile int dispLed       = 0;     // status LED (status_led.h): 0 off, 1 heartbeat (2 s), 2 packets of my sensors, 3 every packet
     OledCustom   dispCustom[OLED_CUSTOM_COUNT];
     SeriesDef    series[SERIES_MAX];               // custom series (series_def.h): own charts, Settings -> Sensors   // custom screens 1-2 (oled_custom.h), dispScreens bits 6-7
     volatile int windDirSensorType = 0;     // 0 = continuous potentiometer (linear map), 1 = calibrated lookup table (e.g. reed-switch/resistor-ladder vanes)

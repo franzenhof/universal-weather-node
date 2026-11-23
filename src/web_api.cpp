@@ -29,6 +29,7 @@
 #include "wind_window.h"
 #include "rf_sensors.h"
 #include "davis_rx.h"
+#include "status_led.h"
 #include "rf_trace.h"
 #include "ota_upload.h"
 #include "i18n.h"
@@ -2728,7 +2729,10 @@ void renderSettings(const String& message, bool isError, int httpCode)
             fieldSelect(html, "dispflip", T(T_set_disp_flip), gCfg.dispFlip, OPTS(flips));
         }
         fieldCheck (html, "dispbat",  T(T_set_disp_bat), gCfg.dispBattery, T(T_set_disp_bat_hint));
-        fieldCheck (html, "displed",  T(T_set_disp_led), gCfg.dispLed, T(T_set_disp_led_hint));
+        {
+            const Option leds[] = { { 0, T(T_set_disp_led0) }, { 1, T(T_set_disp_led1) }, { 2, T(T_set_disp_led2) }, { 3, T(T_set_disp_led3) } };
+            fieldSelect(html, "displed", T(T_set_disp_led), gCfg.dispLed, OPTS(leds), T(T_set_disp_led_hint));
+        }
         {   // night off: only with "always on"
             DepScope dep("dispmode=1");
             fieldText  (html, "dispnf",   T(T_set_disp_nf), String(gCfg.dispNightFrom), 2, T(T_set_disp_night_hint), "number");
@@ -3724,10 +3728,10 @@ void handleSettingsPost()
         v = gCfg.dispNightFrom; storeInt(v, "dispnf", 0, 23, T(T_set_disp_nf), rejected, dummy);      gCfg.dispNightFrom = v;
         v = gCfg.dispNightTo;   storeInt(v, "dispnt", 0, 23, T(T_set_disp_nt), rejected, dummy);      gCfg.dispNightTo = v;
         v = gCfg.dispFlip;      storeInt(v, "dispflip", 0, 1, T(T_set_disp_flip), rejected, dummy);   gCfg.dispFlip = v;
+        v = gCfg.dispLed;       storeInt(v, "displed", 0, LED_MODE_MAX, T(T_set_disp_led), rejected, dummy); gCfg.dispLed = v;   // live
         v = gCfg.measureSec;    storeInt(v, "measuresec", 10, 600, T(T_set_measure_cycle), rejected, dummy); gCfg.measureSec = v;   // live
         if (present("dispmode")) {   // the display tab was in the form: unticked boxes are not sent
             gCfg.dispBattery = checked("dispbat") ? 1 : 0;
-            gCfg.dispLed     = checked("displed") ? 1 : 0;
         }
         if (present("se0n")) {   // custom series (series.h): a slot needs a name, a source and a value that fit
             SeriesDef defs[SERIES_MAX];

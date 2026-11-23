@@ -1,4 +1,5 @@
 #include "davis_rx.h"
+#include "status_led.h"
 #include "rf_trace.h"
 #include "davis_diag.h"
 #include "globals.h"
@@ -277,6 +278,7 @@ void storeValues(const DavisPacket& p, float rssi)
     r.rssi      = rssi;
     r.batteryOk = !p.batteryLow;
     r.packets++;
+    statusLedPacket(true);              // Davis mode: the ISS is the station
 
     RfValues v;
     v.ok = RF_VAL_WIND;                    // every packet: speed (integer mph) and direction

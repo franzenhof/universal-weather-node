@@ -163,7 +163,7 @@ void sanitizeConfig(Config& c)
     range (c.dispFlip, 0, 1);
     range (c.measureSec, 10, 600);
     range (c.dispBattery, 0, 1);
-    range (c.dispLed, 0, 1);
+    range (c.dispLed, 0, 3);
     range (c.dispNightTo, 0, 23);
     choice(c.windDirSensorType, d.windDirSensorType, 0, 1);
     range (c.windDirCalCount, 0, 16);

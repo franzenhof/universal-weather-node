@@ -4,6 +4,21 @@ Release notes of the Universal Weather Node firmware, newest first. Binaries are
 
 [← back to README](README.md)
 
+## 2.0.1
+
+Firmware: [`universal-weather-node-2.0.1.bin`](firmware/universal-weather-node-2.0.1.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.1-factory.bin`](firmware/universal-weather-node-2.0.1-factory.bin) (first installation, USB at `0x0`). For the **Heltec WiFi LoRa 32 V3 and V4** (V4: ESP32-S3R2; not the V4-R8) — a small update of the 2.0.x line.
+
+**Updating**
+- **From 2.0.0:** OTA with either file over *Settings → System → Firmware update*. Settings, LoRaWAN session, rain totals and the payload format are unchanged (no decoder update needed).
+- **From 1.x or an older 2.0.0 beta:** see the notes of [2.0.0](#200) — use the file *without* `-factory`.
+- The status LED keeps its setting: a node with *Heartbeat LED* on shows *Heartbeat (2 s)*.
+
+- **Radio trace:** the time frame of a WH31 with radio clock (DCF77) no longer says "values not decoded yet" — the time was always decoded (thanks Michael for the trace right after a battery change).
+- **Docs:** WN20 rain counting confirmed by Ecowitt (0.1 mm counter, +3 per tip and +4 on every sixth; one tip = 0.317 mm) — thanks Gyvate.
+- **Docs:** the Fine Offset sensors tested with real frames are listed (WS90, WH31 / WN31, WN30, WN34, WN38, WH40, WN20, WH51, WH52, WH55, WH57, WN35, WH45, WN32P, WN32 — from Dirk's and Michael's traces); WS80, WS85, WS68 and WH65 / WS69 are still untested.
+- **Radio trace:** while a capture runs, unknown frames in the Fine Offset / IT+ phase are recorded with up to 64 bytes instead of 32 (e.g. Ecowitt IoT devices).
+- **Status LED** (*Settings → Display*, formerly *Heartbeat LED*): besides the heartbeat (2 s) the white LED can flash for every valid packet of your ★ sensors or of every sensor — you see at the node that the sensors arrive. Existing settings are kept.
+
 ## 2.0.0
 
 Firmware: [`universal-weather-node-2.0.0.bin`](firmware/universal-weather-node-2.0.0.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.0-factory.bin`](firmware/universal-weather-node-2.0.0-factory.bin) (first installation, USB at `0x0`). For the **Heltec WiFi LoRa 32 V3 and V4** (V4: ESP32-S3R2; not the V4-R8). The first release since **1.1.1** — it sums up 1.2.0-beta.1, 1.3.0-beta.1/2 and all 2.0.0 betas and release candidates (details in their sections below; the beta and release-candidate binaries were removed with this release — use 2.0.0).

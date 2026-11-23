@@ -10,6 +10,7 @@
 #include "rf_fsk17.h"
 #include "davis_rx.h"
 #include "rf_trace.h"
+#include "status_led.h"
 #include <TfaWeatherSensor.h>
 #include <FineOffsetSensor.h>
 
@@ -67,6 +68,10 @@ FineOffsetSensor fo;
 
 void onLoraRadioTaken() { receiving = false; }
 
+// Fine Offset phase: fixed read length - longer while a capture runs (rf_trace.h)
+uint8_t foFrameLen = FO_MAX_FRAME_LEN;
+uint8_t wantedFoFrameLen() { return rfTraceRunning() ? RF_TRACE_FRAME_LEN : FO_MAX_FRAME_LEN; }
+
 bool fineOffsetPhase() { return phase == RF_PROTO_ITPLUS17 && (protoSet & RF_PROTO_FINEOFFSET); }
 
 // Auto search (rf_autosearch.h): valid packets (CRC-checked by the decoders,
@@ -103,7 +108,8 @@ int16_t startPhase()
 {
     if (phase == RF_PROTO_BRESSER) return ws.startReceive();   // re-registers the library's IRQ handler
     if (fineOffsetPhase()) {
-        FineOffsetSensor::RxConfig c;            // fixed length FO_MAX_FRAME_LEN: also holds an IT+ frame
+        FineOffsetSensor::RxConfig c;            // fixed length (32 bytes, 64 during a capture): also holds an IT+ frame
+        c.frameLen = foFrameLen = wantedFoFrameLen();
         if (protoSet & RF_PROTO_ITPLUS17) { c.frequencyMhz = SHARED_FREQ_MHZ; c.bandwidthKhz = SHARED_BW_KHZ; }
         return fo.startReceive(c);
     }
@@ -166,6 +172,7 @@ RfTraceResult storeItPlus(const ItPlusFrame& f, float rssi)
     r.batteryOk = !f.weakBattery;
     r.packets++;
     packetsTotal++;
+    statusLedPacket(isMine(id));
     RfValues v;
     v.ok = RF_VAL_TEMP | (f.hasHumidity ? RF_VAL_HUM : 0);
     v.tempC = f.tempC;  v.humidity = f.humidity;
@@ -244,6 +251,7 @@ RfTraceResult storeFineOffset(const FoFrame& f, float rssi)
     rfFineOffsetExtras(r, f);
     r.packets++;
     packetsTotal++;
+    statusLedPacket(isMine(id));
     RfValues v = rfFineOffsetValues(f);
     unsigned long rainGapMs;
     float rainDelta = rfStoreValues(r, v, now, rainGapMs);
@@ -289,7 +297,7 @@ void readFsk()
         rfTracePacket(tp);
         return;
     }
-    uint8_t b[FO_MAX_FRAME_LEN];
+    uint8_t b[RF_TRACE_FRAME_LEN];
     size_t len;
     if (!fo.getRaw(b, sizeof(b), len, rssi)) return;
     tp.hasReadDelay = true; tp.readDelayMs = FineOffsetSensor::lastReadDelayMs();
@@ -384,6 +392,7 @@ bool copySlot(int slot)
     r.staleMask &= (uint8_t)~RF_VAL_ANY;
     r.packets++;
     packetsTotal++;
+    statusLedPacket(isMine(s.sensor_id));
 
     // Any decoded Bresser packet (digest-checked; the library applies the ID
     // list) ends an auto search - also non-weather types (lightning, ...).
@@ -589,6 +598,8 @@ void rfSensorsLoop()
             receiving = false;
         }
     }
+    // A capture started / ended: the Fine Offset phase reads a different frame length.
+    if (receiving && fineOffsetPhase() && foFrameLen != wantedFoFrameLen()) receiving = false;
     // (Re)start after LoRaWAN used the transceiver, or retry after a failure.
     if (!receiving && (lastStartMs == 0 || lastError == 0 || millis() - lastStartMs >= RESTART_RETRY_MS)) {
         lastStartMs = millis();
