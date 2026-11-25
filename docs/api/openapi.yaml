@@ -652,7 +652,7 @@ paths:
         as on a custom OLED screen (device units, plus `clock`, `date`, `ip`
         and the unit labels `u_*`); `upload` / `alarm`: as in the custom
         uploads and alarm texts (metric). Only names with a value right now;
-        wireless sensors as `rf<N>_<field>` with `s` = the sensor's name, or
+        wireless sensors as `rf<ID>_<field>` (8-digit ID) with `s` = the sensor's name, or
         model and ID. `alarm` adds `event`: the names filled in at the time
         of an alarm.
       security: [{ digest: [] }]

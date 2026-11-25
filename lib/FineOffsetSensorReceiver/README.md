@@ -37,10 +37,9 @@ The families added last (air quality, WH55, WN35, WH52, WH25 / WH32) are decoded
 only and **not yet tested with real sensors**.
 
 Only the 868 MHz (EU, "A") versions can be received; 433 / 915 MHz versions use the same format on
-another band. Not supported: the older WH1080 / WH1050 (different frame), the LDS01 laser distance
-sensor (other data rate, format not settled), and the OOK sensors (WH2, WH5, WH0530, WH53 — the SX1262
-has no OOK receiver). The WN30 probe thermometer sends the WH31 frame (a humidity of 0 is treated as
-"none").
+another band. Not supported: the older WH1080 / WH1050 (different frame) and the OOK sensors (WH2, WH5, WH0530, WH53 — the SX1262
+has no OOK receiver). The WN30 probe thermometer sends the WH31 frame (a humidity of 0 or above 100 is
+treated as "none"). The LDS01 laser distance sensor: distance and the low byte of the heater count (from a radio trace).
 
 ## Usage
 

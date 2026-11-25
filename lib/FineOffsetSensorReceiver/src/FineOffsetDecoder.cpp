@@ -43,9 +43,8 @@ const Family FAMILIES[] = {
     { FO_FAMILY_WH46,  21, "WH46" },
     { FO_FAMILY_WH55,  10, "WH55" },   // followed by 2 bytes of unknown meaning (not checked)
     { FO_FAMILY_WH52,  24, "WH52" },
-    // LDS01: 19-byte frames (CRC-8 at byte 17, sum at 18) every 80 s, seen in
-    // a forum radio trace (rc.8, 2026-11-21); the field meanings are not
-    // confirmed yet - recognised and listed, no values
+    // LDS01: 19-byte frames (CRC-8 at byte 17, sum at 18) every 80 s, about
+    // every 10 s for a while after a change of distance
     { FO_FAMILY_LDS01, 19, "LDS01" },
     // Radio-clock time of a WH31 with a time receiver (rtl_433 ambientweather_wh31e.c,
     // "RCC", type 0x52; seen there from a WWVB WH31E, the DCF77 version - e.g. DNT -
@@ -393,14 +392,16 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             // 54 II II II ?? ?? Dd dd ?? ?? ?? ?? ?? ?? ?? HH ?? CC SS
             // Confirmed against a forum radio trace with the console's own
             // readings (2026-11-25): distance is the low 12 bits of
-            // b[6..7] in mm (bit 0x40 of b[6] = heater on), b[15] counts up by
-            // one per heating event (the console's "heat-on count", low byte).
-            // The remaining bytes (battery, temperature, signal) are not
-            // settled yet.
+            // b[6..7] in mm; b[15] is the low byte of the console's "heat-on
+            // count" (293..297; where the rest is sent is not known). Bit 0x40
+            // of b[6] is set in extra frames about 10 s apart after a change
+            // of distance and never in the regular 80-s frames: a fast-send
+            // flag (the meaning is inferred from the timing). The remaining
+            // bytes (battery, temperature, signal) are not settled yet.
             o.id           = be24(b + 1);
             o.hasDistance  = true;
             o.distanceMm   = (uint16_t)(((b[6] & 0x0F) << 8) | b[7]);
-            o.heaterActive = b[6] & 0x40;
+            o.fastTx       = b[6] & 0x40;
             o.hasHeatCount = true;
             o.heatCount    = b[15];
             o.batteryKnown = false;

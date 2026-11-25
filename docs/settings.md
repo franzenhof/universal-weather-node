@@ -176,7 +176,7 @@ A line is text with placeholders, as for the [custom uploads](weather-networks.m
 |---|---|
 | `{temp} {hum} {dew} {feels} {qnh} {press} {ptend3h}` | the main values (selected sources) |
 | `{wind} {gust} {dir}` · `{rain_day} {rain_1h} {rain_24h} {rain_rate}` · `{uv} {lux} {solar}` | |
-| `{rfN_temp} {rfN_hum} {rfN_wind} {rfN_gust} {rfN_dir} {rfN_rain} {rfN_uv} {rfN_lux} {rfN_batt}` | wireless sensor N (1–32, the number in the sensor list) |
+| `{rfN_temp} {rfN_hum} {rfN_wind} {rfN_gust} {rfN_dir} {rfN_rain} {rfN_uv} {rfN_lux} {rfN_batt}` | wireless sensor N (1–32, the number in the sensor list). Better: the sensor's **8-digit ID** instead of the number, e.g. `{rf300007DD_temp}` — it keeps meaning that sensor when the list changes; *Available placeholders* inserts this form |
 | `{clock} {date} {date_full} {ip}` | local time HH:MM, date (DD.MM. / MM/DD), date with year (DD.MM.YYYY / MM/DD/YYYY), IP address (display only) |
 | `{u_temp} {u_wind} {u_rain} {u_rate} {u_press}` | the device's unit labels (display only) |
 

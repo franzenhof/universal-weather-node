@@ -27,6 +27,7 @@ try {
     ['otacheck', []],
     ['otaupload', ['src/ota_upload.cpp']],
     ['telemetry', [...common, 'src/json_payload.cpp', 'src/units.cpp', 'src/loxone_lines.cpp']],
+    ['srcbind', [...common, 'src/params.cpp']],
     ['rf', [...common, 'src/params.cpp']],
     ['i18n', [...common, 'src/params.cpp', 'src/i18n.cpp']],
     ['wizard', [...common, 'src/params.cpp', 'src/setup_wizard.cpp']],

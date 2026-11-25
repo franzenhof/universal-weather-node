@@ -102,7 +102,7 @@ A placeholder whose value is not available (no source, stale sensor) is left emp
 | `{time_utc}`, `{time_local}` | `YYYY-MM-DD hh:mm:ss` (UTC / local) | – | – |
 | `{epoch}` | Unix time (s) | – | – |
 | `{station}`, `{lat}`, `{lon}` | device name, latitude, longitude (as entered) | – | – |
-| `{rfN_temp}`, `{rfN_hum}`, `{rfN_wind}`, `{rfN_gust}`, `{rfN_dir}`, `{rfN_rain}`, `{rfN_uv}`, `{rfN_lux}`, `{rfN_batt}` | wireless sensor *N* (1–32, the number on the status page): temperature, humidity, wind, gust, direction, rain total (the sensor's counter), UV, lux, battery (1 = OK) | as above | as above |
+| `{rfN_temp}`, `{rfN_hum}`, `{rfN_wind}`, `{rfN_gust}`, `{rfN_dir}`, `{rfN_rain}`, `{rfN_uv}`, `{rfN_lux}`, `{rfN_batt}` | wireless sensor *N* (1–32, the number on the status page, or its 8-digit ID, e.g. `{rf300007DD_temp}` — keeps meaning that sensor when the list changes): temperature, humidity, wind, gust, direction, rain total (the sensor's counter), UV, lux, battery (1 = OK) | as above | as above |
 
 The [alarm messages and webhook](alarms.md#messages-and-placeholders) use the same placeholders plus the rule's own.
 

@@ -4,6 +4,18 @@ Release notes of the Universal Weather Node firmware, newest first. Binaries are
 
 [← back to README](README.md)
 
+## 2.0.5
+
+Firmware: [`universal-weather-node-2.0.5.bin`](firmware/universal-weather-node-2.0.5.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.5-factory.bin`](firmware/universal-weather-node-2.0.5-factory.bin) (first installation, USB at `0x0`). For the **Heltec WiFi LoRa 32 V3 and V4** (V4: ESP32-S3R2; not the V4-R8) — a small update of the 2.0.x line.
+
+**Updating**
+- **From 2.0.x:** OTA with either file over *Settings → System → Firmware update*. Settings, LoRaWAN session, rain totals and the payload format are unchanged (no decoder update needed). **Check the value sources once** (*Settings → Value sources*) and save.
+- **From 1.x or an older 2.0.0 beta:** see the notes of [2.0.0](#200) — use the file *without* `-factory`.
+
+- **Value sources, binding corrected:** the settings page and the settings backup now use the sensor's ID instead of its number. In 2.0.2–2.0.4, saving any setting while the chosen sensor was not received (e.g. right after a restart) could bind the source to a different sensor, and a source changed in the Wi-Fi portal was ignored. **Please check the value sources once after the update.** A sensor that gets a new ID with a battery change has to be chosen again.
+- **Placeholders by sensor ID:** `{rf300007DD_temp}` works like `{rf1_temp}` (custom screens, custom uploads, alarm texts) but keeps meaning that sensor when the list changes; *Available placeholders* inserts this form, the numbers still work. A line of a custom screen may have 63 characters (was 39).
+- **LDS01:** the API field `heaterActive` (and *heat* in the radio trace) is gone — the bit behind it marks the faster transmissions after a change of distance, not the heater. The heat-on count is its low byte only.
+
 ## 2.0.4
 
 Firmware: [`universal-weather-node-2.0.4.bin`](firmware/universal-weather-node-2.0.4.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.4-factory.bin`](firmware/universal-weather-node-2.0.4-factory.bin) (first installation, USB at `0x0`). For the **Heltec WiFi LoRa 32 V3 and V4** (V4: ESP32-S3R2; not the V4-R8) — a small update of the 2.0.x line.

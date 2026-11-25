@@ -37,9 +37,8 @@ namespace {
 bool num(PhValue& o, PhKind k, float v, int dec = -1) { o.kind = k; o.v = v; o.decimals = (int8_t)dec; return true; }
 bool text(PhValue& o, const char* s) { if (!s || !*s) return false; o.kind = PK_TEXT; o.text = s; return true; }
 
-bool rfLookup(int slot, const char* f, PhValue& o)
+bool rfLookup(int i, const char* f, PhValue& o)
 {
-    const int i = rfSensorIndexForSlot(slot - 1);
     if (i < 0 || !gRfSensors[i].used) return false;
     const RfSensorReading& r = gRfSensors[i];
     if (!strcmp(f, "batt")) return num(o, PK_PLAIN, r.batteryOk ? 1 : 0);
@@ -60,10 +59,10 @@ bool phLiveLookup(const char* n, PhValue& o, void* ctx)
 {
     const PhLive& l = *static_cast<const PhLive*>(ctx);
     const DerivedNow& d = l.d;
-    if (!strncmp(n, "rf", 2) && n[2] >= '0' && n[2] <= '9') {
-        char* end = nullptr;
-        const long slot = strtol(n + 2, &end, 10);
-        return *end == '_' && slot >= 1 && slot <= RF_MAX_SENSORS && rfLookup((int)slot, end + 1, o);
+    if (!strncmp(n, "rf", 2)) {   // no other name starts with "rf"
+        const char* field = nullptr;
+        const int i = rfIndexOfPlaceholder(n, &field);
+        return i >= 0 && rfLookup(i, field, o);
     }
     if (!strcmp(n, "temp"))      return gSrc.tempValid && num(o, PK_TEMP, gSrc.tempC);
     if (!strcmp(n, "hum"))       return gSrc.tempValid && gSrc.humValid && num(o, PK_PLAIN, gSrc.humidity);

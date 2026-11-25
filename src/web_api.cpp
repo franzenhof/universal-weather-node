@@ -2408,48 +2408,59 @@ void renderSettings(const String& message, bool isError, int httpCode)
     sectionStart(html, T(T_set_value_sources), false, T(T_set_value_sources_note));
     {
         // value sources (sources.h): one select per group; the wireless sensors that
-        // exist (received or ★, up to 32) with their name and ID - an empty number
-        // only while it is chosen
+        // exist (received or Mine, up to 32) with their name and ID. The option
+        // value of a sensor is its ID, so a save never moves a source to the sensor
+        // that happens to have the same number now.
         std::vector<uint32_t> ids = rfParseIds(gCfg.rfIds);
-        std::vector<String> rfLabel;
-        std::vector<Option> srcOpts;
-        rfLabel.reserve(RF_MAX_SENSORS);
-        srcOpts.reserve(RF_MAX_SENSORS + 3);
-        srcOpts.push_back({ SRC_AUTO, T(T_opt_auto_board_first_then_wireless) });
-        srcOpts.push_back({ SRC_BOARD, T(T_opt_board_sensor) });
+        std::vector<std::pair<String, String>> srcOpts;   // value, text
+        srcOpts.reserve(RF_MAX_SENSORS + 3 + SG_COUNT);
+        auto idValue = [](uint32_t id) { char h[12]; snprintf(h, sizeof(h), "r%08lX", (unsigned long)id); return String(h); };
+        // "Garten - 900181A2" with a user-defined name (rf_names.h), else the ID
+        auto who = [](uint32_t id) {
+            char h[12]; snprintf(h, sizeof(h), "%08lX", (unsigned long)id);
+            String w;
+            const char* nm = rfNameOf(id);
+            if (nm && *nm) { appendEscaped(w, nm); w += " &middot; "; }
+            return w + h;
+        };
+        auto offered = [&](const String& v) { for (const auto& o : srcOpts) if (o.first == v) return true; return false; };
+        srcOpts.push_back({ String((int)SRC_AUTO),  String(T(T_opt_auto_board_first_then_wireless)) });
+        srcOpts.push_back({ String((int)SRC_BOARD), String(T(T_opt_board_sensor)) });
         for (int k = 0; k < RF_MAX_SENSORS; k++) {
             const int idx = rfSensorIndexForSlot(k);
-            bool chosen = false;
-            for (int g = 0; g < SG_COUNT; g++) chosen |= srcSelSlot(srcSelDisplay((SrcGroup)g)) == k;
-            // "Garten · 900181A2" with a user-defined name (rf_names.h), else the ID
-            auto who = [](uint32_t id) {
-                char h[12]; snprintf(h, sizeof(h), "%08lX", (unsigned long)id);
-                String w;
-                const char* nm = rfNameOf(id);
-                if (nm && *nm) { appendEscaped(w, nm); w += " &middot; "; }
-                return w + h;
-            };
-            if (idx >= 0) {
-                rfLabel.push_back(TF(T_set_wireless_slot, String(k + 1), who(gRfSensors[idx].id)));
-            } else if (k < (int)ids.size()) {
-                rfLabel.push_back(TF(T_set_wireless_slot_not_received, String(k + 1), who(ids[k])));
-            } else if (chosen) {
-                rfLabel.push_back(TF(T_set_wireless_slot_empty, String(k + 1)));
-            } else {
-                continue;
-            }
-            srcOpts.push_back({ srcSelForSlot(k), rfLabel.back().c_str() });
+            if (idx >= 0)
+                srcOpts.push_back({ idValue(gRfSensors[idx].id), TF(T_set_wireless_slot, String(k + 1), who(gRfSensors[idx].id)) });
+            else if (k < (int)ids.size())
+                srcOpts.push_back({ idValue(ids[k]), TF(T_set_wireless_slot_not_received, String(k + 1), who(ids[k])) });
         }
-        srcOpts.push_back({ SRC_OFF, T(T_opt_off_not_reported) });
+        for (int g = 0; g < SG_COUNT; g++) {   // chosen, but neither received nor in the list now
+            char v[12]; srcFormValue((SrcGroup)g, v, sizeof(v));
+            if (srcSelSlot(gCfg.srcSel[g]) < 0 || offered(v)) continue;
+            const uint32_t id = srcBoundId((SrcGroup)g);
+            srcOpts.push_back({ String(v), id ? TF(T_set_wireless_slot_not_received, String("&ndash;"), who(id))
+                                              : TF(T_set_wireless_slot_empty, String(srcSelSlot(gCfg.srcSel[g]) + 1)) });
+        }
+        srcOpts.push_back({ String((int)SRC_OFF), String(T(T_opt_off_not_reported)) });
         static const char* const names[SG_COUNT]  = { "srcair", "srcwind", "srcrain", "srcuv", "srclight", "srcpress" };
         const char* const labels[SG_COUNT] = { T(T_opt_source_temperature_humidity), T(T_set_source_wind),
                                                       T(T_set_source_rain), T(T_set_source_uv), T(T_set_source_light), T(T_opt_source_pressure) };
         for (int g = 0; g < SG_COUNT; g++)
-            fieldSelect(html, names[g], labels[g], srcSelDisplay((SrcGroup)g), srcOpts.data(), srcOpts.size(),
-                        g == SG_AIR   ? T(T_set_used_for_lorawan_mqtt_weather) :
-                        g == SG_PRESS ? T(T_set_station_pressure_bme280_or_a) :
-                        g == SG_LIGHT ? T(T_set_only_wireless_sensors_e_g) :
-                        g == SG_RAIN  ? T(T_set_switching_keeps_the_rain_totals) : nullptr);
+{
+            const char* hint = g == SG_AIR   ? T(T_set_used_for_lorawan_mqtt_weather) :
+                               g == SG_PRESS ? T(T_set_station_pressure_bme280_or_a) :
+                               g == SG_LIGHT ? T(T_set_only_wireless_sensors_e_g) :
+                               g == SG_RAIN  ? T(T_set_switching_keeps_the_rain_totals) : nullptr;
+            char cur[12]; srcFormValue((SrcGroup)g, cur, sizeof(cur));
+            capture(names[g], String(cur));
+            labelStart(html, labels[g], hint);
+            html += "<select name='"; html += names[g]; formAttr(html); html += "'>";
+            for (const auto& o : srcOpts) {
+                html += "<option value='"; html += o.first; html += "'";
+                if (o.first == cur) html += " selected";
+                html += ">"; html += o.second; html += "</option>";
+            }
+            html += "</select></label>";
+        }
     }
     html += "</section>";
     renderSeriesSection(html);
@@ -3319,9 +3330,9 @@ void handlePlaceholders()
         if (nm && *nm) snprintf(label, sizeof(label), "%s", nm);
         else snprintf(label, sizeof(label), "%s %08lX", r.model ? r.model : "", (unsigned long)r.id);
         o.sensor = label;
-        char names[PH_RF_FIELD_COUNT][16];
+        char names[PH_RF_FIELD_COUNT][20];
         const char* ptrs[PH_RF_FIELD_COUNT];
-        for (int f = 0; f < PH_RF_FIELD_COUNT; f++) { snprintf(names[f], sizeof(names[f]), "rf%d_%s", slot, PH_RF_FIELDS[f]); ptrs[f] = names[f]; }
+        for (int f = 0; f < PH_RF_FIELD_COUNT; f++) { snprintf(names[f], sizeof(names[f]), "rf%08lX_%s", (unsigned long)r.id, PH_RF_FIELDS[f]); ptrs[f] = names[f]; }
         addEach(ptrs, PH_RF_FIELD_COUNT);
         o.sensor = nullptr;
     }
@@ -3643,7 +3654,7 @@ void handleSettingsPost()
     {
         static const char* const names[SG_COUNT] = { "srcair", "srcwind", "srcrain", "srcuv", "srclight", "srcpress" };
         for (int g = 0; g < SG_COUNT; g++)
-            if (formArg(names[g]).length())
+            if (formArg(names[g]).length() && !srcSetFormId((SrcGroup)g, formArg(names[g]).c_str()))
                 applyNum((uint8_t)srcParamId((SrcGroup)g), names[g], T(T_set_value_source));
     }
     applyCheck(PARAM_WIND_EN,                "winden",      T(T_set_wind_sensor));

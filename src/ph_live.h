@@ -5,7 +5,7 @@
 //   temp hum dew feels qnh press ptend3h wind gust dir rain_day rain_1h
 //   rain_24h rain_rate uv lux solar time_utc time_local epoch station lat lon
 //   rfN_temp rfN_hum rfN_wind rfN_gust rfN_dir rfN_rain rfN_uv rfN_lux
-//   rfN_batt (N = wireless sensor number 1-32)
+//   rfN_batt (N = wireless sensor number 1-32, or its ID: rf300007DD_temp)
 #include "placeholders.h"
 #include "derived_now.h"
 #include "wind_window.h"
@@ -24,7 +24,7 @@ bool phLiveLookup(const char* name, PhValue& out, void* ctx);   // ctx = PhLive*
 
 // The names above, for the settings page's list of placeholders
 // (GET /api/placeholders): main values, and the fields of a wireless sensor
-// (rf<N>_<field>).
+// (rf<ID>_<field>; rf<N>_<field> works as well).
 extern const char* const PH_LIVE_NAMES[];
 extern const int         PH_LIVE_NAME_COUNT;
 extern const char* const PH_RF_FIELDS[];

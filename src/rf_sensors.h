@@ -113,7 +113,6 @@ struct RfSensorReading {
     float   conductivityUsCm = 0.0f;
     bool    hasDistance = false;     // LDS01 laser distance (air gap), mm
     uint16_t distanceMm = 0;
-    bool    heaterActive = false;    // LDS01: heater on in the last frame
     bool    hasHeatCount = false;    // LDS01 heater-on count (low byte, wraps)
     uint8_t heatCount = 0;
 };

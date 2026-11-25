@@ -21,6 +21,7 @@
 // packet, aggregated per send path like the board's anemometer (interval or
 // 10-min window). Rain: the shared running total rainMMSinceStart only takes
 // increments from the selected source, so switching sources never jumps.
+#include <stddef.h>
 #include <stdint.h>
 #include "wind_window.h"
 
@@ -52,17 +53,28 @@ inline bool srcIsRadio(SrcGroup g) { return srcResolve(g) >= 0; }
 // gRfSensors[idx] was last received more than SRC_RF_FRESH_MS ago (stale).
 bool srcRfValueFresh(int idx, const char* value);
 
-// A wireless value source is bound to the chosen sensor's ID (gCfg.srcId[g]),
-// so it stays on that sensor when the table is re-sorted or re-read after a
-// restart. srcBindSel() refreshes the binding from the current srcSel[g] slot
-// (call after srcSel[g] changes); srcSelDisplay() gives the slot to preselect
-// in the settings dropdown (the bound sensor's current slot).
-void srcBindSel(SrcGroup g);
-int  srcSelDisplay(SrcGroup g);
+// A wireless value source is bound to the chosen sensor's ID (gCfg.srcId[g]):
+// it stays on that sensor when the table or the Mine list changes order, and
+// delivers nothing (not another sensor's value) while that sensor is silent.
+// srcBindSel():   bind by number, after srcSel[g] was set (parameters)
+// srcBoundId():   the bound sensor (a setting saved before the binding: the one
+//                 its number means now), 0 = not a wireless source / empty
+// srcFormValue(): the settings form's / backup's value - "r300004DB" for a
+//                 wireless sensor, else the srcSel number
+// srcSetFormId(): takes such an "r<ID>" (also a sensor not received right now);
+//                 false = not one (a plain number goes through the parameter)
+void     srcBindSel(SrcGroup g);
+uint32_t srcBoundId(SrcGroup g);
+void     srcFormValue(SrcGroup g, char* out, size_t len);
+bool     srcSetFormId(SrcGroup g, const char* v);
 
 // gRfSensors[] index of wireless sensor slot 0..RF_MAX_SENSORS-1 (0-based:
 // slot 0 = "Wireless 1", see above), -1 = none
 int rfSensorIndexForSlot(int slot);
+// Sensor of a placeholder name "rf<N>_..." (number 1-32) or "rf<ID>_..." (exactly
+// 8 hex digits, e.g. "rf300007DD_temp"): gRfSensors[] index, -1 = none; *field =
+// the part after the '_'.
+int rfIndexOfPlaceholder(const char* name, const char** field);
 // The other way round: 0-based slot of gRfSensors[idx] (its position in the
 // ID list, else idx), -1 = unused entry / not in the list.
 int rfSlotOfIndex(int idx);

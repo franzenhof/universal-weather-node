@@ -428,7 +428,7 @@ void rfTraceFoValues(const FoFrame& f, char* out, size_t len)
     if (f.hasLeak)      addf(out, len, n, "leak %s ", f.leak ? "YES" : "no");
     if (f.hasLeafWetness)  addf(out, len, n, "leaf %u%% ", f.leafWetnessPct);
     if (f.hasConductivity) addf(out, len, n, "EC %.0fuS/cm ", f.conductivityUsCm);
-    if (f.hasDistance)  addf(out, len, n, "dist %umm%s ", f.distanceMm, f.heaterActive ? " heat" : "");
+    if (f.hasDistance)  addf(out, len, n, "dist %umm%s ", f.distanceMm, f.fastTx ? " fast" : "");
     if (f.hasHeatCount) addf(out, len, n, "HoC %u ", f.heatCount);
     if (f.hasSupercap)  addf(out, len, n, "cap %.2fV ", f.supercapV);
     if (f.batteryMv)    addf(out, len, n, "bat %umV ", f.batteryMv);

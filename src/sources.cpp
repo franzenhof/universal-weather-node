@@ -9,8 +9,10 @@
 #include <FineOffsetDecoder.h>
 
 #include <Arduino.h>
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 SrcValues gSrc;
@@ -133,28 +135,69 @@ static int rfIndexOfId(uint32_t id)
     return -1;
 }
 
-// Re-bind srcId[g] to the sensor the current srcSel[g] slot points to (0 for
-// auto / board / off, or a slot with no sensor). Called after srcSel[g] is set
-// (params.cpp) so a wireless source follows its sensor by ID, not by position.
+int rfIndexOfPlaceholder(const char* name, const char** field)
+{
+    if (!name || strncmp(name, "rf", 2)) return -1;
+    const char* p = name + 2;
+    size_t n = 0;
+    bool digits = true;
+    for (; isxdigit((unsigned char)p[n]); n++) digits &= p[n] >= '0' && p[n] <= '9';
+    if (p[n] != '_') return -1;
+    *field = p + n + 1;
+    if (n == 8) return rfIndexOfId((uint32_t)strtoul(p, nullptr, 16));
+    if (!digits || n < 1 || n > 2) return -1;
+    return rfSensorIndexForSlot(atoi(p) - 1);
+}
+
+// Sensor ID behind a slot: the received sensor, else the Mine list entry (its
+// slot is its list position, also while not received); 0 = empty.
+static uint32_t idOfSlot(int slot)
+{
+    const int idx = rfSensorIndexForSlot(slot);
+    if (idx >= 0) return gRfSensors[idx].id;
+    const std::vector<uint32_t> ids = rfParseIds(gCfg.rfIds);
+    return slot >= 0 && slot < (int)ids.size() ? ids[slot] : 0;
+}
+
 void srcBindSel(SrcGroup g)
 {
     if (g >= SG_COUNT) return;
     const int slot = srcSelSlot(gCfg.srcSel[g]);
-    const int idx  = slot >= 0 ? rfSensorIndexForSlot(slot) : -1;
-    gCfg.srcId[g]  = idx >= 0 ? gRfSensors[idx].id : 0;
+    gCfg.srcId[g]  = slot >= 0 ? idOfSlot(slot) : 0;
 }
 
-// Slot-encoded value to preselect in the settings dropdown: the bound sensor's
-// current slot (so the choice follows the sensor across re-sorts / re-reads),
-// else the stored setting (auto / board / off, or a pre-binding wireless slot).
-int srcSelDisplay(SrcGroup g)
+uint32_t srcBoundId(SrcGroup g)
 {
-    if (g < SG_COUNT && gCfg.srcId[g]) {
-        const int idx  = rfIndexOfId(gCfg.srcId[g]);
-        const int slot = idx >= 0 ? rfSlotOfIndex(idx) : -1;
-        if (slot >= 0) return srcSelForSlot(slot);
+    if (g >= SG_COUNT) return 0;
+    const int slot = srcSelSlot(gCfg.srcSel[g]);
+    if (slot < 0) return 0;
+    return gCfg.srcId[g] ? gCfg.srcId[g] : idOfSlot(slot);
+}
+
+void srcFormValue(SrcGroup g, char* out, size_t len)
+{
+    const uint32_t id = srcBoundId(g);
+    if (id) snprintf(out, len, "r%08lX", (unsigned long)id);
+    else    snprintf(out, len, "%u", g < SG_COUNT ? gCfg.srcSel[g] : 0);
+}
+
+bool srcSetFormId(SrcGroup g, const char* v)
+{
+    if (g >= SG_COUNT || !v || v[0] != 'r' || strlen(v) != 9) return false;
+    char* end = nullptr;
+    const uint32_t id = (uint32_t)strtoul(v + 1, &end, 16);
+    if (!id || *end) return false;
+    // the number only matters for displays / parameters: the sensor's current
+    // one if it has one, else the previous wireless number
+    int slot = rfSlotOfIndex(rfIndexOfId(id));
+    if (slot < 0) {
+        const std::vector<uint32_t> ids = rfParseIds(gCfg.rfIds);
+        for (size_t k = 0; k < ids.size() && slot < 0; k++) if (ids[k] == id) slot = (int)k;
     }
-    return gCfg.srcSel[g];
+    if (slot >= 0 && slot < SRC_RF_SLOTS_MAX) gCfg.srcSel[g] = (uint8_t)srcSelForSlot(slot);
+    else if (srcSelSlot(gCfg.srcSel[g]) < 0)  gCfg.srcSel[g] = SRC_RF1;
+    gCfg.srcId[g] = id;
+    return true;
 }
 
 // Auto among wireless 1-4: Ecowitt's own order when several deliver the same

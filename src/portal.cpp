@@ -691,7 +691,10 @@ void runConfigPortal(Config& cfg)
             const char* p = p_srcs.getValue();
             for (int i = 0; i < (int)sizeof(c.srcSel) && *p; i++) {
                 int v = atoi(p);
-                if (srcSelValid(v)) c.srcSel[i] = (uint8_t)v;
+                if (srcSelValid(v) && c.srcSel[i] != (uint8_t)v) {
+                    c.srcSel[i] = (uint8_t)v;
+                    c.srcId[i]  = 0;   // a new number chosen here: not the old binding any more
+                }
                 while (*p && *p != ',') p++;
                 if (*p == ',') p++;
             }

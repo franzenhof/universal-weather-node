@@ -174,10 +174,7 @@ void addRfSensorJson(JsonObject o, int i)
     }
     if (r.hasLeafWetness) o["leafWetnessPct"] = r.leafWetnessPct;
     if (r.hasConductivity) o["conductivityUsCm"] = (long)lroundf(r.conductivityUsCm);
-    if (r.hasDistance) {
-        o["distanceMm"] = r.distanceMm;          // LDS01 laser distance (air gap)
-        if (r.heaterActive) o["heaterActive"] = true;
-    }
+    if (r.hasDistance) o["distanceMm"] = r.distanceMm;  // LDS01 laser distance (air gap)
     if (r.hasHeatCount) o["heatCount"] = r.heatCount;   // LDS01 heater-on count (low byte)
     // values not received for more than 5 min (the sensor still sends others)
     const bool has[7] = { r.hasTemp, r.hasHumidity, r.hasWind, r.hasRain, r.hasUv, r.hasLight, r.hasPressure };

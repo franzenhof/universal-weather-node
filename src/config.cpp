@@ -311,7 +311,7 @@ void loadConfigInto(Config& c)
         seriesUnpack(s, c.series);
     }
     for (int i = 0; i < OLED_CUSTOM_COUNT; i++) {   // "dcus0", "dcus1", oled_custom.h
-        char key[8], s[300] = "";
+        char key[8], s[400] = "";   // layout + title + 5 lines
         snprintf(key, sizeof(key), "dcus%d", i);
         if (prefs.isKey(key)) prefs.getString(key, s, sizeof(s));
         oledCustomUnpack(s, c.dispCustom[i]);
@@ -509,7 +509,7 @@ void saveConfig(const Config& c)
         ok &= checkWriteStr("series", prefs.putString("series", s), s);
     }
     for (int i = 0; i < OLED_CUSTOM_COUNT; i++) {
-        char key[8], s[300];
+        char key[8], s[400];
         snprintf(key, sizeof(key), "dcus%d", i);
         oledCustomPack(c.dispCustom[i], s, sizeof(s));
         ok &= checkWriteStr(key, prefs.putString(key, s), s);
