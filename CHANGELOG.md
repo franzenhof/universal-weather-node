@@ -4,6 +4,16 @@ Release notes of the Universal Weather Node firmware, newest first. Binaries are
 
 [← back to README](README.md)
 
+## 2.0.4
+
+Firmware: [`universal-weather-node-2.0.4.bin`](firmware/universal-weather-node-2.0.4.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.4-factory.bin`](firmware/universal-weather-node-2.0.4-factory.bin) (first installation, USB at `0x0`). For the **Heltec WiFi LoRa 32 V3 and V4** (V4: ESP32-S3R2; not the V4-R8) — a small update of the 2.0.x line.
+
+**Updating**
+- **From 2.0.x:** OTA with either file over *Settings → System → Firmware update*. Settings, LoRaWAN session, rain totals and the payload format are unchanged (no decoder update needed).
+- **From 1.x or an older 2.0.0 beta:** see the notes of [2.0.0](#200) — use the file *without* `-factory`.
+
+- **LDS01 on the dashboard:** the sensor card now shows the distance in mm.
+
 ## 2.0.3
 
 Firmware: [`universal-weather-node-2.0.3.bin`](firmware/universal-weather-node-2.0.3.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.3-factory.bin`](firmware/universal-weather-node-2.0.3-factory.bin) (first installation, USB at `0x0`). For the **Heltec WiFi LoRa 32 V3 and V4** (V4: ESP32-S3R2; not the V4-R8) — a small update of the 2.0.x line.

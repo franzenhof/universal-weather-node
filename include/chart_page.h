@@ -1292,6 +1292,7 @@ function renderSensors(current) {
     if (has(s.leak)) val('', s.leak ? '<b class="bad">' + t('leak') + '</b>' : '<span class="ok">' + t('dry') + '</span>');
     if (has(s.leafWetnessPct)) val('', t('leafWet') + ' ' + s.leafWetnessPct + ' %');
     if (has(s.conductivityUsCm)) val('', 'EC ' + s.conductivityUsCm + ' µS/cm');
+    if (has(s.distanceMm)) val('', s.distanceMm + ' mm');   // LDS01 air gap; the card title names the quantity
     if (has(s.co2Ppm)) val('', 'CO₂ ' + s.co2Ppm + ' ppm');
     [['pm1', 'PM1'], ['pm25', 'PM2.5'], ['pm4', 'PM4'], ['pm10', 'PM10']].forEach(function (p) {
       if (has(s[p[0]])) val('', p[1] + ' ' + s[p[0]].toFixed(1) + ' µg/m³' + (p[0] === 'pm10' && s.pm10Estimated ? ' (' + t('est') + ')' : ''));
