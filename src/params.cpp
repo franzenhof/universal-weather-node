@@ -57,10 +57,13 @@ bool applyParam(uint8_t paramId, int16_t value)
             gCfg.mqttWindAgg = value;
             return true;
         case PARAM_SRC_TEMP_HUM: case PARAM_SRC_WIND: case PARAM_SRC_RAIN:
-        case PARAM_SRC_UV: case PARAM_SRC_LIGHT:
+        case PARAM_SRC_UV: case PARAM_SRC_LIGHT: {
             if (!srcSelValid(value)) return false;
-            gCfg.srcSel[paramId - PARAM_SRC_TEMP_HUM] = (uint8_t)value;
+            const SrcGroup g = (SrcGroup)(paramId - PARAM_SRC_TEMP_HUM);
+            gCfg.srcSel[g] = (uint8_t)value;
+            srcBindSel(g);   // pin the chosen wireless sensor by ID
             return true;
+        }
         case PARAM_RF_ONLY_MINE:
             if (value != 0 && value != 1) return false;
             gCfg.rfOnlyMine = value;
@@ -88,6 +91,7 @@ bool applyParam(uint8_t paramId, int16_t value)
         case PARAM_SRC_PRESSURE:
             if (!srcSelValid(value)) return false;
             gCfg.srcSel[SG_PRESS] = (uint8_t)value;
+            srcBindSel(SG_PRESS);   // pin the chosen wireless sensor by ID
             return true;
         case PARAM_RF_PROTO:
             if (!rfProtoValid(value)) return false;

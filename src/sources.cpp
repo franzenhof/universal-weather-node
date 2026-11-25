@@ -124,8 +124,41 @@ int rfSlotOfIndex(int idx)
     return slotOf(ids, idx, mineBefore);
 }
 
+// gRfSensors[] index of a used sensor with this ID, -1 = not in the table.
+static int rfIndexOfId(uint32_t id)
+{
+    if (!id) return -1;
+    for (int i = 0; i < RF_MAX_SENSORS; i++)
+        if (gRfSensors[i].used && gRfSensors[i].id == id) return i;
+    return -1;
+}
+
+// Re-bind srcId[g] to the sensor the current srcSel[g] slot points to (0 for
+// auto / board / off, or a slot with no sensor). Called after srcSel[g] is set
+// (params.cpp) so a wireless source follows its sensor by ID, not by position.
+void srcBindSel(SrcGroup g)
+{
+    if (g >= SG_COUNT) return;
+    const int slot = srcSelSlot(gCfg.srcSel[g]);
+    const int idx  = slot >= 0 ? rfSensorIndexForSlot(slot) : -1;
+    gCfg.srcId[g]  = idx >= 0 ? gRfSensors[idx].id : 0;
+}
+
+// Slot-encoded value to preselect in the settings dropdown: the bound sensor's
+// current slot (so the choice follows the sensor across re-sorts / re-reads),
+// else the stored setting (auto / board / off, or a pre-binding wireless slot).
+int srcSelDisplay(SrcGroup g)
+{
+    if (g < SG_COUNT && gCfg.srcId[g]) {
+        const int idx  = rfIndexOfId(gCfg.srcId[g]);
+        const int slot = idx >= 0 ? rfSlotOfIndex(idx) : -1;
+        if (slot >= 0) return srcSelForSlot(slot);
+    }
+    return gCfg.srcSel[g];
+}
+
 // Auto among wireless 1-4: Ecowitt's own order when several deliver the same
-// group (Ecowitt wiki by Gyvate, section "sensor hierarchy"); lower = first,
+// group (Ecowitt wiki, section "sensor hierarchy"); lower = first,
 // ties and other sensors (Bresser, IT+, Davis, other families) by number.
 int srcHierarchyRank(const RfSensorReading& r, SrcGroup g)
 {
@@ -154,7 +187,9 @@ int srcResolve(SrcGroup g)
     if (sel == SRC_OFF) return SRC_NONE;
     if (sel == SRC_BOARD) return boardHas(g) ? SRC_IS_BOARD : SRC_NONE;
     if (srcSelSlot(sel) >= 0) {
-        int idx = rfSensorIndexForSlot(srcSelSlot(sel));
+        // bound to the chosen sensor by ID (position-independent); the slot is
+        // only a fallback for configs saved before the binding existed
+        int idx = gCfg.srcId[g] ? rfIndexOfId(gCfg.srcId[g]) : rfSensorIndexForSlot(srcSelSlot(sel));
         return radioHas(idx, g) ? idx : SRC_NONE;
     }
     // Auto: board first, then

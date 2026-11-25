@@ -177,7 +177,7 @@ A line is text with placeholders, as for the [custom uploads](weather-networks.m
 | `{temp} {hum} {dew} {feels} {qnh} {press} {ptend3h}` | the main values (selected sources) |
 | `{wind} {gust} {dir}` · `{rain_day} {rain_1h} {rain_24h} {rain_rate}` · `{uv} {lux} {solar}` | |
 | `{rfN_temp} {rfN_hum} {rfN_wind} {rfN_gust} {rfN_dir} {rfN_rain} {rfN_uv} {rfN_lux} {rfN_batt}` | wireless sensor N (1–32, the number in the sensor list) |
-| `{clock} {date} {ip}` | local time HH:MM, date, IP address (display only) |
+| `{clock} {date} {date_full} {ip}` | local time HH:MM, date (DD.MM. / MM/DD), date with year (DD.MM.YYYY / MM/DD/YYYY), IP address (display only) |
 | `{u_temp} {u_wind} {u_rain} {u_rate} {u_press}` | the device's unit labels (display only) |
 
 Above the first screen's fields, *Available placeholders* lists every placeholder that has a value right now, with that value; a click inserts it into the field used last. The custom uploads (*Outputs*) and the alarm texts have the same list.

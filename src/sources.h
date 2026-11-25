@@ -52,6 +52,14 @@ inline bool srcIsRadio(SrcGroup g) { return srcResolve(g) >= 0; }
 // gRfSensors[idx] was last received more than SRC_RF_FRESH_MS ago (stale).
 bool srcRfValueFresh(int idx, const char* value);
 
+// A wireless value source is bound to the chosen sensor's ID (gCfg.srcId[g]),
+// so it stays on that sensor when the table is re-sorted or re-read after a
+// restart. srcBindSel() refreshes the binding from the current srcSel[g] slot
+// (call after srcSel[g] changes); srcSelDisplay() gives the slot to preselect
+// in the settings dropdown (the bound sensor's current slot).
+void srcBindSel(SrcGroup g);
+int  srcSelDisplay(SrcGroup g);
+
 // gRfSensors[] index of wireless sensor slot 0..RF_MAX_SENSORS-1 (0-based:
 // slot 0 = "Wireless 1", see above), -1 = none
 int rfSensorIndexForSlot(int slot);

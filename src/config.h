@@ -185,6 +185,8 @@ struct Config {
     volatile int davisRxBw     = 938;    // receiver bandwidth, kHz x 10 (davisRxBwValid())
     uint8_t  srcSel[6]         = { 0, 0, 0, 0, 0, 0 };   // value sources (sources.h SrcGroup): air, wind, rain, UV, light, pressure; 0 = auto
                                                       // (keys src0..src5; a config without src5 = Auto, i.e. the BME280 as before)
+    uint32_t srcId[6]          = { 0, 0, 0, 0, 0, 0 };   // the sensor ID a wireless source is bound to (0 = auto/board/off, or a pre-binding config);
+                                                      // keeps the source on the chosen sensor when the table is re-sorted or re-read (keys srcid0..srcid5)
     // Wireless sensor IDs "Mine" (hex, comma-separated, max RF_MAX_SENSORS = 32;
     // 32 x 8 hex digits + 31 ", " separators = 318 characters). With
     // rfOnlyMine only these are accepted (empty list = any sensor).

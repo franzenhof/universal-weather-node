@@ -27,7 +27,7 @@ static_assert(HA_RF_IDS_LEN >= RF_MAX_SENSORS * 9 + 1, "every listed ID must fit
 namespace {
 
 enum Unit : uint8_t { U_NONE, U_TEMP, U_WIND, U_RAIN, U_PCT, U_DEG, U_LX, U_WM2, U_V, U_KM, U_DBM, U_S, U_UV,
-                     U_PRESS, U_UGM3, U_PPM, U_USCM };
+                     U_PRESS, U_UGM3, U_PPM, U_USCM, U_MM };
 
 struct EntityDef {
     const char* key;          // unique_id / config topic suffix
@@ -75,11 +75,14 @@ const EntityDef ENTITIES[HA_RF_ENTITY_COUNT] = {
     { "rain_today",         "Rain Today",         false, U_RAIN, "precipitation",   "total_increasing", "rainToday",       nullptr,    false },
     { "lightning_today",    "Lightning Strikes Today", false, U_NONE, nullptr,      "total_increasing", "lightningToday",  nullptr,    false },
     { "last_lightning",     "Last Lightning",     false, U_NONE, "timestamp",       nullptr,            "lastLightning",   nullptr,    false },
+    // LDS01 laser distance (air gap); heat-on count wraps at 256 -> total_increasing sees a new cycle
+    { "distance",           "Distance",           false, U_MM,   "distance",        "measurement",      "distanceMm",      nullptr,    false },
+    { "heat_count",         "Heater-On Count",    false, U_NONE, nullptr,           "total_increasing", "heatCount",       nullptr,    true  },
 };
 enum : int { E_TEMP, E_HUM, E_WSPD, E_WGUST, E_WDIR, E_RAIN, E_UV, E_LIGHT, E_SOLAR, E_SOIL, E_LCOUNT, E_LDIST,
              E_SUPERCAP, E_BATTERY, E_RSSI, E_AGE, E_PRESS, E_PM25, E_PM10, E_PM1, E_PM4, E_CO2, E_LEAK, E_LEAF, E_EC,
-             E_RAINDAY, E_LTODAY, E_LLAST };
-static_assert(E_LLAST + 1 == HA_RF_ENTITY_COUNT && HA_RF_ENTITY_COUNT <= 32, "one mask bit per entity");
+             E_RAINDAY, E_LTODAY, E_LLAST, E_DISTANCE, E_HEATCOUNT };
+static_assert(E_HEATCOUNT + 1 == HA_RF_ENTITY_COUNT && HA_RF_ENTITY_COUNT <= 32, "one mask bit per entity");
 
 const char* unitText(Unit u)
 {
@@ -100,6 +103,7 @@ const char* unitText(Unit u)
         case U_UGM3: return "\xC2\xB5g/m\xC2\xB3";
         case U_PPM:  return "ppm";
         case U_USCM: return "\xC2\xB5S/cm";
+        case U_MM:   return "mm";
         default:     return nullptr;
     }
 }
@@ -279,6 +283,8 @@ uint32_t haRfEntityMask(int idx)
     if (r.hasLeak)      m |= 1UL << E_LEAK;
     if (r.hasLeafWetness)  m |= 1UL << E_LEAF;
     if (r.hasConductivity) m |= 1UL << E_EC;
+    if (r.hasDistance)     m |= 1UL << E_DISTANCE;
+    if (r.hasHeatCount)    m |= 1UL << E_HEATCOUNT;
     return m;
 }
 

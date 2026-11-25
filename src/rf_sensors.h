@@ -111,6 +111,11 @@ struct RfSensorReading {
     uint8_t leafWetnessPct = 0;
     bool    hasConductivity = false; // WH52 soil EC
     float   conductivityUsCm = 0.0f;
+    bool    hasDistance = false;     // LDS01 laser distance (air gap), mm
+    uint16_t distanceMm = 0;
+    bool    heaterActive = false;    // LDS01: heater on in the last frame
+    bool    hasHeatCount = false;    // LDS01 heater-on count (low byte, wraps)
+    uint8_t heatCount = 0;
 };
 
 extern RfSensorReading gRfSensors[RF_MAX_SENSORS];
@@ -193,7 +198,7 @@ int  rfHiddenInRange(unsigned long now);
 // temperature / humidity - without an ID list one could otherwise land in
 // wireless 1-4 and feed the outdoor temperature. "Wireless n" may still use them.
 bool rfIsIndoor(const RfSensorReading& r);
-// Nominal send interval (ms) of a sensor (Ecowitt wiki by Gyvate, section
+// Nominal send interval (ms) of a sensor (Ecowitt wiki, section
 // "transmission intervals"; Fine Offset family by ID, 0 = unknown) and its
 // freshness window: max(SRC_RF_FRESH_MS, 2.5 x the interval) - the 10-minute
 // air quality sensors (WH41 / WH43 / WH45 / WH46 on battery) stay fresh
@@ -224,7 +229,9 @@ uint32_t rfSensorsPacketsTotal();
 
 // The last radio-clock time a Fine Offset sensor sent (WH31 with a DCF77 /
 // WWVB receiver, family 0x52): shown on the status page; not used as the
-// node's clock (yet). false = none received since the start.
+// node's clock (yet) - and barely could be: it sends the time only after a
+// battery change and then about once a day at night (~02:00 local, forum
+// SonneKF 2026-11-24). false = none received since the start.
 struct RfRadioClock {
     uint8_t  stationId = 0;      // the sensor's 8-bit ID (as in its WH31 frames)
     uint16_t year = 0;

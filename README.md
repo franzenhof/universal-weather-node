@@ -56,7 +56,7 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 </p>
 <!-- /help:skip -->
 
-**Current release:** [2.0.1](firmware/universal-weather-node-2.0.1.bin) ([factory image](firmware/universal-weather-node-2.0.1-factory.bin) for the first installation) — see the [Changelog](CHANGELOG.md#201). Branches: **`2.x`** = the 2.0.x line (fixes for Heltec V3 and V4), **`main`** = the next major version (in development, Heltec V4 only), **`1.x`** = the old 1.x line (archive).
+**Current release:** [2.0.2](firmware/universal-weather-node-2.0.2.bin) ([factory image](firmware/universal-weather-node-2.0.2-factory.bin) for the first installation) — see the [Changelog](CHANGELOG.md#202). Branches: **`2.x`** = the 2.0.x line (fixes for Heltec V3 and V4), **`main`** = the next major version (in development, Heltec V4 only), **`1.x`** = the old 1.x line (archive).
 
 ## Documentation
 

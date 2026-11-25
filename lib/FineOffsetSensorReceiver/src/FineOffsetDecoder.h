@@ -88,6 +88,10 @@ struct FoFrame {
     uint16_t leakRaw = 0;                                // raw capacitance value (lower = wetter)
     bool  hasLeafWetness = false; uint8_t leafWetnessPct = 0;      // WN35
     bool  hasConductivity = false; float conductivityUsCm = 0.0f;  // WH52, uS/cm
+    // LDS01 laser distance (air gap to the surface, e.g. tank / well / snow)
+    bool  hasDistance = false;    uint16_t distanceMm = 0;         // 12-bit, mm
+    bool  hasHeatCount = false;   uint8_t heatCount = 0;           // heater-on count (low byte); +1 per heating event
+    bool  heaterActive = false;                                    // heater on in this frame (flag bit)
     bool  batteryKnown = true;                                     // false: the frame's battery field is not known (LDS01)
     // FO_FAMILY_RCC: the time the sensor's radio-clock receiver decoded (local
     // time of the time signal, e.g. CET/CEST for DCF77); no sensor values

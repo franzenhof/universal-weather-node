@@ -24,6 +24,7 @@ const SeriesFieldInfo SERIES_FIELDS[SF_COUNT] = {
     /* SF_DS1      */ { "ds1",      "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  true  },
     /* SF_DS2      */ { "ds2",      "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  true  },
     /* SF_DS3      */ { "ds3",      "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  true  },
+    /* SF_LDIST    */ { "distance", "mm",       1.0f,  0, SA_MEAN, false, false },
 };
 
 int seriesFieldByKey(const char* key)

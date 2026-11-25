@@ -22,6 +22,7 @@ enum SeriesField : uint8_t {
     SF_TEMP = 0, SF_HUM, SF_MOIST, SF_LEAF, SF_STRIKES, SF_DIST, SF_PM25, SF_PM10, SF_CO2,
     SF_EC, SF_PRESS, SF_LUX, SF_UV, SF_BATT, SF_SUPERCAP,
     SF_DS1, SF_DS2, SF_DS3,   // board DS18B20 probes 1-3 (rfId 0)
+    SF_LDIST,                 // LDS01 laser distance (air gap / level), mm
     SF_COUNT
 };
 enum SeriesAgg : uint8_t { SA_MEAN = 0, SA_SUM, SA_MIN };

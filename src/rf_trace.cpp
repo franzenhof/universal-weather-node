@@ -75,12 +75,25 @@ portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 const char* const PHASES[RF_TP_COUNT] = { "BRESSER", "IT+17", "IT+9", "FSK17", "DAVIS" };
 const char* const RESULTS[RF_TR_RESULTS] = { "OK", "IGNORED", "FAILED", "UNKNOWN", "EVENT" };
 
+// Match a sensor ID against the one-ID filter. The full on-air ID carries a
+// family byte on top (e.g. 0x54 = LDS01, so 54802801), while the sensor table
+// and the Ecowitt app often show only the lower part (2801 / 802801). Accept a
+// short ID the user typed by matching as many low bytes as were entered, so a
+// capture of e.g. the LDS01 is not left empty because of a too-short filter ID.
+inline bool idMatchesFilter(uint32_t id, uint32_t filterId)
+{
+    if (id == filterId) return true;
+    if (filterId <= 0xFFFFFFUL && (id & 0xFFFFFFUL) == filterId) return true;   // low 3 bytes (24-bit ID without family)
+    if (filterId <= 0xFFFFUL   && (id & 0xFFFFUL)   == filterId) return true;   // low 2 bytes
+    return false;
+}
+
 bool wantsLocked(const Trace& t, RfTraceResult r, bool hasId, uint32_t id)
 {
     if (!t.running) return false;
     switch (t.filter) {
         case RF_TRACE_PROBLEMS: return r == RF_TR_FAILED || r == RF_TR_UNKNOWN;
-        case RF_TRACE_ONE_ID:   return hasId && id == t.filterId;
+        case RF_TRACE_ONE_ID:   return hasId && idMatchesFilter(id, t.filterId);
         default:                return true;
     }
 }
@@ -415,9 +428,12 @@ void rfTraceFoValues(const FoFrame& f, char* out, size_t len)
     if (f.hasLeak)      addf(out, len, n, "leak %s ", f.leak ? "YES" : "no");
     if (f.hasLeafWetness)  addf(out, len, n, "leaf %u%% ", f.leafWetnessPct);
     if (f.hasConductivity) addf(out, len, n, "EC %.0fuS/cm ", f.conductivityUsCm);
+    if (f.hasDistance)  addf(out, len, n, "dist %umm%s ", f.distanceMm, f.heaterActive ? " heat" : "");
+    if (f.hasHeatCount) addf(out, len, n, "HoC %u ", f.heatCount);
     if (f.hasSupercap)  addf(out, len, n, "cap %.2fV ", f.supercapV);
     if (f.batteryMv)    addf(out, len, n, "bat %umV ", f.batteryMv);
-    if (!f.batteryKnown) { if (!f.hasClock) addf(out, len, n, "values not decoded yet (raw bytes below)"); }   // a radio-clock frame carries only the time
+    // a radio-clock frame carries only the time; an LDS01 carries distance but no battery field
+    if (!f.batteryKnown) { if (!f.hasClock && !f.hasDistance) addf(out, len, n, "values not decoded yet (raw bytes below)"); }
     else                 addf(out, len, n, "%s", f.batteryOk ? "bat ok" : "BAT LOW");
 }
 
@@ -493,8 +509,15 @@ void rfTraceWriteFile(RfTraceWriter w, void* ctx, const char* hostname, const ch
     o.fmt("#   hidden:        %s\n", gCfg.rfIgnore[0] ? gCfg.rfIgnore : "(none)");
     o.fmt("#   only mine:     %s\n", rfOnlyMineActive() ? "on (other sensors are dropped: IGNORED)" : "off");
     o.fmt("#   LoRaWAN:       %s (shares the radio: no reception during uplinks)\n", gCfg.loraEn ? "on" : "off");
-    o.fmt("#   sources:       air %u, wind %u, rain %u, UV %u, light %u, pressure %u (0 auto, 1 board, 2-5 wireless 1-4, 6 off)\n",
-          gCfg.srcSel[0], gCfg.srcSel[1], gCfg.srcSel[2], gCfg.srcSel[3], gCfg.srcSel[4], gCfg.srcSel[5]);
+    {
+        static const char* const sgName[6] = { "air", "wind", "rain", "UV", "light", "pressure" };
+        o.str("#   sources:       ");
+        for (int g = 0; g < 6; g++) {
+            o.fmt("%s%s %u", g ? ", " : "", sgName[g], gCfg.srcSel[g]);
+            if (gCfg.srcId[g]) o.fmt(" (%08lX)", (unsigned long)gCfg.srcId[g]);
+        }
+        o.str(" (0 auto, 1 board, 2-33 wireless 1-32, 34 off; () = bound sensor ID)\n");
+    }
     o.fmt("#   units:         %s, wind %s\n", gCfg.unitSystem == 1 ? "imperial" : "metric", gCfg.windUnitMs ? "m/s" : "km/h");
     if (gCfg.rfProto == RF_PROTO_DAVIS)
         o.fmt("#   Davis:         ID %d, offset %d Hz, window %d / guard %d ms, scan %d kHz, AFC %d, table %d, bw %d, "

@@ -488,7 +488,8 @@ int main()
         assert(f.family == FO_FAMILY_WH32 && near(f.tempC, 4.7f, 0.05f) && f.humidity == 90 && !f.hasPressure);
 
         // LDS01 (family 0x54): 19-byte frames every 80 s, CRC-8 at 17 and sum
-        // at 18; recognised by ID, the fields are not decoded yet
+        // at 18. Distance = low 12 bits of b[6..7] in mm (bit 0x40 of b[6] =
+        // heater on), b[15] = heater-on count (low byte).
         assert(foFrameLength(FO_FAMILY_LDS01) == 19);
         const char* const lds[] = { "548028018C64052940000007093FEC1A66FF15", "548028018C64052A400000070946B61A66866E",
                                     "548028018C64052A4000000A094CCA1A66292E", "548028018C6405294000000B0948FD1A6690C4",
@@ -496,6 +497,20 @@ int main()
         for (const char* h : lds) {
             assert(dec(h, f) && !strcmp(f.model, "LDS01") && f.family == FO_FAMILY_LDS01 && f.id == 0x802801);
             assert(rfFineOffsetId(f) == 0x54802801 && !f.batteryKnown && !f.hasTemp && !f.hasRain);
+            assert(f.hasDistance && f.distanceMm >= 1321 && f.distanceMm <= 1322 && !f.heaterActive &&
+                   f.hasHeatCount && f.heatCount == 0x1A);
+        }
+        // Real trace with the console's own readings (2026-11-25):
+        // distance (mm) and the heat-on count (console "HoC", low byte) - the
+        // heater flag is set right after a large distance change.
+        struct { const char* hx; uint16_t mm; bool heat; uint8_t hoc; } real[] = {
+            { "548028018C6401F04000001015CA502566220A",  496, false, 0x25 },   // HoC 293
+            { "548028018C6443E94000000E0B261927661452", 1001, true,  0x27 },   // HoC 295, heater on
+            { "548028018B6401F44000001214C02C2966793B",  500, false, 0x29 },   // HoC 297
+        };
+        for (auto& t : real) {
+            assert(dec(t.hx, f) && f.hasDistance && f.distanceMm == t.mm);
+            assert(f.heaterActive == t.heat && f.hasHeatCount && f.heatCount == t.hoc);
         }
         uint8_t bad[19];
         hex(lds[0], bad); bad[10] ^= 0x01;   // one bit off: CRC and sum fail

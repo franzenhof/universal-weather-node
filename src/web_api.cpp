@@ -1156,6 +1156,8 @@ void handleStatusPage()
                                     TF(r.leakHighSensitivity ? T_st_leak_raw_high : T_st_leak_raw_low, String(r.leakRaw)) + ")";
             if (r.hasLeafWetness)  v += " &middot; " + TF(T_st_leaf_wetness, String(r.leafWetnessPct));
             if (r.hasConductivity) v += " &middot; EC " + String((long)lroundf(r.conductivityUsCm)) + " &micro;S/cm";
+            if (r.hasDistance)     v += " &middot; " + TF(T_st_distance, String(r.distanceMm));
+            if (r.hasHeatCount)    v += " &middot; <span class='dim'>" + TF(T_st_heat_count, String(r.heatCount)) + "</span>";
             String kind = r.proto == RF_PROTO_BRESSER ? TF(T_st_type_n, String(r.type)) : String(rfProtoName(r.proto));
             if (r.model)   kind += String(" ") + r.model;
             if (r.channel) kind += " ch " + String(r.channel);
@@ -1966,7 +1968,7 @@ void addRfSensorTable(HtmlOut& html)
 const TextId SERIES_FIELD_TEXT[SF_COUNT] = {
     T_se_f_temp, T_se_f_hum, T_se_f_moist, T_se_f_leaf, T_se_f_strikes, T_se_f_dist, T_se_f_pm25, T_se_f_pm10,
     T_se_f_co2, T_se_f_ec, T_se_f_press, T_se_f_lux, T_se_f_uv, T_se_f_batt, T_se_f_supercap,
-    T_se_f_ds1, T_se_f_ds2, T_se_f_ds3 };
+    T_se_f_ds1, T_se_f_ds2, T_se_f_ds3, T_se_f_ldist };
 
 void renderSeriesSection(HtmlOut& html)
 {
@@ -2418,7 +2420,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
         for (int k = 0; k < RF_MAX_SENSORS; k++) {
             const int idx = rfSensorIndexForSlot(k);
             bool chosen = false;
-            for (int g = 0; g < SG_COUNT; g++) chosen |= srcSelSlot(gCfg.srcSel[g]) == k;
+            for (int g = 0; g < SG_COUNT; g++) chosen |= srcSelSlot(srcSelDisplay((SrcGroup)g)) == k;
             // "Garten · 900181A2" with a user-defined name (rf_names.h), else the ID
             auto who = [](uint32_t id) {
                 char h[12]; snprintf(h, sizeof(h), "%08lX", (unsigned long)id);
@@ -2443,7 +2445,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
         const char* const labels[SG_COUNT] = { T(T_opt_source_temperature_humidity), T(T_set_source_wind),
                                                       T(T_set_source_rain), T(T_set_source_uv), T(T_set_source_light), T(T_opt_source_pressure) };
         for (int g = 0; g < SG_COUNT; g++)
-            fieldSelect(html, names[g], labels[g], gCfg.srcSel[g], srcOpts.data(), srcOpts.size(),
+            fieldSelect(html, names[g], labels[g], srcSelDisplay((SrcGroup)g), srcOpts.data(), srcOpts.size(),
                         g == SG_AIR   ? T(T_set_used_for_lorawan_mqtt_weather) :
                         g == SG_PRESS ? T(T_set_station_pressure_bme280_or_a) :
                         g == SG_LIGHT ? T(T_set_only_wireless_sensors_e_g) :

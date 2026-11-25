@@ -274,6 +274,8 @@ void loadConfigInto(Config& c)
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
         int v = prefs.getInt(key, c.srcSel[i]);
         c.srcSel[i] = (uint8_t)(srcSelValid(v) ? v : 0);
+        char kid[8]; snprintf(kid, sizeof(kid), "srcid%d", i);
+        c.srcId[i] = prefs.getUInt(kid, c.srcId[i]);
     }
     c.windDirOffsetDeg = prefs.getInt    ("windoff",  c.windDirOffsetDeg);
     c.windUnitMs       = prefs.getInt    ("windunit", c.windUnitMs);
@@ -470,6 +472,8 @@ void saveConfig(const Config& c)
     for (int i = 0; i < (int)sizeof(c.srcSel); i++) {
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
         ok &= checkWrite(key, prefs.putInt(key, c.srcSel[i]), 4);
+        char kid[8]; snprintf(kid, sizeof(kid), "srcid%d", i);
+        ok &= checkWrite(kid, prefs.putUInt(kid, c.srcId[i]), 4);
     }
     ok &= checkWrite   ("windoff",     prefs.putInt    ("windoff",  c.windDirOffsetDeg), 4);
     ok &= checkWrite   ("windunit",    prefs.putInt    ("windunit", c.windUnitMs), 4);

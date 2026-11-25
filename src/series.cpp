@@ -58,6 +58,7 @@ bool rawValue(const SeriesDef& d, float& v)
         case SF_PM10:     if (!r->hasPm10) return false;         v = r->pm10; return true;
         case SF_CO2:      if (!r->hasCo2) return false;          v = r->co2Ppm; return true;
         case SF_EC:       if (!r->hasConductivity) return false; v = r->conductivityUsCm; return true;
+        case SF_LDIST:    if (!r->hasDistance) return false;     v = r->distanceMm; return true;
         case SF_BATT:     if (!r->batteryMv) return false;       v = r->batteryMv / 1000.0f; return true;
         case SF_SUPERCAP: if (!r->hasSupercap) return false;     v = r->supercapV; return true;
         default:          return false;

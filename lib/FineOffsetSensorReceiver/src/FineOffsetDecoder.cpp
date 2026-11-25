@@ -50,7 +50,9 @@ const Family FAMILIES[] = {
     // Radio-clock time of a WH31 with a time receiver (rtl_433 ambientweather_wh31e.c,
     // "RCC", type 0x52; seen there from a WWVB WH31E, the DCF77 version - e.g. DNT -
     // is assumed to send the same): YY II UU YY MM DD HH mm SS CC XX, date and
-    // time in BCD. Sent after a battery change and when the clock syncs.
+    // time in BCD. Sent after a battery change and then only about once a day at
+    // night, after 02:00 local time (forum, SonneKF 2026-11-24: the DCF77 WH31
+    // synced at 02:07) - too infrequent to be a node's sole time source.
     { FO_FAMILY_RCC,   11, "RCC" },
 };
 
@@ -156,7 +158,7 @@ void decodeWs80(const uint8_t* b, FoFrame& o)   // WS80 and WS90 (same first 14 
     o.batteryMv = (uint16_t)(b[6] * 20);
     o.batteryOk = o.batteryMv > 2400;    // 2 x AA lithium (WS85 threshold of rtl_433)
     // WS90 firmware >= 1.6.0 (WS80 likely too) reports 0 V on an external power
-    // supply (Ecowitt wiki by Gyvate, section WS90): not a flat battery
+    // supply (Ecowitt wiki, section WS90): not a flat battery
     if (b[6] == 0) { o.extPower = true; o.batteryOk = true; }
     int temp = (b[7] & 0x03) << 8 | b[8];
     if (temp != 0x3FF) setTemp400(o, temp);
@@ -385,8 +387,20 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             // battery: not decoded (the published byte / scaling are not settled)
             break;
         }
-        case FO_FAMILY_LDS01:                         // 54 II II II then 13 bytes not decoded yet, CC SS
-            o.id = be24(b + 1);
+        case FO_FAMILY_LDS01:
+            // 54 II II II ?? ?? Dd dd ?? ?? ?? ?? ?? ?? ?? HH ?? CC SS
+            // Confirmed against a forum radio trace with the console's own
+            // readings (2026-11-25): distance is the low 12 bits of
+            // b[6..7] in mm (bit 0x40 of b[6] = heater on), b[15] counts up by
+            // one per heating event (the console's "heat-on count", low byte).
+            // The remaining bytes (battery, temperature, signal) are not
+            // settled yet.
+            o.id           = be24(b + 1);
+            o.hasDistance  = true;
+            o.distanceMm   = (uint16_t)(((b[6] & 0x0F) << 8) | b[7]);
+            o.heaterActive = b[6] & 0x40;
+            o.hasHeatCount = true;
+            o.heatCount    = b[15];
             o.batteryKnown = false;
             break;
         default:

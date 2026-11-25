@@ -39,6 +39,7 @@ The firmware is installed **once over USB, directly from the web browser** — n
 - Our own partition layout (with the `cfgdata` settings partition) is part of the `-factory` file, so nothing has to be set up by hand. Settings stored by an earlier installation of this firmware are kept.
 - **Alternative flasher:** Espressif's [esptool-js](https://espressif.github.io/esptool-js/) (also in Chrome/Edge): *Connect*, then *Flash Address* **`0x0`**, choose the `-factory` file, *Program*. The old desktop *ESPHome-Flasher* program is no longer maintained — use the web flasher instead.
 - **Updating later:** use [OTA](#firmware-update-ota) — with the normal `universal-weather-node-<version>.bin` (always safe), or from 2.0.0-rc.1 on also with the `-factory` file. The `-factory` file over USB also works and keeps the settings.
+- **A browser/USB flasher always needs the `-factory` file.** web.esphome.io and esptool-js write the chosen file as a complete image at address `0x0`, so an update over USB must use `-factory` too. The normal `.bin` (without `-factory`) is an **application-only** image for the node's own [OTA update page](#firmware-update-ota) — flashing it at `0x0` with a browser flasher lands at the wrong offset and the board no longer starts (blinking display). The fix is simply to re-flash the `-factory` file; to update *without* a cable, use the OTA page instead.
 
 ## Config Portal
 

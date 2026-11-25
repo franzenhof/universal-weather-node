@@ -37,7 +37,7 @@ struct HaRfOut {
 };
 
 // Entities per sensor (bit n of a mask = entity n).
-constexpr int HA_RF_ENTITY_COUNT = 28;   // fits the 32-bit masks
+constexpr int HA_RF_ENTITY_COUNT = 30;   // fits the 32-bit masks
 
 // Bit mask of the entities gRfSensors[idx] has values for (0 = unused entry).
 uint32_t haRfEntityMask(int idx);

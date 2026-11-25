@@ -174,6 +174,13 @@ int main()
     assert(file().find("only ID") == std::string::npos);   // (status page text, not the file)
     assert(file().find("one sensor ID 300001C3") != std::string::npos);
 
+    // ---- filter: one ID, short form the user typed still matches the full on-air ID ----
+    assert(rfTraceStart(15 * 60000UL, RF_TRACE_ONE_ID, 0x01C3, false, err, sizeof(err)));   // low 2 bytes of 300001C3
+    rfTracePacket(okPacket(0x300001C3, wh31, sizeof(wh31)));   // full ID: low bytes match -> recorded
+    rfTracePacket(okPacket(0x300001C4, wh31, sizeof(wh31)));   // different low bytes -> not recorded
+    st = rfTraceStatusNow();
+    assert(st.seen == 2 && st.recorded == 1 && st.filterId == 0x01C3);
+
     // ---- reception rate per ID (repeats not counted) and read delay ----
     assert(rfTraceStart(30 * 60000UL, RF_TRACE_ALL, 0, false, err, sizeof(err)));
     {

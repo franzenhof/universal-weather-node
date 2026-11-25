@@ -65,7 +65,7 @@ const char* trendWord(const char* en)
 // that is not there (or a misspelt name) shows as "--".
 struct DispCtx {
     PhLive live;
-    char   clock[8] = "", date[12] = "", ip[16] = "";
+    char   clock[8] = "", date[12] = "", dateFull[12] = "", ip[16] = "";
 };
 
 bool dispLookup(const char* n, PhValue& o, void* ctx)
@@ -73,7 +73,8 @@ bool dispLookup(const char* n, PhValue& o, void* ctx)
     DispCtx& c = *(DispCtx*)ctx;
     auto txt = [&](const char* s) { o.kind = PK_TEXT; o.text = s && *s ? s : "--"; return true; };
     if (!strcmp(n, "clock"))   return txt(c.clock);
-    if (!strcmp(n, "date"))    return txt(c.date);
+    if (!strcmp(n, "date"))      return txt(c.date);
+    if (!strcmp(n, "date_full")) return txt(c.dateFull);
     if (!strcmp(n, "ip"))      return txt(c.ip);
     if (!strcmp(n, "u_temp"))  { static char u[4]; snprintf(u, sizeof(u), "\xC2\xB0%s", temperatureUnitLabel(gCfg)); return txt(u); }
     if (!strcmp(n, "u_wind"))  return txt(windSpeedUnitLabel(gCfg));
@@ -102,6 +103,7 @@ DispCtx* newDispCtx()
     if (localTimeNow(lt)) {
         strftime(ctx->clock, sizeof(ctx->clock), "%H:%M", &lt);
         strftime(ctx->date, sizeof(ctx->date), gCfg.unitSystem == 1 ? "%m/%d" : "%d.%m.", &lt);
+        strftime(ctx->dateFull, sizeof(ctx->dateFull), gCfg.unitSystem == 1 ? "%m/%d/%Y" : "%d.%m.%Y", &lt);
     }
     if (gCfg.wifiEn && wifiIsConnected()) strlcpy(ctx->ip, WiFi.localIP().toString().c_str(), sizeof(ctx->ip));
     return ctx;
@@ -139,7 +141,7 @@ protected:
 
 } // namespace
 
-const char* const OLED_PH_NAMES[] = { "clock", "date", "ip", "u_temp", "u_wind", "u_rain", "u_rate", "u_press" };
+const char* const OLED_PH_NAMES[] = { "clock", "date", "date_full", "ip", "u_temp", "u_wind", "u_rain", "u_rate", "u_press" };
 const int OLED_PH_NAME_COUNT = sizeof(OLED_PH_NAMES) / sizeof(OLED_PH_NAMES[0]);
 
 void oledPlaceholderValues(const char* const* names, int n,

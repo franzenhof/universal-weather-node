@@ -4,6 +4,19 @@ Release notes of the Universal Weather Node firmware, newest first. Binaries are
 
 [← back to README](README.md)
 
+## 2.0.2
+
+Firmware: [`universal-weather-node-2.0.2.bin`](firmware/universal-weather-node-2.0.2.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.2-factory.bin`](firmware/universal-weather-node-2.0.2-factory.bin) (first installation, USB at `0x0`). For the **Heltec WiFi LoRa 32 V3 and V4** (V4: ESP32-S3R2; not the V4-R8) — a small update of the 2.0.x line.
+
+**Updating**
+- **From 2.0.1 (or 2.0.0):** OTA with either file over *Settings → System → Firmware update*. Settings, LoRaWAN session, rain totals and the payload format are unchanged (no decoder update needed).
+- **From 1.x or an older 2.0.0 beta:** see the notes of [2.0.0](#200) — use the file *without* `-factory`.
+
+- **Display:** new placeholder `{date_full}` for the custom screens — the date with the year (DD.MM.YYYY / MM/DD/YYYY); `{date}` stays compact without the year.
+- **Radio trace:** the *one sensor ID* filter now also matches a short ID (e.g. `2801` or `802801` for a sensor shown as `54802801`), so a targeted capture no longer stays empty when only the lower part of the ID was entered.
+- **New sensor — LDS01:** the laser distance sensor is now decoded (distance / air gap in mm and the heater-on count). The values show on the status page, in `/api/data` and MQTT, as Home Assistant entities and as a chartable history series; the radio trace prints them instead of "values not decoded yet" (confirmed against the console readings in Dirk's trace — thanks).
+- **Value sources:** a quantity set to *Wireless N* now stays on the chosen sensor by its ID. Re-sorting the sensors in the status page or re-reading them after a restart no longer moves a value source to a different sensor (thanks Dirk). Settings saved before this update keep working and bind to the sensor the next time you save the value sources.
+
 ## 2.0.1
 
 Firmware: [`universal-weather-node-2.0.1.bin`](firmware/universal-weather-node-2.0.1.bin) (OTA / USB at `0x10000`) and [`universal-weather-node-2.0.1-factory.bin`](firmware/universal-weather-node-2.0.1-factory.bin) (first installation, USB at `0x0`). For the **Heltec WiFi LoRa 32 V3 and V4** (V4: ESP32-S3R2; not the V4-R8) — a small update of the 2.0.x line.
@@ -289,7 +302,7 @@ Firmware: `universal-weather-node-2.0.0-rc.3.bin` (OTA / USB at `0x10000`) and `
 
 **Heltec WiFi LoRa 32 V4**
 * Same firmware image for V3 and V4; the board is detected by flash size (setting *Heltec board*: Auto / V3 / V4). The V4's RF front end (V4.2 GC1109 / V4.3 KCT8103L, detected at boot) is switched for receive and transmit like Meshtastic does, put to sleep with the radio, and the radio's TX power is reduced by the amplifier gain so LoRaWAN stays at the regional limit (EU868 16 dBm).
-* V4 = build without PCB only: PCB revision, board wind / rain, 1-Wire and the v2.0 I/O are disabled (GPIO2/5/7 drive the front end); status page and JSON (`status.board`, `status.boardFem`) show the board. V4-R8 is reported as not supported. *Not yet tested on real hardware.*
+* V4 = build without PCB only: PCB revision, board wind / rain, 1-Wire and the v2.0 I/O are disabled (GPIO2/5/7 drive the front end); status page and JSON (`status.board`, `status.boardFem`) show the board. V4-R8 is reported as not supported. *(Since confirmed on real V4.2 and V4.3 hardware.)*
 
 **Documentation**
 * README reduced to a short landing page with a Quick Start and an "I want to …" signpost; topics moved to [`docs/`](docs/) (installation, wireless sensors, minimal build, web dashboard, MQTT / Home Assistant, weather networks, Loxone, values, settings, LoRaWAN, PCB, troubleshooting, development), changelog to `CHANGELOG.md`. The device's built-in help page joins README, docs and changelog into one offline page.

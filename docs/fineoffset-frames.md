@@ -56,6 +56,8 @@ The WH40 has the same rain field:
 
 **What the packets do not prove:** how the sensor counts each tip into that total. The same rtl_433 file says "0.3 mm per tip" in its WN20 header. Our note that the WN20 adds 0.3 mm per tip and 0.4 mm on every sixth tip (1.9 mm per 6 tips) comes from the Ecowitt wiki (section WN20, read 21 Nov 2026). It cannot be seen in a dry-weather trace.
 
+**Confirmed by Ecowitt (2026-11-23):** a forum member asked Ecowitt engineering, and the Ecowitt wiki has been updated. The WN20 sends a counter in 0.1 mm units; the sensor firmware adds 3 per tip and 4 on every sixth tip. One tip of the bucket is actually 0.317 mm (not 0.28 mm), so 6 tips = 1.9 mm against 1.902 mm real — an error of about 0.02 mm per 1.9 mm. The node therefore reads the counter as it is (`raw × 0.1` mm). A rain correction factor (*Settings → Sensors*, e.g. 0.9) is still useful when the WN20 is compared against a more accurate gauge such as the WH40.
+
 ## 5. Checking it yourself
 
 1. Start a radio trace (log page, *Radio trace*, filter *only this ID* with the WN20's ID, 15 min).
