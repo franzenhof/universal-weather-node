@@ -325,7 +325,7 @@ Object.assign(I18N.en, { updated:'Updated', rain:'Rain', last1h:'Last hour', las
   frost:'Frost risk', fog:'Fog risk', sultry:'Sultry', fwUpdate:'Firmware {v} available', rfLow:'Wireless sensor battery low',
   rfSensors:'Wireless sensors', batOk:'Battery OK', batLow:'Battery low', supercap:'Supercap', stale:'no update for > 5 min',
   supplies:'Provides', onBoard:'On-board sensors', channel:'Ch',
-  stKinds:['Weather station','Thermo-hygro sensor','Pool thermometer','Soil sensor','Leak sensor','Lightning sensor','Rain gauge','Air quality sensor','Sensor','Temperature probe','Black globe thermometer','Leaf wetness sensor','Indoor sensor (temperature, humidity, pressure)','Outdoor sensor (temperature, humidity)'],
+  stKinds:['Weather station','Thermo-hygro sensor','Pool thermometer','Soil sensor','Leak sensor','Lightning sensor','Rain gauge','Air quality sensor','Sensor','Temperature probe','Black globe thermometer','Leaf wetness sensor','Indoor sensor (temperature, humidity, pressure)','Outdoor sensor (temperature, humidity)','Distance sensor'],
   leak:'Leak!', dry:'Dry', leafWet:'Leaf wetness', usbPower:'USB power', est:'est.', soil:'Soil moisture', lightning:'Lightning', rainHour:'Rain per hour', rainDay:'Rain per day',
   srcNames:{ tempHum:'Temp/Hum', wind:'Wind', rain:'Rain', uv:'UV', light:'Light', pressure:'Pressure' },
   system:'System', cpuTemp:'CPU temperature', solar:'Solar', victron:'Victron battery', yieldToday:'Yield today',
@@ -340,7 +340,7 @@ Object.assign(I18N.de, { updated:'Aktualisiert', rain:'Regen', last1h:'Letzte St
   frost:'Frostgefahr', fog:'Nebelgefahr', sultry:'Schwül', fwUpdate:'Firmware {v} verfügbar', rfLow:'Funksensor-Batterie schwach',
   rfSensors:'Funksensoren', batOk:'Batterie OK', batLow:'Batterie schwach', supercap:'Superkondensator', stale:'seit > 5 min kein Update',
   supplies:'Liefert', onBoard:'Sensoren an der Platine', channel:'Kanal',
-  stKinds:['Wetterstation','Thermo-Hygro-Sensor','Poolthermometer','Bodensensor','Leckagesensor','Blitzsensor','Regenmesser','Luftqualitätssensor','Sensor','Temperaturfühler','Schwarzkugelthermometer','Blattnässesensor','Innensensor (Temperatur, Feuchte, Luftdruck)','Außensensor (Temperatur, Feuchte)'],
+  stKinds:['Wetterstation','Thermo-Hygro-Sensor','Poolthermometer','Bodensensor','Leckagesensor','Blitzsensor','Regenmesser','Luftqualitätssensor','Sensor','Temperaturfühler','Schwarzkugelthermometer','Blattnässesensor','Innensensor (Temperatur, Feuchte, Luftdruck)','Außensensor (Temperatur, Feuchte)','Abstandssensor'],
   leak:'Leck!', dry:'Trocken', leafWet:'Blattnässe', usbPower:'USB-Versorgung', est:'gesch.', soil:'Bodenfeuchte', lightning:'Blitze', rainHour:'Niederschlag pro Stunde', rainDay:'Niederschlag pro Tag',
   srcNames:{ tempHum:'Temp./Feuchte', wind:'Wind', rain:'Regen', uv:'UV', light:'Licht', pressure:'Luftdruck' },
   system:'System', cpuTemp:'CPU-Temperatur', solar:'Solar', victron:'Victron-Batterie', yieldToday:'Ertrag heute',
@@ -355,7 +355,7 @@ Object.assign(I18N.fr, { updated:'Mis à jour', rain:'Pluie', last1h:'Dernière 
   frost:'Risque de gel', fog:'Risque de brouillard', sultry:'Temps lourd', fwUpdate:'Firmware {v} disponible', rfLow:'Pile du capteur radio faible',
   rfSensors:'Capteurs sans fil', batOk:'Pile OK', batLow:'Pile faible', supercap:'Supercondensateur', stale:'pas de mise à jour depuis > 5 min',
   supplies:'Fournit', onBoard:'Capteurs de la carte', channel:'Canal',
-  stKinds:['Station météo','Thermo-hygromètre','Thermomètre de piscine','Capteur de sol','Détecteur de fuite','Détecteur de foudre','Pluviomètre',"Capteur de qualité de l'air",'Capteur','Sonde de température','Thermomètre à globe noir',"Capteur d'humectation foliaire",'Capteur intérieur (température, humidité, pression)','Capteur extérieur (température, humidité)'],
+  stKinds:['Station météo','Thermo-hygromètre','Thermomètre de piscine','Capteur de sol','Détecteur de fuite','Détecteur de foudre','Pluviomètre',"Capteur de qualité de l'air",'Capteur','Sonde de température','Thermomètre à globe noir',"Capteur d'humectation foliaire",'Capteur intérieur (température, humidité, pression)','Capteur extérieur (température, humidité)','Capteur de distance'],
   leak:'Fuite !', dry:'Sec', leafWet:'Humectation foliaire', usbPower:'Alimentation USB', est:'est.', soil:'Humidité du sol', lightning:'Foudre', rainHour:'Pluie par heure', rainDay:'Pluie par jour',
   srcNames:{ tempHum:'Temp./Hum.', wind:'Vent', rain:'Pluie', uv:'UV', light:'Lumière', pressure:'Pression' },
   system:'Système', cpuTemp:'Température CPU', solar:'Solaire', victron:'Batterie Victron', yieldToday:"Production aujourd'hui",
@@ -370,7 +370,7 @@ Object.assign(I18N.es, { updated:'Actualizado', rain:'Lluvia', last1h:'Última h
   frost:'Riesgo de helada', fog:'Riesgo de niebla', sultry:'Bochorno', fwUpdate:'Firmware {v} disponible', rfLow:'Batería del sensor inalámbrico baja',
   rfSensors:'Sensores inalámbricos', batOk:'Batería OK', batLow:'Batería baja', supercap:'Supercondensador', stale:'sin actualizar > 5 min',
   supplies:'Aporta', onBoard:'Sensores de la placa', channel:'Canal',
-  stKinds:['Estación meteorológica','Termohigrómetro','Termómetro de piscina','Sensor de suelo','Sensor de fugas','Sensor de rayos','Pluviómetro','Sensor de calidad del aire','Sensor','Sonda de temperatura','Termómetro de globo negro','Sensor de humectación foliar','Sensor interior (temperatura, humedad, presión)','Sensor exterior (temperatura, humedad)'],
+  stKinds:['Estación meteorológica','Termohigrómetro','Termómetro de piscina','Sensor de suelo','Sensor de fugas','Sensor de rayos','Pluviómetro','Sensor de calidad del aire','Sensor','Sonda de temperatura','Termómetro de globo negro','Sensor de humectación foliar','Sensor interior (temperatura, humedad, presión)','Sensor exterior (temperatura, humedad)','Sensor de distancia'],
   leak:'¡Fuga!', dry:'Seco', leafWet:'Humectación foliar', usbPower:'Alimentación USB', est:'est.', soil:'Humedad del suelo', lightning:'Rayos', rainHour:'Lluvia por hora', rainDay:'Lluvia por día',
   srcNames:{ tempHum:'Temp./Hum.', wind:'Viento', rain:'Lluvia', uv:'UV', light:'Luz', pressure:'Presión' },
   system:'Sistema', cpuTemp:'Temperatura CPU', solar:'Solar', victron:'Batería Victron', yieldToday:'Producción hoy',
@@ -385,7 +385,7 @@ Object.assign(I18N.pt, { updated:'Atualizado', rain:'Chuva', last1h:'Última hor
   frost:'Risco de geada', fog:'Risco de nevoeiro', sultry:'Abafado', fwUpdate:'Firmware {v} disponível', rfLow:'Bateria do sensor sem fio fraca',
   rfSensors:'Sensores sem fio', batOk:'Bateria OK', batLow:'Bateria fraca', supercap:'Supercapacitor', stale:'sem atualização há > 5 min',
   supplies:'Fornece', onBoard:'Sensores da placa', channel:'Canal',
-  stKinds:['Estação meteorológica','Termo-higrômetro','Termômetro de piscina','Sensor de solo','Sensor de vazamento','Sensor de raios','Pluviômetro','Sensor de qualidade do ar','Sensor','Sonda de temperatura','Termômetro de globo negro','Sensor de molhamento foliar','Sensor interior (temperatura, umidade, pressão)','Sensor exterior (temperatura, umidade)'],
+  stKinds:['Estação meteorológica','Termo-higrômetro','Termômetro de piscina','Sensor de solo','Sensor de vazamento','Sensor de raios','Pluviômetro','Sensor de qualidade do ar','Sensor','Sonda de temperatura','Termômetro de globo negro','Sensor de molhamento foliar','Sensor interior (temperatura, umidade, pressão)','Sensor exterior (temperatura, umidade)','Sensor de distância'],
   leak:'Vazamento!', dry:'Seco', leafWet:'Molhamento foliar', usbPower:'Alimentação USB', est:'est.', soil:'Umidade do solo', lightning:'Raios', rainHour:'Chuva por hora', rainDay:'Chuva por dia',
   srcNames:{ tempHum:'Temp./Umid.', wind:'Vento', rain:'Chuva', uv:'UV', light:'Luz', pressure:'Pressão' },
   system:'Sistema', cpuTemp:'Temperatura da CPU', solar:'Solar', victron:'Bateria Victron', yieldToday:'Produção hoje',
@@ -1255,11 +1255,12 @@ function sigBars(rssi) {
 function sensorKind(s) {
   // Fine Offset temperature probes share the Bresser pool-thermometer type 3: told apart by the model
   if (s.model === 'WN34' || s.model === 'WN30') return t('stKinds')[9];   // WN30: the WH31 frame without humidity
-  if (s.type === 2 && !has(s.humidity)) return t('stKinds')[9];   // a thermo-hygro type without humidity (IT+ temperature-only ...)
+  if (s.type === 2 && !has(s.humidityPct)) return t('stKinds')[9];   // a thermo-hygro type without humidity (IT+ temperature-only ...); the JSON field is humidityPct
   if (s.model === 'WN38') return t('stKinds')[10];
   if (s.model === 'WN35') return t('stKinds')[11];
   if (s.model === 'WN32P') return t('stKinds')[12];   // WH25 / WH32B / WN32B family: indoor T, H, pressure
   if (s.model === 'WN32') return t('stKinds')[13];    // WH32 / WN32 / WN32EP: outdoor T, H
+  if (s.model === 'LDS01') return t('stKinds')[14];   // laser distance (air gap)
   var ty = s.type;
   var i = [0, 1, 12, 13].indexOf(ty) >= 0 ? 0 : ty === 2 ? 1 : ty === 3 ? 2 : ty === 4 ? 3 : ty === 5 ? 4 :
           ty === 9 ? (has(s.lightningCount) ? 5 : 6) : [8, 10, 11].indexOf(ty) >= 0 ? 7 : 8;

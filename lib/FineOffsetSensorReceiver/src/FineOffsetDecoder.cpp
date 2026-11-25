@@ -250,9 +250,11 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             o.channel   = (uint8_t)(((b[2] >> 4) & 0x07) + 1);
             o.batteryOk = !(b[2] & 0x04);
             setTemp400(o, (b[2] & 0x03) << 8 | b[3]);
-            // 0 % is outside the WH31's range (1-99 %): treated as "no humidity",
-            // e.g. a temperature-only sensor sending the WH31 frame (WN30)
-            if (b[4]) setHumidity(o, b[4]);
+            // 1-99 % is the WH31's range; 0 % and 0xFF (no reading) both mean
+            // "no humidity", e.g. a temperature-only sensor sending the WH31
+            // frame (WN30). Checking only b[4] != 0 mislabelled a WN30 that
+            // sends 0xFF as a WH31 (forum trace, 2026-11-25).
+            if (b[4] >= 1 && b[4] <= 100) setHumidity(o, b[4]);
             else if (f->code == FO_FAMILY_WH31) o.model = "WN30";   // temperature only: the WN30 sends this frame
             break;
         case FO_FAMILY_RCC: {

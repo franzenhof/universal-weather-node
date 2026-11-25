@@ -527,6 +527,8 @@ int main()
         assert(!strcmp(w.model, "WN30") && w.hasTemp && !w.hasHumidity && near(w.tempC, 22.6f));
         fr[4] = 41; seal(fr, 7);
         assert(foDecode(buf, rx(buf, fr, 7), w) && !strcmp(w.model, "WH31") && w.hasHumidity);
+        fr[4] = 0xFF; seal(fr, 7);   // 0xFF = no reading: a WN30 that sends 0xFF, not 0x00, is still temperature-only
+        assert(foDecode(buf, rx(buf, fr, 7), w) && !strcmp(w.model, "WN30") && w.hasTemp && !w.hasHumidity);
     }
     // Radio-clock time (family 0x52, rtl_433 "RCC"): BCD date / time, no sensor values
     {
