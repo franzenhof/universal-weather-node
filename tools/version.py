@@ -15,21 +15,31 @@ def write_if_changed(path, text):
         path.write_text(text, encoding="utf-8")
 
 
+LINE_MAJOR = 4   # firmware line of this branch (main = 4.x, branch 2.x = 2.x)
+
+
 def get_version_string():
     forced_version = os.getenv("FW_VERSION")
     if forced_version:
         return forced_version.strip()
 
+    # This branch is the 4.x line (Heltec V4 only): only 4.* tags count, so a
+    # build after the 2.0.0 tag never calls itself 2.0.0-<n>. Before the
+    # first 4.* tag: "4.0.0-dev-<commits since 2.0.0>-g<hash>[-dirty]".
+    def git(*args):
+        return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
     try:
-        result = subprocess.run(
-            ["git", "describe", "--tags", "--dirty", "--always"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout.strip()
+        return git("describe", "--tags", "--dirty", "--match", f"{LINE_MAJOR}.*")
     except Exception:
-        return "dev"
+        pass
+    try:
+        tail = git("describe", "--tags", "--dirty", "--long", "--match", "2.0.0")   # 2.0.0-<n>-g<hash>[-dirty]
+        return f"{LINE_MAJOR}.0.0-dev-" + tail.split("-", 1)[1]
+    except Exception:
+        try:
+            return f"{LINE_MAJOR}.0.0-dev-g" + git("rev-parse", "--short", "HEAD")
+        except Exception:
+            return "dev"
 
 
 # Tags are written without a leading "v" (2.0.0-beta.1); strip it anyway so an old or
@@ -163,5 +173,38 @@ def make_factory_image(*args, **kwargs):
         print(f"Factory image copied to {dst}")
 
 
+def patch_app_desc_version(*args, **kwargs):
+    """Sets esp_app_desc_t.version (what esptool image_info / esp_app_get_description()
+    show) to the firmware version. The descriptor comes from the prebuilt
+    libesp_app_format.a of the pioarduino framework package, which carries the
+    `git describe` of the moment that library was built (e.g. "2.0.0-8-gbd7c3ea-dirty"),
+    not of this build. Patched in the ELF right after linking, so the image made
+    from it (and its SHA-256) is consistent. Layout: magic word 0xABCD5432,
+    secure_version, 2 reserved words, then version[32]."""
+    elf = Path(env.subst("$BUILD_DIR")) / f"{env.subst('$PROGNAME')}.elf"
+    if not elf.exists():
+        return
+    data = bytearray(elf.read_bytes())
+    # the magic word also appears elsewhere (code literals): take the occurrence
+    # followed by a version string (digit) and a project name (printable ASCII)
+    magic = b"\x32\x54\xcd\xab"
+    hits, pos = [], data.find(magic)
+    while pos >= 0:
+        pname = data[pos + 48:pos + 80].split(b"\0")[0]
+        if data[pos + 16:pos + 17].isdigit() and len(pname) > 3 and pname.decode("ascii", "replace").replace("-", "").replace("_", "").isalnum():
+            hits.append(pos)
+        pos = data.find(magic, pos + 1)
+    if len(hits) != 1:
+        print(f"App descriptor: found {len(hits)} candidates - version not patched")
+        return
+    field = hits[0] + 16
+    new = version_string.encode("utf-8")[:31].ljust(32, b"\0")
+    if data[field:field + 32] != new:
+        data[field:field + 32] = new
+        elf.write_bytes(data)
+    print(f"App descriptor version: {version_string[:31]}")
+
+
+env.AddPostAction("$BUILD_DIR/${PROGNAME}.elf", patch_app_desc_version)
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", copy_firmware)
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", make_factory_image)

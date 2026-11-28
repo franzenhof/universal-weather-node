@@ -11,7 +11,7 @@
 constexpr int OLED_CUSTOM_COUNT = 2;   // more later if needed: config, enum OledScreen, docs
 constexpr int OLED_CUSTOM_LINES = 5;
 constexpr int OLED_CUSTOM_TITLE = 24;   // bytes incl. the terminator
-constexpr int OLED_CUSTOM_LINE  = 40;   // template bytes incl. the terminator
+constexpr int OLED_CUSTOM_LINE  = 64;   // template bytes incl. the terminator
 
 enum OledCustomLayout : uint8_t {
     OCL_SMALL = 0,   // title + 5 small lines

@@ -12,5 +12,9 @@ void systemRestart(const char* reason);
 void rainStatsFlush();
 // Settings -> System: rain statistics and "rain since start" back to 0 (wx_upload.cpp).
 void rainStatsReset();
+// Erase everything (settings_reset.h): the rain totals kept in RTC RAM
+// (today, pending, week / month / year) invalid, so they do not survive
+// the restart into a new device. No flash write.
+void rainStatsForgetRtc();
 // Settings -> System: sunshine duration today / yesterday back to 0.
 void sunshineStatsReset();

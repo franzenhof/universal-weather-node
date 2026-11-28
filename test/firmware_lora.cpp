@@ -3,6 +3,10 @@
 #include <cassert>
 #include <climits>
 
+// time_sync.cpp is not built here
+static int joinedCalls = 0;
+void loraTimeJoined() { joinedCalls++; }
+
 int main()
 {
     gCfg.loraEn=0;loraPoll();

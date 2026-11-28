@@ -2,27 +2,39 @@
 
 | PCB revision | Files | Source |
 |---|---|---|
-| Rev 1.2 | `heltec weather node pcb v1.2 Case-body.stl`, `… Case-top.stl`, `… button.stl` | `heltec weather node pcb v1.2.f3d` (Fusion 360) |
-| **Rev 1.3** | `rev13/heltec weather node pcb v1.3 case-body.stl`, `… case-lid.stl`, `… button-pin.stl` (+ STEP, assembly STEP) | [`case_rev13.py`](case_rev13.py) (build123d) |
-| **v2.0** | [`v20/`](v20/) for a Heltec **V3**, [`v20-v4/`](v20-v4/) for a Heltec **V4**: body, lid, button pin, optional gland blank (STL + STEP), assembly STEP and preview | [`case_v20.py`](case_v20.py) (build123d; reads current KiCad PCB; `--heltec v3\|v4`) |
+| **V4 Full** (formerly v2.0) | [`v4-full/`](v4-full/) for the Heltec **V4**: body, lid, button pin, optional gland blank (STL + STEP), assembly STEP and preview | [`case_v4_full.py`](case_v4_full.py) (build123d; reads the current KiCad PCB) |
+| **V4 Light** | [`v4-light/`](v4-light/): body, lid, button pin, gland blank (STL + STEP), assembly STEP and preview | [`case_v4_light.py`](case_v4_light.py) (build123d; reads the current KiCad PCB) |
 | **Minimal wireless build** (no PCB) | [`minimal/`](minimal/): body, two lids, PRG/RST pins (STL + STEP), assembly STEP and preview | [`case_minimal.py`](case_minimal.py) (build123d) |
 
-## Minimal wireless build enclosure (bare Heltec V3 + BME280, no PCB)
+The cases for the Rev 1.2 / 1.3 boards and for a Heltec V3 on the former PCB v2.0 (all V3 only) are in
+the [`2.x` branch](https://github.com/franzenhof/universal-weather-node/tree/2.x/3dprint) (firmware 2.x).
+
+## Minimal wireless build enclosure (bare Heltec V4 + BME280, optional GNSS, no PCB)
+
+> **Drawn for the Heltec V4** (51.69 × 25.4 mm, pin 1 3.43 mm from the USB end, PRG button position
+> from Heltec's V4 3D model). Not printed yet. Items marked TODO in `case_minimal.py` were not in the
+> repo and are placeholders: GNSS module size, RST button and u.FL positions.
 
 For the [Minimal Wireless Build](../docs/minimal-build.md): a bare
-**Heltec WiFi LoRa 32 V3** (pin headers soldered, pins pointing down) and a 4-pin
-**GY-BME280** module on four female–female jumper wires (J3 pins 1 GND, 2 3V3, 7 GPIO42,
-8 GPIO41). Wall-mounted, **for a sheltered place** (under a roof or eave) — the louvres
+**Heltec WiFi LoRa 32 V4** (pin headers soldered, pins pointing down) and a 4-pin
+**GY-BME280** module on four female–female jumper wires (firmware 4.x wiring: 3V3 header pins 1 GND,
+2 3V3; 5V header pins 13 = GPIO47 SDA, 14 = GPIO48 SCL), plus an optional Heltec **GNSS module**. Wall-mounted, **for a sheltered place** (under a roof or eave) — the louvres
 shed rain, but the case is **not waterproof** (no IP rating).
 
 ![Minimal build enclosure](minimal/preview.png)
 
-**Size:** case 64.3 × 76.1 × 35.0 mm (W × H × D, closed); 75 × 104 mm including the
-screw lobes and the mounting ears.
+**Size:** case 65.8 × 104.0 × 35.0 mm (W × H × D, closed; 76.6 × 132 mm including the screw lobes and the mounting ears).
 
 **Concept — two chambers, one above the other**
 
-- **Top: electronics chamber.** The Heltec sits display-forward, USB-C on the left. It
+- **Top: electronics chamber with GNSS bay.** Above the Heltec a bay holds the optional Heltec
+  **GNSS module** on four posts, patch antenna up, with only the 2.4 mm lid above it (1 mm gap,
+  four corner ribs hold it down); the bay has its own louvres and sits furthest from the BME280.
+  The **top wall** carries a knock-out for an optional **R-SMA bulkhead** (WiFi antenna, u.FL →
+  R-SMA pigtail inside): a Ø6.4 mm hole closed by a 0.6 mm skin with a marking ring on the outside;
+  drill / cut it out, push the jack through, fix the nut on the flat inner wall (Ø11 mm clear),
+  screw the antenna on outside. The 868 MHz SMA bulkhead stays in the right wall.
+- **Electronics chamber (Heltec).** The Heltec sits display-forward, USB-C on the left. It
   needs no screws (it has no mounting holes): four **saddles** carry the pin-header plastic,
   the pins drop into end-capped slots (this locates the board in X and Y), and four ribs on
   the lid end 2.2 mm above the board, just above the soldered pin tips, so it cannot lift off. 21 mm below
@@ -82,28 +94,43 @@ Heltec/BME280 clearance envelopes), [validation.json](minimal/validation.json) a
 2. Push the four jumper wires onto the BME280 (VIN, GND, SCL, SDA), feed the free ends one by
    one up through the conduit, slide the module into its card guides from the front (header
    at the back, pins up) until it stops.
-3. Plug the wires onto the Heltec J3 pins 1 (GND), 2 (3V3), 7 (GPIO42 → SCL), 8 (GPIO41 →
-   SDA); lay the slack behind the board. Fit the SMA bulkhead and connect the pigtail to the
+3. Plug the wires onto the Heltec: 3V3 header pins 1 (GND), 2 (3V3), 5V header pins 13 (GPIO47 →
+   SDA), 14 (GPIO48 → SCL); lay the slack behind the board. Fit the SMA bulkhead and connect the pigtail to the
    Heltec's IPEX socket (press straight down, do not pull on the thin cable).
 4. Lower the Heltec onto the saddles (USB-C to the left, display to the front); the pins must
    drop into the saddle slots. Seal the conduit with hot glue / foam.
 5. Screw on both lids; check that PRG/RST are not held down and the USB-C plug fits.
 
-**Please check on the first print** (estimates, adjust in `case_minimal.py`): Heltec PCB
+**Please check on the first print** (estimates, adjust in `case_minimal.py`): the **GNSS module
+size** `GNSS_L` × `GNSS_W` × `GNSS_T` (25 × 25 × 8 mm placeholder, TODO), the V4's **RST button**
+position (assumed mirrored to PRG) and **u.FL positions** (envelope only), Heltec PCB
 thickness `HT` (1.2 mm assumed), switch height `BTN_H` (2.5 mm) and positions in `BUTTONS`,
 OLED `WINDOW`, `USB_OPEN` (13.5 × 9 mm — enough for typical USB-C overmoulds, not for very
 bulky ones), and the BME280 size `BME_W` × `BME_L` (10.5 × 13 mm, header on the 10.5 mm
 edge — **measure your module**, sizes vary between 10.5 × 13 and 11.5 × 15 mm). Heltec outline
-50.2 × 25.5 mm (Heltec spec) and header layout (pitch, 22.86 mm row spacing, pin 1 2.7 mm
-from the USB end) match the Heltec sockets in `pcb/v2.0`; button, USB and OLED positions are
-read from the Heltec V3 pin map and the v2.0 case — not measured on a real board.
+51.69 × 25.4 mm, header layout (22.86 mm row spacing, pin 1 3.43 mm from the USB end) and the PRG
+button come from Heltec's V4 3D model (as in the V4 Full case); USB-C is centred, the display window
+is the V4 Full window — not measured on a real board.
 
 **Regenerate:** `.venv-cad/bin/python 3dprint/case_minimal.py` (same venv as below). The
 script checks single valid solids, watertight STL, part/part collisions, collisions with the
 Heltec/USB plug/SMA/BME280/Dupont envelopes, a free cable conduit, the wire bend room and
 the chamber separation, then writes `minimal/` and `pictures/case-minimal.png`.
 
-## v2.0 enclosure (indoor)
+## V4 Light enclosure (indoor)
+
+For the **100 × 80 × 1.6 mm** [V4 Light](../pcb/v4-light/README.md) (M3 holes 30/96 × 4/76 mm), same
+construction as the V4 Full case: body with four PCB supports and nut pockets, lid with display
+window and captive PRG pin, wall-mount ears. Outline, mounts and connector positions are read from the
+KiCad board. USB-C at the top edge, RJ11 jacks and the two screw terminals on the right, a 16 mm
+cable bay below the board for J8 / J9 (two M12 gland holes), LoRa SMA (Ø6.5 mm) and an optional
+**R-SMA knock-out** (Ø6.4 mm, 0.6 mm skin, marking ring) for the WiFi antenna in the left wall, beyond
+the module's end. Overall 122 × 126 mm incl. ears, 36 mm closed. Indoor / sheltered, no IP rating,
+**not printed yet**; heights, display window, PRG position and the SMA / R-SMA positions (the V4's
+u.FL positions are not in the repo) need the first-print check. Regenerate:
+`python 3dprint/case_v4_light.py`. Print and assembly as for the V4 Full.
+
+## V4 Full enclosure (indoor)
 
 Designed for the current **100 × 100 × 1.6 mm** PCB, with four M3 mounts on a
 **92 × 92 mm** pattern. It follows the Rev 1.3 concept (body, lid, captive button,
@@ -115,27 +142,26 @@ not rain-, dust- or condensation-proof. Cable glands and a display cover do not
 make the remaining openings watertight. No IP rating, physical print fit or
 thermal qualification is claimed.
 
-![v2.0 enclosure](v20/preview.png)
+![V4 Full enclosure](v4-full/preview.png)
 
-**Heltec V3 or V4:** PCB v2.0 takes either module on its own socket set; the V4 rows are
-2.54 mm further down the board (PCB-local Y) and the V4 is 51.7 mm long. The lid's display
-window, the PRG button pin and the USB opening follow the module, so print the matching
-variant: [`v20/`](v20/) (`--heltec v3`, default) or [`v20-v4/`](v20-v4/) (`--heltec v4`, files
-`universal-weather-node-v2.0-v4-*`). The body differs only in the USB window; the V4 button
-position comes from Heltec's V4 3D model and the display window is the V3 window moved with
-the rows — check both on the first print.
+**Heltec V4:** the V4 Full takes only the Heltec V4 (51.7 mm long, sockets J19/J20). The lid's
+display window, the PRG button pin and the USB opening follow the module; the V4 button position
+comes from Heltec's V4 3D model and the display window is the former V3 window moved with the
+rows — check both on the first print. The case for a V3 on the former PCB v2.0 (`v20/`) is in the
+`2.x` branch. The files below were generated before the rename and still emboss
+`WEATHER NODE v2.0` on the body; regenerating with `case_v4_full.py` writes `V4 FULL`.
 
 ### Download / print
 
 | File | Purpose |
 |------|---------|
-| [Body STL](v20/universal-weather-node-v2.0-case-body.stl) / [STEP](v20/universal-weather-node-v2.0-case-body.step) | Four PCB supports, connector windows, cable bay, mounting ears and lid screw towers; Ø 10 mm knock-out (0.6 mm outer skin) in the left wall for the optional DC jack J18 — drill or cut it out when J18 is fitted |
-| [Lid STL](v20/universal-weather-node-v2.0-case-lid.stl) / [STEP](v20/universal-weather-node-v2.0-case-lid.step) | Display window, locating lip, button guide and screw holes |
-| [Button STL](v20/universal-weather-node-v2.0-button-pin.stl) / [STEP](v20/universal-weather-node-v2.0-button-pin.step) | Captive push pin for the Heltec PRG button |
-| [Gland blank STL](v20/universal-weather-node-v2.0-gland-blank.stl) / [STEP](v20/universal-weather-node-v2.0-gland-blank.step) | Print up to three if M12 gland openings are unused; glue in place, not a sealing certification |
-| [Assembly STEP](v20/universal-weather-node-v2.0-assembly.step) | Closed enclosure with PCB/component **clearance envelopes**, not detailed electronic models |
-| [Display-cover template](v20/display-cover.svg) | 37 × 22 mm clear sheet, print at 100% / verify dimensions |
-| [CAD validation](v20/validation.json) | Dimensions, PCB mounts, opening positions and exported mesh checks |
+| [Body STL](v4-full/universal-weather-node-v4-full-case-body.stl) / [STEP](v4-full/universal-weather-node-v4-full-case-body.step) | Four PCB supports, connector windows, cable bay, mounting ears and lid screw towers; Ø 10 mm knock-out (0.6 mm outer skin) in the left wall for the optional DC jack J18 — drill or cut it out when J18 is fitted |
+| [Lid STL](v4-full/universal-weather-node-v4-full-case-lid.stl) / [STEP](v4-full/universal-weather-node-v4-full-case-lid.step) | Display window, locating lip, button guide and screw holes |
+| [Button STL](v4-full/universal-weather-node-v4-full-button-pin.stl) / [STEP](v4-full/universal-weather-node-v4-full-button-pin.step) | Captive push pin for the Heltec PRG button |
+| [Gland blank STL](v4-full/universal-weather-node-v4-full-gland-blank.stl) / [STEP](v4-full/universal-weather-node-v4-full-gland-blank.step) | Print up to three if M12 gland openings are unused; glue in place, not a sealing certification |
+| [Assembly STEP](v4-full/universal-weather-node-v4-full-assembly.step) | Closed enclosure with PCB/component **clearance envelopes**, not detailed electronic models |
+| [Display-cover template](v4-full/display-cover.svg) | 37 × 22 mm clear sheet, print at 100% / verify dimensions |
+| [CAD validation](v4-full/validation.json) | Dimensions, PCB mounts, opening positions and exported mesh checks |
 
 Overall footprint including ears/towers is approximately **122 × 158 mm**;
 closed height **42.4 mm**, plus about 1.5 mm button protrusion. The rectangular
@@ -154,6 +180,8 @@ the outer floor, leaving 6 mm below the PCB for solder tails.
   Choose glands with nut envelope **no larger than Ø18 × 4 mm** inside, and
   sufficient threaded length for the 2.4 mm wall. Check the actual gland drawing;
   M12 does not define its flange/nut size or supported cable diameter.
+- **R-SMA knock-out** (Ø6.4 mm hole, 0.6 mm outer skin, marking ring, 11 mm nut clearance) in the
+  left wall at PCB Y 72 mm for an optional WiFi antenna bulkhead; drill it out when fitted.
 - **Ø6.5 mm SMA** opening on the left accepts a suitable bulkhead pigtail.
   Check thread/flange dimensions before ordering; route the thin IPEX lead
   without pulling on the Heltec RF socket.
@@ -187,13 +215,13 @@ All STLs are already in print orientation at Z=0:
    pilot holes. Do not overtighten; holes may need drilling/fit adjustment for
    the particular screw and material.
 5. Test display visibility, PRG movement, USB plug clearance and all sensor
-   plugs **before** permanent mounting. On v2.0 always disconnect external
+   plugs **before** permanent mounting. On the V4 Full always disconnect external
    supplies and remove JP8 before plugging in USB.
 
 **Mandatory first-print fit check:** PCB outline, mounting pattern and connector
 XY are read from the actual KiCad board. Connector/module heights and the
 display/button/USB dimensions are estimates carried over from the earlier case
-and Heltec pin layout, not measured on an assembled v2.0 board.
+and Heltec pin layout, not measured on an assembled V4 Full board.
 
 The estimated button is **14 mm** tall. It should have a small rest clearance,
 not hold PRG down at boot. If it does, shorten it; if travel is insufficient,
@@ -210,8 +238,7 @@ Python 3.14 on macOS. A working build123d/OCP package for your OS is required.
 ```bash
 python3 -m venv .venv-cad
 .venv-cad/bin/pip install -r 3dprint/requirements.txt
-.venv-cad/bin/python 3dprint/case_v20.py                 # Heltec V3 -> v20/
-.venv-cad/bin/python 3dprint/case_v20.py --heltec v4     # Heltec V4 -> v20-v4/
+.venv-cad/bin/python 3dprint/case_v4_full.py              # Heltec V4 -> v4-full/
 ```
 
 The source reuses the repository's KiCad S-expression reader; KiCad itself is
@@ -227,63 +254,3 @@ uses X right/Y up/Z up (`CAD Y = -PCB Y`) so the enclosure is not mirrored
 relative to the physical board. Individual lid STEP/STL files are print-oriented;
 use the assembly STEP for installed positions. CAD checks are not physical
 fit, heat, durability or weatherproofing tests.
-
-The Rev 1.2 case does **not** fit Rev 1.3: the Heltec sits 5.1 mm further towards the RJ jacks (display window, button and
-USB-C opening would be off), the wind RJ11 jack is 1.27 mm lower, and the three Rev 1.2 mounting bosses would land on
-Rev 1.3 solder joints (Rev 1.3 has a single mounting hole).
-
-![Rev 1.3 enclosure](rev13/preview.png)
-
-## Rev 1.3 enclosure
-
-Outer size 103.8 × 56.7 × 26.2 mm (closed, without the mounting ears). Board, display, USB-C and jack positions are taken
-from the Rev 1.3 gerbers; the heights above the board (jack windows, USB-C opening, lid, button pin) are the same as in
-the proven Rev 1.2 case.
-
-**What is new**
-
-- **Supports generated from the drill file** — the script reads `pcb/v1.3/…rev13.zip` and places the edge ledge and
-  seven posts so that none of them touches one of the 185 solder joints.
-- **Board fixation for the single mounting hole** — one M2 screw at the RJ end (slim boss: an R6 joint is only
-  2.54 mm away, so use a **nylon** screw or a plastic washer), two hold-down ribs on the lid press the cable end of the
-  board down. The RJ jacks stick out through their windows.
-- **Cable entries** for the 5 V input and the 1-Wire header: U-notches in the cable end wall; tongues on the lid close
-  them to a round Ø 5.6 mm passage (fill with a little hot glue / silicone for strain relief and dust).
-- **Antenna hole** Ø 6.5 mm at the cable end: fits an SMA bulkhead (IPEX → SMA pigtail, external antenna for better
-  range) or simply lets the Heltec spring antenna out.
-- **Mounting ears** (4 × Ø 4.5 mm) for screwing the case to a wall or board.
-- **Engraved labels** RAIN / BME280 / WIND under the jack windows, 5V / 1-WIRE / ANT at the cable end.
-- **Captive button pin** — the foot (Ø 5.6) cannot pass the Ø 3.8 mm hole, so the pin cannot fall out of the closed lid.
-- **Recess for a display cover** — 0.8 mm pocket around the window on the inside for a 1 mm clear acrylic/PETG sheet.
-- Walls 1.6 mm (Rev 1.2: 0.8 mm), rounded corners.
-
-**Printing** (PETG or ASA, 0.2 mm layers, no supports)
-
-| Part | Orientation | Notes |
-|---|---|---|
-| case-body | floor on the bed | jack/USB windows bridge 13–16 mm |
-| case-lid | as exported (outer face on the bed) | ribs, tongues and lip point up |
-| button-pin | standing on its foot | |
-
-**Assembly**
-
-1. Plug the Heltec onto the board. Tilt the board and insert it RJ jacks first, so that the jacks go into their
-   windows, then lower the cable end onto the supports.
-2. Fix the RJ end with an M2 × 6 **nylon** screw (or steel screw + plastic washer) through the mounting hole into
-   the boss.
-3. Lay the 5 V and 1-Wire cables into their notches; feed the antenna through the antenna hole.
-4. Put the button pin into the guide from the inside (foot down), close the lid.
-
-**Please check on the first print** — these values are estimated, adjust in `case_rev13.py` and re-run:
-
-- `PIN_LEN` (button pin, derived from the 12 mm Rev 1.2 pin) — the pin should rest on the PRG button and protrude
-  a little.
-- `HOLD_PRESS` (0.1 mm preload of the lid ribs) — if the lid does not close, set it to 0.
-- `GAP_SIDE`, `LIP_GAP` (fits) and `JACK_Z` / `USB_Z` (windows) if your jacks or headers differ.
-
-**Regenerate**
-
-```bash
-python3 -m venv .venv-cad && .venv-cad/bin/pip install build123d
-.venv-cad/bin/python 3dprint/case_rev13.py      # → 3dprint/rev13/*.stl, *.step
-```

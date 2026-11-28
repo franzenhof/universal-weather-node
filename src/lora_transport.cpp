@@ -2,6 +2,7 @@
 #include "out_status.h"
 #include "globals.h"
 #include "serial_log.h"
+#include "time_sync.h"
 #include <atomic>
 
 // The Heltec's transceiver (heltec_board.cpp; Heltec V4 front end handled there).
@@ -78,6 +79,7 @@ void loraPoll()
         loRaNode->setDutyCycle(true);
         lastAttemptMs = millis();
         retryMs = RETRY_MIN_MS;
+        loraTimeJoined();   // DeviceTimeReq with the first uplink (unless NTP ... is fresh)
         dbgSerial.println("LoRaWAN joined; uplinks resume at the next measurement cycle.");
     }
     loraSleep();

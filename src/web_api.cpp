@@ -1,13 +1,17 @@
 #include "web_api.h"
+#include <WiFi.h>   // no longer pulled in by WebServer.h (Arduino-ESP32 3.x)
 #include "system_restart.h"
 #include "globals.h"
 #include "params.h"
+#include "config_merge.h"
 #include "board_io.h"
 #include "heltec_board.h"
 #include "psram.h"
+#include "psram_json.h"
 #include "sources.h"
 #include "lora_payload.h"
 #include "json_payload.h"
+#include "metrics.h"
 #include "history.h"
 #include "wifi_mqtt.h"
 #define README_MD_DEFINE   // the one definition of README_MD / HELP_PAGE_HTML (readme_md.h, help_page.h)
@@ -29,6 +33,7 @@
 #include "wind_window.h"
 #include "rf_sensors.h"
 #include "davis_rx.h"
+#include "status_led.h"
 #include "rf_trace.h"
 #include "ota_upload.h"
 #include "i18n.h"
@@ -39,8 +44,16 @@
 #include "astro.h"
 #include "rf_stats.h"
 #include "rf_names.h"
+#include "lsensors.h"
+#include "rf_minrssi.h"
 #include "ph_live.h"
 #include "series.h"
+#include "vsensor.h"
+#include "vs_run.h"
+#include "vs_store.h"
+#include "reset_history.h"
+#include "settings_reset.h"
+#include "net_sensor.h"
 #include "history.h"
 #include "sensors.h"
 #include "net_check.h"
@@ -48,19 +61,28 @@
 #include "settings_backup.h"
 #include "alarms.h"
 #include "custom_upload.h"
+#include "influx_queue.h"
 #include "oled_screens.h"
 #include <memory>
 #include "davis_diag.h"
 #include "derived_now.h"
 #include "api_info.h"
+#include "gnss.h"
+#include "gnss_logic.h"
 #include "portal_pages.h"   // /decoder, /calibrate*: the portal's pages and handlers
 
 #include <Arduino.h>
+#include <esp_random.h>
 #include <new>
-#include <WebServer.h>
+#include "http_server.h"   // esp_http_server with the WebServer API
 #include <ESPmDNS.h>
 #include <ArduinoJson.h>
 #include "loxone.h"
+#include "wifi_ap.h"
+#include "https_cert.h"
+#include "qr_code.h"
+#include <esp_mac.h>
+#include <esp_task_wdt.h>
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -68,19 +90,25 @@
 
 namespace {
 
-WebServer server(80);
+HttpServer server(80);
 bool      serverStarted = false;
 
-// Guards `server` (begin/stop/handleClient) and `serverStarted` themselves —
-// separate from history.cpp's own mutex, which guards different data (the
-// ring buffer). server.handleClient() now runs continuously from its own
-// FreeRTOS task (webApiTask, pinned to core 0, see webApiSetup() below)
-// instead of once per main-loop() iteration, so it no longer sits behind
-// sendLoRa()'s blocking airtime — but webApiStop() (main.cpp, called from
-// the main loop task right before opening the WiFiManager config portal)
-// can now run concurrently with that task's own begin/stop/handleClient
-// cycle, and WiFiServer's underlying socket isn't documented as safe to
-// stop() from one task while another is mid-accept()/handleClient() on it.
+// This start's ID for the wizard cookie (setup_wizard.h); esp_random() is a
+// true random number once the radio runs, the first call comes from a request.
+uint32_t wizardBootId()
+{
+    static uint32_t id = esp_random();
+    return id;
+}
+
+// Guards `server` (begin/stop) and `serverStarted` themselves — separate
+// from history.cpp's own mutex, which guards different data (the ring
+// buffer). webApiTask (core 0, see webApiSetup() below) starts and stops the
+// server with the Wi-Fi state; webApiStop() (main.cpp, called from the main
+// loop task right before opening the WiFiManager config portal) can run
+// concurrently with it. The request handlers run on the server's own task
+// (http_server.cpp) and never take this mutex: server.stop() waits for a
+// running handler, so a handler waiting here would deadlock it.
 SemaphoreHandle_t serverMutex = xSemaphoreCreateMutex();
 TaskHandle_t      webApiTaskHandle = nullptr;
 // Set by webApiStop() under serverMutex. webApiTask checks it before every
@@ -92,16 +120,14 @@ bool              apiStopped = false;
 // bounded buffer at a time. Used by handleApiHistory() below instead of
 // measureJson()+serializeJson() (which walked the whole document twice —
 // once just to precompute Content-Length — doubling ArduinoJson's traversal
-// cost on every poll). Reuses WebServer's own chunk framing: passing
-// CONTENT_LENGTH_UNKNOWN to setContentLength() before send() makes
-// WebServer::_prepareHeader() switch to "Transfer-Encoding: chunked" and
-// sendContent() add the size-prefixed framing per call; _finalizeResponse()
-// appends the terminating zero-length chunk automatically once the handler
-// returns. Same Print-subclass pattern as SerialLog (serial_log.h).
+// cost on every poll). setContentLength(CONTENT_LENGTH_UNKNOWN) before
+// send() switches HttpServer to "Transfer-Encoding: chunked", every
+// sendContent() is one chunk, and the terminating zero-length chunk follows
+// once the handler returns (http_server.cpp). Same Print-subclass pattern as SerialLog (serial_log.h).
 class ChunkedPrint : public Print
 {
 public:
-    explicit ChunkedPrint(WebServer& srv) : server_(srv) {}
+    explicit ChunkedPrint(HttpServer& srv) : server_(srv) {}
 
     size_t write(uint8_t b) override { return write(&b, 1); }
 
@@ -131,7 +157,7 @@ private:
         }
     }
 
-    WebServer& server_;
+    HttpServer& server_;
     char       buf_[512];
     size_t     fill_ = 0;
 };
@@ -149,7 +175,7 @@ class HtmlOut
 {
 public:
     // Sends the status line and headers right away (not while capturing).
-    HtmlOut(WebServer& srv, int code) : out_(srv), discard_(!gCapture.isNull())
+    HtmlOut(HttpServer& srv, int code) : out_(srv), discard_(!gCapture.isNull())
     {
         if (discard_) return;
         srv.sendHeader("Cache-Control", "no-store");
@@ -232,14 +258,49 @@ void sendJsonDoc(JsonDocument& doc, const char* what)
     out.flush();
 }
 
+// GET /api/events: the /api/data JSON pushed as Server-Sent Events (one
+// "data:" line per change - a received packet or the end of a measurement
+// cycle - at most every SSE_MIN_MS; an "event: ping" after SSE_PING_MS of silence).
+// Public like /api/data; at most HttpServer::SSE_MAX subscribers.
+constexpr uint32_t SSE_MIN_MS  = 2000;
+constexpr uint32_t SSE_PING_MS = 20000;
+
+void sseBuildData(String& out)
+{
+    static JsonDocument doc(psramJsonAllocator());   // static: runs on the server task like handleApiData()
+    buildJsonPayload(doc);
+    serializeJson(doc, out);
+}
+
+void handleApiEvents()
+{
+    if (server.sseAccept()) return;
+    server.sendHeader("Retry-After", "10");
+    sendPublicApiHeaders();
+    server.send(503, "text/plain; charset=utf-8", "too many event subscribers");
+}
+
+// webApiTask: queues a push when something changed (or a keep-alive ping)
+void ssePoll()
+{
+    static uint32_t seenRf = 0, seenCycle = 0, lastMs = 0;
+    if (server.sseClients() <= 0) { seenRf = gRfStoreCount; seenCycle = gSrcCycleCount; return; }
+    const uint32_t now = millis();
+    if (now - lastMs < SSE_MIN_MS) return;
+    const bool changed = gRfStoreCount != seenRf || gSrcCycleCount != seenCycle;
+    if (!changed && now - lastMs < SSE_PING_MS) return;
+    if (server.ssePublish(changed ? sseBuildData : nullptr)) {
+        seenRf = gRfStoreCount; seenCycle = gSrcCycleCount; lastMs = now;
+    }
+}
+
 void handleApiData()
 {
     // static: retains its underlying buffer across requests instead of
     // growing it from scratch and freeing it every call — safe because
-    // WebServer::handleClient() only ever processes one request at a time on
-    // this one task (see ChunkedPrint's comment above); buildJsonPayload()
+    // the server runs one handler at a time on its one task (see ChunkedPrint's comment above); buildJsonPayload()
     // clears the content (not the buffer) at its own top (see buildJsonPayload()).
-    static JsonDocument doc;
+    static JsonDocument doc(psramJsonAllocator());
     buildJsonPayload(doc);
     sendJsonDoc(doc, "telemetry");
 }
@@ -247,7 +308,7 @@ void handleApiData()
 // Records (records.h): extremes of today ... all time. No secrets, no auth.
 void handleApiRecords()
 {
-    static JsonDocument doc;   // static: see handleApiData()
+    static JsonDocument doc(psramJsonAllocator());   // static: see handleApiData()
     static Records r;          // ~430 bytes, not on the web task's stack
     recordsSnapshot(r);
     struct tm lt;
@@ -268,11 +329,119 @@ bool webBusyRefused()
 }
 
 // Device description for third-party UIs (api_info.h). No secrets, no auth.
+// Public (CORS *). The GNSS position only for a request that carries a valid
+// admin login (a browser logged in to the settings sends it along); a
+// request without credentials is never challenged or braked here.
 void handleApiInfo()
 {
-    static JsonDocument doc;   // static: see handleApiData()
-    buildInfoJson(doc);
+    static JsonDocument doc(psramJsonAllocator());   // static: see handleApiData()
+    const bool admin = gCfg.webAdminPass[0] && server.hasCredentials() && server.authenticate("admin", gCfg.webAdminPass);
+    buildInfoJson(doc, admin);
     sendJsonDoc(doc, "info");
+}
+
+// ---- Own access point (wifi_ap.h) ----
+// The request came in over the own AP (its address, not the station LAN's).
+bool requestOnAp()
+{
+    uint8_t a[4];
+    return apIsActive() && server.localIPv4(a) && !memcmp(a, AP_IP, 4);
+}
+
+// Set by serverStart(): HTTPS waits for the station address (a generated
+// certificate is made for it) - webApiTask restarts the server once Wi-Fi is up.
+bool httpsWaitingForStation = false;
+// Set by handleHttpsRegenerate(): webApiTask erases the generated pair and
+// restarts the server (which makes a new one) once the answer has gone out.
+volatile unsigned long httpsRegenerateAtMs = 0;
+
+// The station address (Wi-Fi client); false = not connected.
+bool stationIpv4(uint8_t out[4])
+{
+    if (!wifiIsConnected()) return false;
+    const IPAddress ip = WiFi.localIP();
+    for (int i = 0; i < 4; i++) out[i] = ip[i];
+    return out[0] || out[1] || out[2] || out[3];
+}
+
+// Before every route: an AP client asking for a foreign host (every name
+// resolves to the node) or a connectivity-check path gets a redirect to
+// the dashboard - phones then show their "sign in to the network" sheet with
+// it (docs/airfield.md). The station LAN is never redirected.
+bool captivePreRoute()
+{
+    if (!requestOnAp()) return false;
+    char host[HOSTNAME_MAX_LEN + 1];
+    deviceHostname(host, sizeof(host));
+    if (!captiveRedirect(server.header("Host").c_str(), server.uri().c_str(), host)) return false;
+    server.sendHeader("Location", String("http://") + AP_IP_TEXT + "/");
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(302, "text/html; charset=utf-8", String("<a href='http://") + AP_IP_TEXT + "/'>" + AP_IP_TEXT + "</a>");
+    return true;
+}
+
+// Port 80 while HTTPS runs (https_cert.h): "redirects browser pages" sends a
+// browser opening a page (GET / HEAD accepting text/html) to the same URL on
+// https://, "HTTPS only" every request - the API and a firmware upload too
+// (answered before the body is read). 307: temporary, so a browser does not
+// remember it once HTTPS is switched off again (no HSTS for the same reason).
+// The own access point always stays on HTTP; while HTTPS does not run,
+// port 80 serves everything.
+bool httpsPreRoute()
+{
+    if (!server.tlsRunning() || server.requestTls() || gCfg.httpPortMode == HTTP_PORT_KEEP) return false;
+    const HTTPMethod m = server.method();
+    const bool page = httpRequestIsBrowserPage(m == HTTP_GET || m == HTTP_HEAD, server.header("Accept").c_str());
+    if (!httpsShouldRedirect(true, gCfg.httpPortMode, false, requestOnAp(), page)) return false;
+    char url[HOSTNAME_MAX_LEN + 1100];   // host + a URI of up to CONFIG_HTTPD_MAX_URI_LEN
+    if (!httpsRedirectUrl(server.header("Host").c_str(), server.rawUri(), 443, url, sizeof(url))) return false;
+    server.sendHeader("Location", url);
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(307, "text/plain; charset=utf-8", url);
+    return true;
+}
+
+bool webPreRoute() { return captivePreRoute() || httpsPreRoute(); }
+
+// POST /api/time, ms=<Unix ms>: the browser's time, sent once per dashboard
+// load. Taken as the time source "phone" (time_sync.h) when it came over the
+// own AP or the node has no fresh time; the time sources still keep a fresh
+// better one (NTP, DCF77 ...). Public: the worst a stranger can do is what a
+// wrong phone clock does - and only while nothing better is fresh.
+void handleApiTime()
+{
+    const uint64_t rx = uptimeMs64();
+    const String v = server.arg("ms");
+    char* end = nullptr;
+    const long long ms = strtoll(v.c_str(), &end, 10);
+    const PhoneTimeVerdict pv = v.length() && end && !*end ? phoneTimeCheck(ms, requestOnAp(), timeBestFresh()) : PT_INVALID;
+    const char* result = "invalid";
+    if (pv == PT_REFUSED) result = "refused";
+    else if (pv == PT_OFFER) {
+        switch (timePhoneOffer(ms, rx)) {
+            case TimeSources::TS_SET:       result = "set"; break;
+            case TimeSources::TS_CONFIRMED: result = "confirmed"; break;
+            case TimeSources::TS_BLOCKED:   result = "blocked"; break;
+            default:                        result = "invalid"; break;
+        }
+    }
+    TimeSyncStatus ts;
+    timeSyncStatus(ts);
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(strcmp(result, "invalid") ? 200 : 400, "application/json",
+                String("{\"result\":\"") + result + "\",\"clockSource\":\"" + timeSourceName(ts.source) + "\"}");
+}
+
+// Prometheus metrics (metrics.h): the same public data as /api/data in SI base
+// units, no login — scraped by Prometheus / VictoriaMetrics / Grafana Alloy /
+// Telegraf. CORS like the other read-only endpoints.
+void handleMetrics()
+{
+    const bool up = wifiIsConnected();
+    std::string out;
+    buildMetrics(out, up ? (int)WiFi.RSSI() : 0, up);
+    sendPublicApiHeaders();
+    server.send(200, "text/plain; version=0.0.4; charset=utf-8", out.c_str());
 }
 
 // ---- Home screen / installed app (docs/web-dashboard.md "Install as an app") ----
@@ -298,7 +467,7 @@ void handleServiceWorker()
 // Web app manifest (web_manifest.h)
 void handleManifest()
 {
-    JsonDocument doc;
+    JsonDocument doc(psramJsonAllocator());
     buildManifest(doc, gCfg);
     String out;
     serializeJson(doc, out);
@@ -475,6 +644,87 @@ String agoSeconds(unsigned long s)
     return TF(T_c_ago_h, String(s / 3600.0f, 1));
 }
 String agoText(unsigned long atMs) { return agoSeconds((millis() - atMs) / 1000); }
+// "in 7 min" / "in 3.5 h"
+String inSeconds(unsigned long s)
+{
+    if (s < 3600) return TF(T_c_in_min, String((s + 59) / 60));
+    return TF(T_c_in_h, String(s / 3600.0f, 1));
+}
+
+// ---- reset history / crash report (reset_history.h) ----
+const char* resetCauseText(uint8_t cause)
+{
+    switch (cause) {
+        case RC_POWER_ON:       return T(T_rc_power_on);
+        case RC_EXTERNAL:       return T(T_rc_external);
+        case RC_SOFTWARE:       return T(T_rc_software);
+        case RC_PANIC:
+        case RC_CPU_LOCKUP:     return T(T_rc_crash);
+        case RC_TASK_WATCHDOG:  return T(T_rc_watchdog_task);
+        case RC_INT_WATCHDOG:   return T(T_rc_watchdog_int);
+        case RC_OTHER_WATCHDOG: return T(T_rc_watchdog);
+        case RC_BROWNOUT:
+        case RC_POWER_GLITCH:   return T(T_rc_brownout);
+        case RC_USB:
+        case RC_JTAG:           return T(T_rc_usb);
+        default:                return T(T_rc_unknown);
+    }
+}
+
+// "42 s" / "17 min" / "5.3 h" - a running time
+String durationText(uint32_t s)
+{
+    if (s < 120)  return String(s) + " s";
+    if (s < 7200) return String(s / 60) + " min";
+    return String(s / 3600.0f, 1) + " h";
+}
+
+// Local "2026-11-27 10:04" of a UTC epoch
+String localDateTime(uint32_t epoch)
+{
+    const time_t t = (time_t)epoch;
+    struct tm lt;
+    localTimeOf(t, lt);
+    char b[20];
+    strftime(b, sizeof(b), "%Y-%m-%d %H:%M", &lt);
+    return String(b);
+}
+
+// "crash (loopTask: LoadProhibited) · after 5.3 h · 2026-11-27 10:04"
+String resetRecordText(const ResetRecord& r)
+{
+    String v = resetCauseText(r.cause);
+    if (r.detail[0]) { v += " <span class='dim'>("; appendEscaped(v, r.detail); v += ")</span>"; }
+    if (r.flags & RR_UPTIME_KNOWN) { v += " &middot; "; v += TF(T_st_reset_after, durationText(r.uptimeSec)); }
+    if (r.flags & RR_TIME_KNOWN) { v += " &middot; "; v += localDateTime(r.epoch); }
+    return v;
+}
+
+// "in task loopTask at 0x4200abcd: LoadProhibited (address 0x00000000) · 2026-11-27 10:04"
+String crashSummaryText(const CrashSummary& c)
+{
+    char pc[12];
+    snprintf(pc, sizeof(pc), "0x%08lx", (unsigned long)c.pc);
+    String task;
+    appendEscaped(task, c.task);
+    String v = TF(T_st_crash_in, task, String(pc));
+    const char* ex = c.reason[0] ? nullptr : xtensaExceptionName(c.exceptionCause);
+    if (c.reason[0]) { v += ": "; appendEscaped(v, c.reason); }
+    else if (ex) {
+        char a[12];
+        snprintf(a, sizeof(a), "0x%08lx", (unsigned long)c.exceptionAddress);
+        v += ": "; v += ex; v += " <span class='dim'>("; v += a; v += ")</span>";
+    }
+    if (c.epoch) { v += " &middot; "; v += localDateTime(c.epoch); }
+    return v;
+}
+
+// Time source names for the status page (time_source.h)
+const char* timeSourceText(TimeSource s)
+{
+    static const TextId names[TSRC_COUNT] = { T_st_tsrc_ntp, T_st_tsrc_gnss, T_st_tsrc_ntp, T_st_tsrc_dcf77, T_st_tsrc_phone, T_st_tsrc_lorawan };
+    return T(names[s < TSRC_COUNT ? s : TSRC_NTP]);
+}
 
 // Wireless sensor types (gCfg.rfProto / parameter 50) for the settings
 // select and the status page.
@@ -540,8 +790,7 @@ void addLoxoneRow(HtmlOut& html)
     } else if (ls.lastError) {
         d += String(" &middot; ") + ls.lastError;   // DNS problem before any set
     }
-    static OutStatus os[OUT_COUNT];   // static: not on the web task's stack
-    outSnapshot(os);
+    const OutStatus* os = outSnapshotForWebTask();   // send status per output (out_status.h)
     if (os[OUT_LOXONE].fails) d += " &middot; " + TF(T_st_out_fails_row, String(os[OUT_LOXONE].fails));
     addStateRow(html, cls, "Loxone UDP", d);
 }
@@ -564,8 +813,7 @@ String outStatusLine(const OutStatus& s)
 
 void addWeatherNetworkRows(HtmlOut& html)
 {
-    static OutStatus os[OUT_COUNT];   // static: not on the web task's stack
-    outSnapshot(os);
+    const OutStatus* os = outSnapshotForWebTask();   // send status per output (out_status.h)
     int wxIdx = 0;
     WxTargetStatus st[WX_TARGET_COUNT];
     wxUploadStatus(st);
@@ -603,28 +851,54 @@ void addWeatherNetworkRows(HtmlOut& html)
 }
 
 // Status page box "Davis": receiver state and the last value per message type.
-// Status page: per-sensor buttons Mine / not Mine and Hide (POST
-// /api/rf/sensor, Digest like the settings, back to the status page).
-// back: "setup" = return to the wizard (step 2) instead of the status page
-String rfQuickActions(uint32_t id, const char* back = nullptr)
+// Per-sensor buttons Mine / not Mine and Hide (POST /api/rf/sensor, Digest
+// like the settings). Status page: one small form per sensor, back to the
+// status page (rfQuickActions). Setup wizard step 2: its rows are inside the
+// wizard's own form, and a form inside a form is dropped by the HTML parser
+// (the first row's buttons would post the wizard form) - so there the
+// buttons point with form='qa<ID>' to a form rendered after the wizard's
+// (rfQuickActionButtons + rfQuickActionForm, back = "setup": to step 2).
+namespace {
+// formId: nullptr = the buttons belong to the form around them
+String rfQuickActionButtons(uint32_t id, const char* formId)
+{
+    String owner;
+    if (formId) { owner = " form='"; owner += formId; owner += "'"; }
+    String f;
+    if (rfStateOf(id) == RF_STATE_MINE)
+        f += String("<button class='sb'") + owner + " name='action' value='received' title='" + T(T_st_qa_unmine) + "'>&#9734;</button>";
+    else
+        f += String("<button class='sb'") + owner + " name='action' value='mine' title='" + T(T_st_qa_mine) + "'>&#9733;</button>";
+    f += String("<button class='sb'") + owner + " name='action' value='hide' title='" + T(T_st_qa_hide) + "'>&#10005;</button>";
+    return f;
+}
+
+// The form with the sensor's hidden fields; formId: its id attribute (or nullptr)
+String rfQuickActionFormStart(uint32_t id, const char* back, const char* formId)
 {
     char ids[12];
     snprintf(ids, sizeof(ids), "%08lX", (unsigned long)id);
-    String f = " <form class='inl' method='POST' action='/api/rf/sensor'><input type='hidden' name='redirect' value='1'>";
+    String f = "<form class='inl' method='POST' action='/api/rf/sensor'";
+    if (formId) { f += " id='"; f += formId; f += "'"; }
+    f += "><input type='hidden' name='redirect' value='1'>";
     if (back) { f += "<input type='hidden' name='back' value='"; f += back; f += "'>"; }
     f += "<input type='hidden' name='id' value='";
     f += ids;
     f += "'>";
-    if (rfStateOf(id) == RF_STATE_MINE)
-        f += String("<button class='sb' name='action' value='received' title='") + T(T_st_qa_unmine) + "'>&#9734;</button>";
-    else
-        f += String("<button class='sb' name='action' value='mine' title='") + T(T_st_qa_mine) + "'>&#9733;</button>";
-    f += String("<button class='sb' name='action' value='hide' title='") + T(T_st_qa_hide) + "'>&#10005;</button></form>";
     return f;
+}
+
+void quickActionFormId(uint32_t id, char out[12]) { snprintf(out, 12, "qa%08lX", (unsigned long)id); }
+} // namespace
+
+String rfQuickActions(uint32_t id)
+{
+    return " " + rfQuickActionFormStart(id, nullptr, nullptr) + rfQuickActionButtons(id, nullptr) + "</form>";
 }
 
 // radio trace (defined further down)
 void addRfTraceStatusRow(HtmlOut& html);
+void addNetStatusRows(HtmlOut& html);
 void addRfTraceControls(HtmlOut& html);
 void addRfSensorTable(HtmlOut& html);
 void sendRfTraceFile(bool attachment);
@@ -710,7 +984,7 @@ String trCompass(const char* en)
 void addAutoSearchRows(HtmlOut& html)
 {
     const AutoSearch& as = rfAutoSearchState();
-    const float thr = autoRssiThreshold(boardIsV4());
+    const float thr = autoRssiThreshold(true);
     for (const AutoCand& c : as.c) {
         if (!c.id) continue;
         char id[12];
@@ -722,6 +996,39 @@ void addAutoSearchRows(HtmlOut& html)
     }
 }
 
+// The HTTPS line of the status page and the settings (https_cert.h): running
+// with which certificate (generated / uploaded, CN, names, end date, a
+// generated one that no longer names the station address), or why not.
+String httpsStatusText(const HttpsStatus& hs)
+{
+    String d;
+    if (hs.state == HTTPS_RUNNING) {
+        d = TF(T_st_https_on, String(hs.port));
+        d += " &middot; "; d += T(hs.source == HTTPS_SOURCE_GENERATED ? T_st_https_generated : T_st_https_uploaded);
+        if (hs.subject[0]) { d += " &middot; "; appendEscaped(d, hs.subject); }
+        char names[160];
+        if (httpsCertNamesText(hs.names, names, sizeof(names))) { d += " &middot; "; appendEscaped(d, names); }
+        if (hs.notAfter[0]) { d += " &middot; "; d += TF(T_st_https_until, String(hs.notAfter)); }
+        if (gCfg.httpPortMode == HTTP_PORT_REDIRECT_PAGES) { d += " &middot; "; d += T(T_st_https_redirect); }
+        else if (gCfg.httpPortMode == HTTP_PORT_HTTPS_ONLY) { d += " &middot; "; d += T(T_st_https_only); }
+        uint8_t ip[4];
+        if (hs.source == HTTPS_SOURCE_GENERATED && stationIpv4(ip) && !httpsCertNamesHaveIpv4(hs.names, ip)) {
+            char ipText[16];
+            snprintf(ipText, sizeof(ipText), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+            d += " &middot; <b>"; d += TF(T_st_https_ip_not_covered, String(ipText)); d += "</b>";
+        }
+        if (hs.uploadedRejected) { d += " &middot; "; d += T(T_st_https_uploaded_rejected); }
+        return d;
+    }
+    const TextId why = hs.state == HTTPS_WAITING_FOR_NETWORK ? T_st_https_waiting : hs.state == HTTPS_GENERATE_FAILED ? T_st_https_generate_failed
+                     : hs.state == HTTPS_LOW_MEMORY ? T_st_https_low_memory : T_st_https_start_failed;
+    d = T(why);
+    if (hs.code) { char c[16]; snprintf(c, sizeof(c), " (%s0x%04X)", hs.code < 0 ? "-" : "", (unsigned)(hs.code < 0 ? -hs.code : hs.code)); d += c; }
+    if (hs.uploadedRejected) { d += " &middot; "; d += T(T_st_https_uploaded_rejected); }
+    return d + " &middot; " + T(T_st_https_plain_only);
+}
+
+
 // Health overview: latest readings, device state, and whether every
 // transport/upload is actually working. Plain server-rendered HTML with no
 // JS dependency (a fast check for curl/monitoring or a JS-disabled browser);
@@ -731,7 +1038,7 @@ void handleStatusPage()
     selectLanguage();
     if (webBusyRefused()) return;   // tls_gate.h: an HTTPS request runs and the heap is low
     WebHeavyGuard heavy(millis());   // meanwhile no new HTTPS request starts
-    JsonDocument doc;
+    JsonDocument doc(psramJsonAllocator());
     buildJsonPayload(doc);
 
     HtmlOut html(server, 200);
@@ -739,7 +1046,7 @@ void handleStatusPage()
     html += "<p class='sub'>"; html += TF(T_st_sub, FIRMWARE_VERSION); html += "</p>";
 
     html += "<section><h4>"; html += T(T_st_measurements); html += "</h4><table>";
-    bool srcSet = gCfg.rfEn != 0;
+    bool srcSet = rfTableOn();
     for (int g = 0; g < SG_COUNT; g++) srcSet |= gCfg.srcSel[g] != SRC_AUTO;
     if (srcSet) {   // which sensor feeds each value (settings "Value sources")
         const TextId names[SG_COUNT] = { T_st_src_air, T_st_src_wind, T_st_src_rain, T_st_src_uv, T_st_src_light, T_st_src_pressure };
@@ -778,13 +1085,11 @@ void handleStatusPage()
         addRow(html, T(T_st_rain_since_start),   String(doc["rainSinceStart"].as<float>(), 2) + " " + doc["rainUnit"].as<const char*>());
         if (doc["lastRain"].is<const char*>()) {
             String lr = doc["lastRain"].as<const char*>();
-            time_t t = 0;
-            struct tm u = {};
-            if (sscanf(lr.c_str(), "%d-%d-%dT%d:%d", &u.tm_year, &u.tm_mon, &u.tm_mday, &u.tm_hour, &u.tm_min) == 5) {
-                u.tm_year -= 1900; u.tm_mon -= 1;
-                t = mktime(&u);   // UTC string, TZ-independent difference below
-                struct tm nowU; time_t now = time(nullptr); gmtime_r(&now, &nowU);
-                long ageMin = (long)difftime(mktime(&nowU), t) / 60;
+            int y, mo, d, h, mi;
+            if (sscanf(lr.c_str(), "%d-%d-%dT%d:%d", &y, &mo, &d, &h, &mi) == 5) {
+                // UTC string: no TZ (mktime() would read it on this task)
+                const int64_t t = (int64_t)ymdDayNumber(y * 10000 + mo * 100 + d) * 86400 + h * 3600 + mi * 60;
+                long ageMin = (long)(((int64_t)time(nullptr) - t) / 60);
                 addRow(html, T(T_st_last_rain), ageMin < 60   ? TF(T_st_ago_min, String(ageMin)) :
                                                 ageMin < 2880 ? TF(T_st_ago_hours, String(ageMin / 60)) :
                                                                 TF(T_st_ago_days, String(ageMin / 1440)));
@@ -857,25 +1162,25 @@ void handleStatusPage()
     }
     if (gSrc.uvRadio) addRow(html, T(T_st_uv_index), String(gSrc.uvIndexRadio, 1));
     if (gSrc.lightValid) addRow(html, T(T_st_illuminance), String((long)lroundf(gSrc.lightLux)) + " lx");
-    if (ioV2() && gSrc.uvBoard) {
+    if (ioFull() && gSrc.uvBoard) {
         if (doc["uvSensorVolts"].is<float>())
             addRow(html, T(T_st_uv_sensor_voltage), String(doc["uvSensorVolts"].as<float>(), 3) + " V");
         addRow(html, T(T_st_uv_index_calibration), gIo.uvIndexCalibrated ? T(T_st_calibrated) : T(T_st_not_calibrated));
         if (doc["uvIndex"].is<float>())
             addRow(html, T(T_st_uv_index), String(doc["uvIndex"].as<float>(), 2));
     }
-    if (ioV2() && gCfg.wind2Mode) {
+    if (ioFull() && gCfg.wind2Mode && gIo.wind2Valid) {
         const char* wu = windSpeedUnitLabel(gCfg);
         if (ioWind2DirActive()) addRow(html, T(T_st_wind_2_direction), String(gIo.wind2DirDeg) + "&deg;");
         addRow(html, T(T_st_wind_2_speed), String(windSpeedForOutput(gIo.wind2SpeedMs, gCfg), 1) + " " + wu);
         addRow(html, T(T_st_wind_2_gust),  String(windSpeedForOutput(gIo.wind2GustMs,  gCfg), 1) + " " + wu);
     }
-    if (ioV2() && ioAuxAinActive()) addRow(html, T(T_st_aux_analog_input), String(gIo.auxAinV, 3) + " V");
-    if (ioV2() && gCfg.auxPulseEn && !gCfg.wind2Mode) addRow(html, T(T_st_aux_pulses), TF(T_st_aux_pulses_val, String(gIo.auxPulsesCycle),
+    if (ioFull() && ioAuxAinActive()) addRow(html, T(T_st_aux_analog_input), String(gIo.auxAinV, 3) + " V");
+    if (ioFull() && gCfg.auxPulseEn && !gCfg.wind2Mode) addRow(html, T(T_st_aux_pulses), TF(T_st_aux_pulses_val, String(gIo.auxPulsesCycle),
                                           String(gIo.auxPulsesTotal)));
     html += "</table></section>";
 
-    if (ioV2() && (gCfg.heaterMode || gCfg.fanMode || gCfg.tachoEn)) {
+    if (ioFull() && (gCfg.heaterMode || gCfg.fanMode || gCfg.tachoEn)) {
         const TextId modeText[] = { T_c_off, T_c_on, T_c_auto };
         html += "<section><h4>"; html += T(T_st_outputs); html += "</h4><table>";
         if (gCfg.heaterMode)
@@ -894,7 +1199,7 @@ void handleStatusPage()
         html += "</table></section>";
     }
 
-    if (ioV2() && gCfg.veDirectEn) {
+    if (ioFull() && gCfg.veDirectEn) {
         static const struct { int cs; TextId text; } csText[] = {
             { 0, T_cs_off }, { 2, T_cs_fault }, { 3, T_cs_bulk }, { 4, T_cs_absorption }, { 5, T_cs_float }, { 7, T_cs_equalize },
             { 245, T_cs_starting }, { 247, T_cs_auto_eq }, { 252, T_cs_external } };
@@ -923,8 +1228,7 @@ void handleStatusPage()
 
     html += "<section><h4>"; html += T(T_st_connections); html += "</h4><table>";
     const String disabled = String("<span class='dim'>") + T(T_c_disabled) + "</span>";
-    static OutStatus os[OUT_COUNT];   // send status per output (out_status.h)
-    outSnapshot(os);
+    const OutStatus* os = outSnapshotForWebTask();   // send status per output (out_status.h)
     const char* fmtName = gCfg.payloadFormat ? T(T_st_binary) : "CayenneLPP";
     if (!gCfg.loraEn)            addStateRow(html, "off", "LoRaWAN", disabled);
     else if (davisLoraPaused())  addStateRow(html, "warn", "LoRaWAN", T(T_st_lorawan_paused_davis_mode_the));
@@ -948,6 +1252,34 @@ void handleStatusPage()
         addStateRow(html, "bad", "WiFi", T(T_st_disconnected));
     }
 
+    {   // own access point (wifi_ap.h) and its join QR code
+        ApStatus ap;
+        apStatus(ap);
+        if (ap.mode != AP_OFF) {
+            String ssid;
+            appendEscaped(ssid, ap.ssid);
+            if (ap.passInvalid) addStateRow(html, "bad", T(T_st_ap), ssid + " &middot; " + T(T_st_ap_no_pass));
+            else if (ap.active) addStateRow(html, "ok", T(T_st_ap), TF(T_st_ap_on, ssid, String(ap.channel), String(ap.clients), String(AP_MAX_CLIENTS)));
+            else if (ap.mode == AP_ALWAYS) addStateRow(html, "warn", T(T_st_ap), ssid + " &middot; " + T(T_st_not_running));
+            else addStateRow(html, "off", T(T_st_ap), ssid + " &middot; " + T(T_st_ap_standby));
+            struct Work { char text[WIFI_QR_TEXT_MAX]; QrCode q; };   // ~630 bytes: PSRAM, not internal RAM or the handler's stack
+            std::unique_ptr<Work, void (*)(void*)> w((Work*)heap_caps_malloc(sizeof(Work), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT), heap_caps_free);
+            // the QR carries the Wi-Fi password in clear: only for visitors already on the AP (the status page is public in the LAN)
+            if (w && requestOnAp() && apQrText(w->text, sizeof(w->text)) && qrEncode((const uint8_t*)w->text, strlen(w->text), QR_ECC_M, w->q)) {
+                String svg = "<div style='width:180px;max-width:100%'>";
+                qrSvg(w->q, [](const char* piece, void* arg) { *(String*)arg += piece; }, &svg);
+                svg += "</div>";
+                html += "<tr><td>"; html += T(T_st_ap_qr); html += "</td><td>"; html += svg; html += "</td></tr>";
+            }
+        }
+    }
+
+    {   // HTTPS (https_cert.h): only once enabled - then running, or why not
+        HttpsStatus hs;
+        httpsStatus(hs);
+        if (hs.state != HTTPS_OFF) addStateRow(html, hs.state == HTTPS_RUNNING ? "ok" : "bad", "HTTPS", httpsStatusText(hs));
+    }
+
     if (!gCfg.mqttEn) {
         addStateRow(html, "off", "MQTT", disabled);
     } else {
@@ -962,15 +1294,18 @@ void handleStatusPage()
 
     addLoxoneRow(html);
 
-    struct tm lt;
-    if (!gCfg.wifiEn) {
-        addStateRow(html, "off", T(T_st_clock_ntp), T(T_st_needs_wifi));
-    } else if (localTimeNow(lt)) {
-        char buf[40];
-        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z", &lt);
-        addStateRow(html, "ok", T(T_st_clock_ntp), TF(T_st_synced, buf));
-    } else {
-        addStateRow(html, "warn", T(T_st_clock_ntp), T(T_st_waiting_for_first_sync));
+    {   // clock and its time source (time_sync.h)
+        struct tm lt;
+        TimeSyncStatus ts;
+        timeSyncStatus(ts);
+        if (localTimeNow(lt) && ts.source != TSRC_NONE) {
+            char buf[40];
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z", &lt);
+            addStateRow(html, ts.fresh ? "ok" : "warn", T(T_st_clock),
+                        TF(ts.fresh ? T_st_clock_from : T_st_clock_stale, buf, timeSourceText(ts.source), agoSeconds(ts.ageSec)));
+        } else {
+            addStateRow(html, "warn", T(T_st_clock), T(T_st_clock_waiting));
+        }
     }
     html += "</table></section>";
 
@@ -987,6 +1322,26 @@ void handleStatusPage()
             addStateRow(html, o.fails ? "bad" : (o.hasOk ? "ok" : "warn"), TF(T_cu_url, String(i + 1)).c_str(),
                         line.length() ? line.substring(4) : String(T(T_st_nothing_sent_yet)));
         }
+    }
+    if (gCfg.wifiEn && gCfg.influxEn && gCfg.influxUrl[0]) {   // InfluxDB push + backfill queue (influx_queue.h)
+        const OutStatus& o = os[OUT_INFLUX];
+        InfluxBacklogStatus ib;
+        influxBacklogStatus(ib);
+        const String line = outStatusLine(o);
+        String d = line.length() ? line.substring(4) : String(T(T_st_nothing_sent_yet));
+        const char* cls = o.fails ? "bad" : (o.hasOk ? "ok" : "warn");
+        if (ib.active && ib.pushes > 1) {   // 1 = the push being sent normally
+            int64_t e;
+            const String age = (ib.oldestEpoch && epochNow(e) && e >= (int64_t)ib.oldestEpoch)
+                               ? agoSeconds((unsigned long)(e - ib.oldestEpoch)) : String("?");
+            d += "<br><small>" + TF(T_st_influx_backlog, String(ib.pushes), String((ib.bytes + 1023) / 1024),
+                                    String(ib.capacity / 1024), age) + "</small>";
+            if (!o.fails) cls = "warn";
+        }
+        if (ib.active && (ib.droppedFull || ib.droppedRejected))
+            d += "<br><small>" + TF(T_st_influx_dropped, String(ib.droppedFull), String(ib.droppedRejected)) + "</small>";
+        if (!ib.active) d += "<br><small>" + String(T(T_st_influx_no_queue)) + "</small>";
+        addStateRow(html, cls, "InfluxDB", d);
     }
     html += "</table></section>";
 
@@ -1010,7 +1365,7 @@ void handleStatusPage()
                     String name;
                     appendEscaped(name, rules[i].name[0] ? rules[i].name : alarmSrcKey(rules[i].src));
                     addStateRow(html, rules[i].priority >= 4 ? "bad" : "warn", name.c_str(),
-                                TF(T_st_al_active, agoSeconds(millis() / 1000 - st[i].since)));
+                                TF(T_st_al_active, agoSeconds(alarmClockSec() - st[i].since)));
                 }
                 if (!active) addStateRow(html, "ok", T(T_st_alarms), TF(T_st_al_none, String(defined)));
                 const bool conf[4] = { ch->ntfyTopic[0] != 0, ch->poToken[0] && ch->poUser[0], ch->tgToken[0] && ch->tgChat[0], ch->whUrl[0] != 0 };
@@ -1060,12 +1415,23 @@ void handleStatusPage()
             addRow(html, T(T_st_uplinks_without_downlink), String(ld.uplinksWithoutDownlink) + " / " + String(ld.rejoinThreshold) +
                    " <span class='dim'>(" + T(T_st_rejoin_limit) + ")</span>");
         addRow(html, T(T_st_rejoins_since_start), String(ld.rejoins));
+        {   // DeviceTimeReq (time_sync.h)
+            TimeSyncStatus ts;
+            timeSyncStatus(ts);
+            String v = ts.loraAnswered ? TF(T_st_lora_time_last, agoSeconds(ts.loraAnswerAgeSec)) : String(T(T_st_lora_time_none));
+            if (ts.loraNextSec == 0)     v += " &middot; " + TF(T_st_lora_time_next, T(T_st_lora_time_with_uplink));
+            else if (ts.loraNextSec > 0) v += " &middot; " + TF(T_st_lora_time_next, inSeconds((unsigned long)ts.loraNextSec));
+            else if (loraReady() && ts.fresh && ts.source < TSRC_LORAWAN)
+                v += " &middot; " + TF(T_st_lora_time_not_needed, timeSourceText(ts.source));
+            addRow(html, T(T_st_lora_time), v);
+        }
         html += "</table></section>";
     }
 
-    if (gCfg.rfEn) {
+    if (rfTableOn()) {   // the sensor table: 868 MHz reception and / or network sensors (net_sensor.h)
         html += "<section id='rfsensors'><h4>"; html += T(T_st_wireless_box); html += "</h4><table>";
-        if (rfDavisMode(gCfg.rfEn, gCfg.rfProto))
+        if (!gCfg.rfEn) addRow(html, T(T_st_receiver), T(T_st_wireless_sensors_are_off));
+        else if (rfDavisMode(gCfg.rfEn, gCfg.rfProto))
             addStateRow(html, gDavisDiag.running ? "ok" : "bad", T(T_st_receiver), T(T_st_davis_exclusive_mode_see_the));
         else if (rfSensorsReceiving())
             addStateRow(html, "ok", T(T_st_receiver), TF(gCfg.loraEn ? T_st_listening_lora : T_st_listening, rfSensorsListening()) +
@@ -1085,10 +1451,11 @@ void handleStatusPage()
                 addRow(html, T(T_st_rf_clock), String(v) + TF(T_st_rf_clock_ago, String((millis() - rc.rxMs) / 60000UL)));
             }
         }
-        if (gCfg.rfProto == RF_PROTO_DAVIS)
+        if (!gCfg.rfEn) {
+        } else if (gCfg.rfProto == RF_PROTO_DAVIS)
             addRow(html, T(T_st_sensor_type), rfSensorTypeText(gCfg.rfProto));
         else if (gCfg.rfProto == RF_PROTO_AUTO) {
-            addStateRow(html, "warn", T(T_st_sensor_type), T(gCfg.rfIds[0] ? T_st_auto_searching_mine : T_st_auto_searching));
+            addStateRow(html, "warn", T(T_st_sensor_type), T(gLogicalSensors.count() ? T_st_auto_searching_mine : T_st_auto_searching));
             addAutoSearchRows(html);   // candidates so far (rf_autosearch.h)
         } else if (rfSensorsDetectedProto())
             addStateRow(html, rfAutoLockedWeak() ? "warn" : "ok", T(T_st_sensor_type),
@@ -1106,9 +1473,17 @@ void handleStatusPage()
             snprintf(id, sizeof(id), "%08lX", (unsigned long)r.id);
             unsigned long ago = (millis() - r.lastMs) / 1000;
             bool gone = (r.staleMask & RF_VAL_ANY) && ago < rfFreshMs(r) / 1000;   // millis() wrapped
-            String v = TF(T_st_age_rssi, gone ? "&gt;" + agoSeconds(rfFreshMs(r) / 1000) : agoSeconds(ago), String(r.rssi, 0));
+            const String agoV = gone ? "&gt;" + agoSeconds(rfFreshMs(r) / 1000) : agoSeconds(ago);
+            String v = rfIsNetProto(r.proto) ? agoV : TF(T_st_age_rssi, agoV, String(r.rssi, 0));   // a network sensor has no signal
             if (!r.batteryOk) v += String(" &middot; <b>") + T(T_st_battery_low) + "</b>";
             if (r.batteryMv) v += " &middot; " + String(r.batteryMv / 1000.0f, 2) + " V";
+            if (rfStateOf(r.id) == RF_STATE_MINE) {   // reception watchdog (reception_window.h), ★ radio sensors
+                const ReceptionVerdict rx = rfReceptionOf(r);
+                if (rx.known) v += " &middot; " + TF(T_st_reception, String(rx.percent));
+                if (rx.poor)  v += String(" &middot; <b class='warnt'>&#9888; ") + T(T_st_reception_poor) + "</b>";
+                if (rx.idCollision)   // two transmitters on this radio ID (reception_window.h)
+                    v += String(" &middot; <b class='warnt'>&#9888; ") + T(T_st_id_collision) + "</b> " + T(T_st_id_collision_fix);
+            }
             auto stale = [i](const char* key) { return srcRfValueFresh(i, key) ? String() : String(T(T_st_stale)); };
             if (r.hasTemp)     v += " &middot; " + String(temperatureForOutput(r.tempC, gCfg), 1) + "&deg;" + temperatureUnitLabel(gCfg) + stale("temp");
             if (r.hasHumidity) v += " &middot; " + String(r.humidity) + " %" + stale("humidity");
@@ -1116,9 +1491,9 @@ void handleStatusPage()
                                     String(windSpeedForOutput(r.windGustMs, gCfg), 1)) + " " + windSpeedUnitLabel(gCfg) +
                                     " &middot; " + trCompass(windDirText((int)lroundf(r.windDirDeg))) + " " +
                                     String((int)lroundf(r.windDirDeg)) + "&deg;" + stale("wind");
-            RfStat* rst = (r.hasRain || r.hasLightning) ? rfStatFor(r.id, false) : nullptr;
-            uint32_t st_t = 0, st_ymd = 0;
-            if (rst) { rfStatsClock(st_t, st_ymd); rfStatRoll(*rst, st_t, st_ymd); }
+            RfStat rstCopy;   // a rolled copy (rf_stats.h)
+            uint32_t st_t = 0;
+            RfStat* rst = (r.hasRain || r.hasLightning) && rfStatSnapshot(r.id, rstCopy, st_t) ? &rstCopy : nullptr;
             if (r.hasRain) {
                 const int dec = gCfg.unitSystem == 1 ? 2 : 1;
                 const String ru = String(" ") + rainUnitLabel(gCfg);
@@ -1136,7 +1511,7 @@ void handleStatusPage()
                 if (rst) v += " &middot; " + TF(T_st_strikes_1h, String(rfStatStrikes1h(*rst, st_t)));
                 if (rst && rst->lastStrike) {
                     time_t tt = (time_t)rst->lastStrike;
-                    struct tm lt; localtime_r(&tt, &lt);
+                    struct tm lt; localTimeOf(tt, lt);
                     char hm[8]; strftime(hm, sizeof(hm), "%H:%M", &lt);
                     v += " &middot; " + TF(T_st_last_strike, hm);
                 }
@@ -1155,14 +1530,17 @@ void handleStatusPage()
                                     TF(r.leakHighSensitivity ? T_st_leak_raw_high : T_st_leak_raw_low, String(r.leakRaw)) + ")";
             if (r.hasLeafWetness)  v += " &middot; " + TF(T_st_leaf_wetness, String(r.leafWetnessPct));
             if (r.hasConductivity) v += " &middot; EC " + String((long)lroundf(r.conductivityUsCm)) + " &micro;S/cm";
+            if (r.hasDistance)     v += " &middot; " + TF(T_st_distance, String(r.distanceMm));
+            if (r.hasHeatCount)    v += " &middot; <span class='dim'>" + TF(T_st_heat_count, String(r.heatCount)) + "</span>";
             String kind = r.proto == RF_PROTO_BRESSER ? TF(T_st_type_n, String(r.type)) : String(rfProtoName(r.proto));
             if (r.model)   kind += String(" ") + r.model;
             if (r.channel) kind += " ch " + String(r.channel);
             int slot = rfSlotOfIndex(i);   // 0-based; 0..3 = value sources Wireless 1-4
             String label = slot >= 0 ? TF(T_st_wireless_n, String(slot + 1)) + " &middot; " : String();
             if (rfStateOf(r.id) == RF_STATE_MINE) label = "&#9733; " + label;
-            const char* nm = rfNameOf(r.id);
-            if (nm[0]) { appendEscaped(label, nm); label += " &middot; "; }
+            const RfLabel lb = rfLabelOf(r.id);   // ★: the name, else the custom ID; received only: its name if set
+            const char* shown = lb.mine() ? lb.shown() : lb.displayName;
+            if (shown[0]) { appendEscaped(label, shown); label += " &middot; "; }
             uint32_t eco;
             String ecoText;
             if (r.proto == RF_PROTO_FINEOFFSET && rfEcowittId(r.id, eco)) { char e[8]; snprintf(e, sizeof(e), "%lX", (unsigned long)eco); ecoText = TF(T_st_ecowitt_id, e); }
@@ -1173,9 +1551,10 @@ void handleStatusPage()
             if (hidden)
                 addRow(html, T(T_st_hidden_sensors), TF(T_st_hidden_in_range, String(hidden)));
         }
-        if (!any) addRow(html, T(T_st_sensors), T(T_st_none_received_yet_bresser_sensors));
+        if (!any && gCfg.rfEn) addRow(html, T(T_st_sensors), T(T_st_none_received_yet_bresser_sensors));
+        addNetStatusRows(html);
         if (gCfg.mqttEn && !rfDavisMode(gCfg.rfEn, gCfg.rfProto)) {
-            size_t listed = rfParseIds(gCfg.rfIds).size();
+            size_t listed = lsRadioIds(gLogicalSensors).size();
             if (listed)
                 addRow(html, T(T_st_home_assistant), TF(T_st_ha_devices, String((unsigned)listed)));
             else
@@ -1186,25 +1565,86 @@ void handleStatusPage()
         if (rfDavisMode(gCfg.rfEn, gCfg.rfProto)) addDavisBox(html);
     }
 
+    if (vsActive()) {   // virtual sensors (vsensor.h): own box next to the wireless sensors
+        html += "<section id='vsensors'><h4>"; html += T(T_set_vs); html += "</h4><table>";
+        uint8_t mac[6];
+        vsNodeMac(mac);
+        for (int i = 0; i < VS_SLOTS; i++) {
+            const VsSlotCfg c = vsSlotRead(i);
+            if (!c.enabled || c.type == VS_OFF) continue;
+            const VsSlotStatus s = gVsStatus[i];
+            char id[12];
+            snprintf(id, sizeof(id), "%08lX", (unsigned long)vsSlotTableId(c, i, mac));
+            String v = String(VS_TYPES[c.type].model) + " " + id + " &middot; ";
+            if (vsIdReceived(c, i)) {   // a real sensor in range has this ID
+                v += "<span style='color:var(--warn)'>&#9888; "; v += T(T_st_vs_id_taken); v += "</span> &middot; ";
+            }
+            v += s.sent ? TF(T_st_vs_sent, String((unsigned long)s.sent), agoText(s.lastTxMs))
+                            : String(T(T_st_vs_never));
+            if (s.skipBudget || s.skipBusy || s.skipMissing || s.deferDavis) {
+                v += " <span class='dim'>(";
+                if (s.skipBudget || s.skipBusy || s.skipMissing)
+                    v += TF(T_st_vs_skipped, String((unsigned long)s.skipBudget), String((unsigned long)s.skipBusy),
+                            String((unsigned long)s.skipMissing));
+                if (s.deferDavis) {
+                    if (s.skipBudget || s.skipBusy || s.skipMissing) v += ", ";
+                    v += TF(T_st_vs_deferred_davis, String((unsigned long)s.deferDavis));
+                }
+                if (s.lastError) { v += ", "; v += s.lastError; }
+                v += ")</span>";
+            }
+            addRow(html, TF(T_set_vs_slot, String(i + 1)), v);
+        }
+        addRow(html, T(T_st_vs_airtime), TF(T_st_vs_airtime_val, String(gVsBandLastHourMs / 1000.0f, 1), String(VS_BAND_BUDGET_MS / 1000)));
+        if (rfDavisMode(gCfg.rfEn, gCfg.rfProto))   // frames in the gaps after Davis packets (vs_run.h)
+            addRow(html, T(T_st_vs_davis_gap), TF(T_st_vs_davis_gap_val, String((unsigned long)gVsDavisGapFrames),
+                                                   String((unsigned long)((gVsDavisGapMaxUs + 999) / 1000))));
+        html += "</table></section>";
+    }
+
     html += "<section><h4>"; html += T(T_st_device); html += "</h4><table>";
     if (gCfg.debugMode) addRow(html, T(T_st_measurement_cycle), String(doc["cycle"].as<int>()));
     addRow(html, T(T_st_next_measurement_in), String(doc["nextCycleInSec"].as<uint32_t>()) + " s");
     {
-        String b = String("Heltec WiFi LoRa 32 ") + boardName(gBoard.kind);
-        if (boardIsV4()) b += gBoard.fem == FEM_KCT8103L ? ".3 (KCT8103L front end)" : ".2 (GC1109 front end)";
-        b += " <span class='dim'>(" + (gBoard.autoSel ? TF(T_st_board_detected, String(gBoard.flashBytes >> 20))
-                                                      : TF(T_st_board_manual, boardName(gBoard.detected), String(gBoard.flashBytes >> 20))) + ")</span>";
-        if (boardIsR8()) b += String(" <b>&ndash; ") + T(T_st_r8_unsupported) + "</b>";
+        String b = "Heltec WiFi LoRa 32 V4";
+        b += gBoard.fem == FEM_KCT8103L ? ".3 (KCT8103L front end)" : ".2 (GC1109 front end)";
+        b += " <span class='dim'>(" + TF(T_st_board_detected, String(gBoard.flashBytes >> 20)) + ")</span>";
         addRow(html, T(T_st_board), b);
     }
     if (boardPcbAllowed())
-        addRow(html, T(T_st_pcb_revision),   gCfg.pcbVersion == PCB_REV_2_0
-                                       ? String(gIo.hwIdDetected ? T(T_st_v2_0_detected) : T(T_st_v2_0_set_manually)) +
-                                         (boardIsV4() ? String(" &middot; ") + T(T_st_v4_sockets) : String())
-                                       : String(gCfg.pcbVersion == PCB_REV_1_2 ? "Rev 1.2" : "Rev 1.3"));
+        addRow(html, T(T_st_pcb_revision), String(T(boardPcbFull() ? T_st_v4_full_detected : T_st_v4_light_detected)) +
+                                           " &middot; " + T(T_st_v4_sockets));
     else
         addRow(html, "PCB",            T(T_st_heltec_v4_wireless_build_only));
-    addRow(html, T(T_st_bme280_sensor),      bme280Present ? T(T_st_present) : T(T_st_not_detected));
+    {   // BME280 and its pins (heltec_board.h bmePinSelect)
+        int sda, scl;
+        bool oldWiring;
+        uint8_t addr;
+        sensorsBmePins(sda, scl, oldWiring, addr);
+        String v = bme280Present ? T(T_st_present) : T(T_st_not_detected);
+        v += " <span class='dim'>(GPIO" + String(sda) + "/" + String(scl) + " SDA/SCL";
+        if (bme280Present) { char a[8]; snprintf(a, sizeof(a), ", 0x%02X", addr); v += a; }
+        v += ")</span>";
+        if (oldWiring) { v += " &middot; <b class='warnt'>&#9888; "; v += T(T_st_bme_old_pins); v += "</b>"; }
+        addRow(html, T(T_st_bme280_sensor), v);
+    }
+    if (gnssActive()) {   // GNSS module (gnss.h)
+        GnssStatus g;
+        gnssStatus(g);
+        String v;
+        if (!g.seen) v = TF(T_st_gnss_searching, String((unsigned long)g.baud));
+        else if (!g.fix) v = TF(T_st_gnss_nofix, String((unsigned)g.sats)) + " <span class='dim'>(" + String((unsigned long)g.baud) + " baud)</span>";
+        else v = TF(T_st_gnss_fix, String((unsigned)g.sats), String(g.hdop, 1)) + " <span class='dim'>(" + String((unsigned long)g.baud) + " baud)</span>";
+        if (g.pps) { v += " &middot; "; v += T(T_st_gnss_pps); }
+        addRow(html, T(T_st_gnss), v);
+        if (g.posOk) {
+            String p = String(g.lat, 5) + ", " + String(g.lon, 5);
+            if (g.altOk) p += " &middot; " + String(g.altM, 0) + " m";
+            addRow(html, T(T_st_gnss_pos), p);
+        }
+        addRow(html, T(T_st_gnss_time), g.timeUsed ? agoSeconds(g.timeAgeSec) + " <span class='dim'>(" + T(g.timePps ? T_st_gnss_pps : T_st_gnss_nmea) + ")</span>"
+                                                   : String(T(T_st_gnss_time_none)));
+    }
     addRow(html, T(T_st_ds18b20_sensors),    String(bus1Count));
     addRow(html, T(T_st_cpu_temperature),    String(doc["cpuTemp"].as<float>(), 1) + "&deg;" + doc["cpuTempUnit"].as<const char*>() +
                                        " <span class='dim'>(" + T(T_st_chip_above) + ")</span>");
@@ -1220,7 +1660,17 @@ void handleStatusPage()
         else       appendEscaped(v, st);
         addRow(html, T(T_st_firmware_update), v);
     }
-    addRow(html, T(T_st_last_restart),       gResetReason);
+    {   // reset history (reset_history.h): the last restart, the ones before, the last crash
+        const ResetHistory& h = resetHistory();
+        addRow(html, T(T_st_last_restart), h.count ? resetRecordText(h.rec[0]) : String(gResetReason));
+        if (h.count > 1) {
+            String v = "<details><summary>"; v += TF(T_st_restarts_n, String(h.count - 1)); v += "</summary>";
+            for (int i = 1; i < h.count; i++) { if (i > 1) v += "<br>"; v += resetRecordText(h.rec[i]); }
+            v += "</details>";
+            addRow(html, T(T_st_restarts), v);
+        }
+        if (h.lastCrash.valid) addRow(html, T(T_st_last_crash), crashSummaryText(h.lastCrash));
+    }
     addRow(html, T(T_st_free_heap),          TF(T_st_heap, String((float)internalFree() / 1024.0f, 1),
                                        String((float)internalMinFree() / 1024.0f, 1)) + " &middot; " +
                                        TF(T_st_heap_largest, String((float)internalLargest() / 1024.0f, 1)));
@@ -1230,7 +1680,7 @@ void handleStatusPage()
         addRow(html, T(T_st_psram), TF(T_st_psram_failed, String(gBoard.psramCap == PSRAM_CAP_8MB ? 8 : 2)));
     {   // stack never used per task (api_info.h): near 0 = close to a stack overflow
         String v;
-        static const char* const tasks[][2] = { { "Loop", "loopTask" }, { "Web", "webApi" }, { "Upload", "wxUpload" } };
+        static const char* const tasks[][2] = { { "Loop", "loopTask" }, { "Web", "httpd" }, { "Upload", "wxUpload" } };
         for (const auto& t : tasks) {
             const int f = hostOrDeviceStackFree(t[1]);
             if (f < 0) continue;
@@ -1346,6 +1796,104 @@ void handleSettingsReset()
     server.send(303, "text/plain", "");
 }
 
+// Deliberate crash to test the crash report (reset_history.h): admin, same
+// origin, and the typed word CRASH - never reachable by a stray click.
+void handleCrashTest()
+{
+    selectLanguage();
+    if (!requireAuth() || !requireSameOrigin()) return;
+    if (server.arg("confirm") != "CRASH") { server.send(400, "text/plain; charset=utf-8", T(T_set_crash_test_bad)); return; }
+    const bool hang = server.arg("kind") == "watchdog";
+    dbgSerial.printf("Crash test requested (%s).\n", hang ? "watchdog" : "panic");
+    crashTestRequest(hang ? CRASH_TEST_WATCHDOG : CRASH_TEST_PANIC);
+    server.send(200, "text/plain; charset=utf-8", T(T_set_crash_test_started));
+}
+
+// The two resets (settings_reset.h): admin, same origin and a typed word -
+// RESET for the settings, ERASE for everything. Done by the loop a second
+// later, after this answer.
+void handleSystemReset()
+{
+    selectLanguage();
+    if (!requireAuth() || !requireSameOrigin()) return;
+    const bool everything = server.arg("what") == "everything";
+    if (server.arg("confirm") != (everything ? "ERASE" : "RESET")) {
+        server.send(400, "text/plain; charset=utf-8", T(everything ? T_set_erase_all_bad : T_set_reset_settings_bad));
+        return;
+    }
+    dbgSerial.printf("%s requested (web).\n", everything ? "Erase everything" : "Reset settings");
+    if (!storageResetRequest(everything ? STORAGE_RESET_ERASE_EVERYTHING : STORAGE_RESET_SETTINGS)) {
+        server.send(503, "text/plain; charset=utf-8", T(T_tr_err_alloc));
+        return;
+    }
+    server.send(200, "text/plain; charset=utf-8", T(everything ? T_set_erase_all_started : T_set_reset_settings_started));
+}
+
+// The core dump of the last crash, as stored (raw: header + ELF + checksum).
+// Admin only: it holds RAM contents (credentials among them).
+void handleCoreDump()
+{
+    selectLanguage();
+    if (!requireAuth()) return;
+    size_t addr, size;
+    if (!resetHistoryCoreDump(addr, size)) { server.send(404, "text/plain; charset=utf-8", T(T_set_crash_none)); return; }
+    constexpr size_t CHUNK = 4096;
+    std::unique_ptr<uint8_t, void (*)(void*)> buf((uint8_t*)bigAlloc(CHUNK), free);
+    if (!buf) { server.send(503, "text/plain", "low memory, try again"); return; }
+    char host[HOSTNAME_MAX_LEN + 1];
+    deviceHostname(host, sizeof(host));
+    server.sendHeader("Cache-Control", "no-store");
+    server.sendHeader("Content-Disposition", String("attachment; filename=\"uwn-coredump-") + host + "-" +
+                                             resetHistory().lastCrash.elfSha + ".bin\"");
+    server.setContentLength(size);
+    server.send(200, "application/octet-stream", "");
+    for (size_t off = 0; off < size; off += CHUNK) {
+        const size_t n = size - off < CHUNK ? size - off : CHUNK;
+        if (!resetHistoryCoreDumpRead(addr + off, buf.get(), n)) break;
+        server.sendContent((const char*)buf.get(), n);
+    }
+}
+
+// The running generated HTTPS certificate (PEM, public: every TLS handshake
+// sends it anyway) - to trust it once on a PC / phone. Never the key.
+// application/x-x509-ca-cert: iOS and Android offer to install it.
+void handleHttpsCertificate()
+{
+    selectLanguage();
+    HttpsStatus hs;
+    httpsStatus(hs);
+    HttpsPem pem;
+    if (hs.source != HTTPS_SOURCE_GENERATED || !httpsPemLoad(pem, HTTPS_PAIR_GENERATED) || !pem.certLen) {
+        server.send(404, "text/plain; charset=utf-8", TF(T_c_not_found, server.uri()));
+        return;
+    }
+    char host[HOSTNAME_MAX_LEN + 1];
+    deviceHostname(host, sizeof(host));
+    server.sendHeader("Cache-Control", "no-store");
+    // a name that says what it is in the downloads folder: "Universal-Weather-Node-heltecv4-CA.crt"
+    server.sendHeader("Content-Disposition", String("attachment; filename=\"Universal-Weather-Node-") + host + "-CA.crt\"");
+    server.send(200, "application/x-x509-ca-cert", pem.cert);
+}
+
+// "Generate new certificate" (Settings -> System -> HTTPS): admin, same
+// origin. webApiTask erases the generated pair and restarts the server a
+// second after this answer; the start makes a new one for the current name
+// and address.
+void handleHttpsRegenerate()
+{
+    selectLanguage();
+    if (!requireAuth() || !requireSameOrigin()) return;
+    if (!gCfg.httpsEn) { server.send(409, "text/plain; charset=utf-8", T(T_set_https_regenerate_off)); return; }
+    dbgSerial.println("Web: new HTTPS certificate requested.");
+    httpsRegenerateAtMs = (millis() + 1000) | 1;
+    HtmlOut html(server, 200);
+    pageStart(html, T(T_c_settings), "/api/settings");
+    html += "<div class='banner okb'>"; html += T(T_set_https_regenerate_started);
+    html += " <a href='/api/settings#system'>"; html += T(T_c_settings); html += "</a></div>"
+            "<script>setTimeout(function(){location.href='/api/settings#system';},8000);</script></body></html>";
+    html.finish();
+}
+
 // The settings' wireless sensor table alone (live refresh, see handleSettingsGet()).
 void handleRfSensorTable()
 {
@@ -1360,11 +1908,14 @@ void handleLogRaw()
 {
     selectLanguage();
     if (!requireAuth()) return;
-    // heap while sending, not 8 KB of static RAM for a rarely used page
-    std::unique_ptr<char[]> buf(new (std::nothrow) char[4096]);   // = the log buffer (serial_log.cpp)
+    // the whole ring (64 KB in the PSRAM), copied for sending
+    const size_t cap = dbgSerial.capacity() + 1;
+    std::unique_ptr<char[]> buf(new (std::nothrow) char[cap]);
     if (!buf) { server.send(503, "text/plain", "low memory, try again"); return; }
-    dbgSerial.snapshot(buf.get(), 4096);
-    server.send(200, "text/plain; charset=utf-8", buf.get());
+    const size_t n = dbgSerial.snapshot(buf.get(), cap);
+    server.setContentLength(n);
+    server.send(200, "text/plain; charset=utf-8", "");
+    server.sendContent(buf.get(), n);
 }
 
 // Davis sniffer capture: now the radio trace (Davis mode starts
@@ -1409,6 +1960,53 @@ String rfTraceStateText(const RfTraceStatus& st)
     if (st.running) v += " &middot; " + (st.durationMs ? TF(T_tr_min_left, String((st.leftMs + 59999) / 60000))
                                                        : String(T(T_tr_until_stopped)) + (st.autoStarted ? String(" (") + T(T_tr_davis_mode) + ")" : String()));
     return v;
+}
+
+// A network sensor's address for the status page: the MQTT topic, or only
+// the host of a URL (the rest may carry a token).
+String netAddrText(const NetSlotCfg& c)
+{
+    String a;
+    if (c.type == NET_REST) {
+        const char* h = strstr(c.addr, "://");
+        h = h ? h + 3 : c.addr;
+        const char* end = h + strcspn(h, "/?#");
+        for (const char* at = h; at < end; at++) if (*at == '@') h = at + 1;   // user:password@
+        a = String(h).substring(0, (unsigned)(end - h));
+    } else {
+        a = c.addr;
+        if (c.format == NET_FMT_PLAIN) a += "&hellip;";
+    }
+    String out;
+    appendEscaped(out, a.c_str());
+    return out;
+}
+
+// Status page: one row per network sensor (net_sensor.h) - what it listens to, how it goes.
+void addNetStatusRows(HtmlOut& html)
+{
+    static const TextId errText[] = { T_st_net_never, T_st_net_err_http, T_st_net_err_json, T_st_net_err_values,
+                                      T_st_net_err_refused, T_st_net_err_wait };
+    for (int i = 0; i < NET_SLOTS; i++) {
+        std::unique_ptr<NetSlotCfg> c(new (std::nothrow) NetSlotCfg());
+        if (!c) return;
+        netLock();
+        *c = gCfg.net[i];
+        netUnlock();
+        if (!netOn(*c)) continue;
+        const NetSlotStatus st = gNetStatus[i];
+        char id[12];
+        snprintf(id, sizeof(id), "%08lX", (unsigned long)netSensorId(i));
+        String v = String(c->type == NET_MQTT ? "MQTT " : "REST ") + netAddrText(*c) + " &middot; ";
+        v += st.received ? TF(T_st_net_received, String((unsigned long)st.received), agoText(st.lastOkMs)) : String(T(T_st_net_never));
+        if (st.lastErr != NET_ERR_NONE && st.lastErr < sizeof(errText) / sizeof(errText[0])) {
+            v += " &middot; <b class='warnt'>";
+            v += st.lastErr == NET_ERR_HTTP ? TF(T_st_net_err_http, String(st.lastHttp)) : String(T(errText[st.lastErr]));
+            v += "</b>";
+        }
+        if (c->type == NET_MQTT && !(gCfg.wifiEn && gCfg.mqttEn)) { v += " &middot; <b class='warnt'>"; v += T(T_st_net_no_mqtt); v += "</b>"; }
+        addRow(html, TF(T_set_net_slot, String(i + 1)) + " &middot; ID " + id, v);
+    }
 }
 
 // Status page: one compact row; the controls live on the (password
@@ -1470,6 +2068,7 @@ String rfTraceReceiverInfo()
              : rfSensorsReceiving() ? String("receiving, now listening to ") + rfSensorsListening()
              : String("not receiving (last radio error ") + String(rfSensorsLastError()) + ")";
     r += ", " + String(rfSensorsPacketsTotal()) + " packets since start";
+    if (rfSensorsWatchdogRestarts()) r += ", " + String(rfSensorsWatchdogRestarts()) + " receiver restarts by the receive watchdog";
     if (rfSensorsDetectedProto()) r += ", auto search found type " + String(rfSensorsDetectedProto());
     if (rfSensorsScheduled()) r += ", timed reception for " + String(rfSensorsScheduled()) + " sensors";
     return r;
@@ -1496,7 +2095,7 @@ void sendRfTraceFile(bool attachment)
 void sendRfTraceStatusJson(bool ok, const char* error)
 {
     const RfTraceStatus st = rfTraceStatusNow();
-    JsonDocument doc;
+    JsonDocument doc(psramJsonAllocator());
     doc["ok"] = ok;
     if (error && error[0]) doc["error"] = error;
     doc["allocated"] = st.allocated;
@@ -1615,19 +2214,27 @@ void handleLogClear()
     server.send(200, "text/plain", "cleared");
 }
 
-// Rolling history JSON, served by handleApiHistory() below. history.cpp
-// keeps its own two-tier in-RAM ring buffer (fine/24h + coarse/7-day); this
-// only serves whichever tier ?range=7d selects (default: the fine tier).
+// /api/history?range=24h|7d|30d|1y[&end=<unix s>][&res=5m|1h|1d] - history.cpp
+// keeps three tiers (5 min / 1 h / days) and picks one, downsampled to at
+// most HISTORY_MAX_POINTS points (history.h).
+//
+// The document lives in the PSRAM (psram_json.h): a 1-year range with 32
+// custom series is ~21,000 values (~170 KB of ArduinoJson slots).
 void handleApiHistory()
 {
-    bool coarse = server.hasArg("range") && server.arg("range") == "7d";
+    HistoryQuery q;
+    const String range = server.arg("range"), end = server.arg("end"), res = server.arg("res");
+    if (!historyParseQuery(range.c_str(), end.c_str(), res.c_str(), q)) {
+        sendPublicApiHeaders();
+        server.send(400, "text/plain", "end: unix seconds; res: 5m, 1h or 1d");
+        return;
+    }
     // static: see handleApiData()'s comment above — buildHistoryJson()
     // clears the content (not the buffer) at its own top (see buildHistoryJson()).
-    static JsonDocument doc;
-    buildHistoryJson(doc, coarse);
-    // Full history (up to HISTORY_CAPACITY samples) is big — streamed
-    // straight to the client via ChunkedPrint instead of holding the whole
-    // serialized text in RAM at once, in a single serialize pass (see
+    static JsonDocument doc(psramJsonAllocator());
+    buildHistoryJson(doc, q);
+    // Streamed straight to the client via ChunkedPrint instead of holding the
+    // whole serialized text in RAM at once, in a single serialize pass (see
     // ChunkedPrint's comment above).
     sendJsonDoc(doc, "history");
 }
@@ -1638,7 +2245,7 @@ void handleApiHistory()
 void handleChartPage()
 {
     // first visits after a new start / factory reset: the setup wizard (once per browser session)
-    if (wizardAutoStart(gCfg, server.header("Cookie").indexOf("wnSetup=1") >= 0)) {
+    if (wizardAutoStart(gCfg, wizardCookieShown(server.header("Cookie").c_str(), wizardBootId()), requestOnAp())) {
         server.sendHeader("Location", "/setup");
         server.send(302);
         return;
@@ -1730,6 +2337,27 @@ void labelStart(HtmlOut& html, const char* label, const char* hint)
     html += "</span>";
 }
 
+// Templates with placeholders (OLED screens, custom uploads, alarm texts,
+// webhook): stored with a ★ sensor's internal ID ("{@L3F9A2C_temp}"), shown
+// and typed with its key ("{garten_temp}"; lsensors.h). Old forms typed or
+// stored ({rf17000008_temp}, {rf3_temp}) are converted on the next save.
+String phShow(const char* stored)
+{
+    const size_t n = strlen(stored) * 2 + 24;   // a key may be longer than "@" + the internal ID
+    std::unique_ptr<char[]> b(new (std::nothrow) char[n]);
+    if (!b) return String(stored);
+    lsPlaceholdersToCustomId(gLogicalSensors, stored, b.get(), n);
+    return String(b.get());
+}
+// typed -> stored form; fit = false: longer than cap - 1 bytes
+String phStore(const String& typed, size_t cap, bool& fit)
+{
+    std::unique_ptr<char[]> b(new (std::nothrow) char[cap]);
+    if (!b) { fit = false; return typed; }
+    fit = lsPlaceholdersToStored(gLogicalSensors, typed.c_str(), b.get(), cap);
+    return String(b.get());
+}
+
 void fieldText(HtmlOut& html, const char* name, const char* label, const String& value,
                size_t maxLen, const char* hint = nullptr, const char* type = "text")
 {
@@ -1775,7 +2403,8 @@ String secretValue(const char* name)
     static const struct { const char* name; const char* value; } secrets[] = {
         { "webadminpw", gCfg.webAdminPass }, { "mqttpass", gCfg.mqttPass }, { "awkpass", gCfg.awekasPass },
         { "wukey", gCfg.wuStationKey }, { "wckey", gCfg.wcloudKey }, { "wnpkey", gCfg.wnetproKey },
-        { "windypw", gCfg.windyPass }, { "osemtok", gCfg.osemToken } };
+        { "windypw", gCfg.windyPass }, { "osemtok", gCfg.osemToken }, { "influxtok", gCfg.influxToken },
+        { "appass", gCfg.apPass } };
     for (const auto& e : secrets) if (!strcmp(e.name, name)) return e.value;
     if (!strcmp(name, "appkey")) {
         char hex[33];
@@ -1783,6 +2412,7 @@ String secretValue(const char* name)
         return hex;
     }
     if (!strcmp(name, "wifipass")) return wifiCurrentPassword();
+    if (!strcmp(name, "httpskey")) { HttpsPem pem; httpsPemLoad(pem); return pem.key; }
     if (!strcmp(name, "wowpin")) return gCfg.wowPin;
     String v;
     alarmsLock();
@@ -1849,9 +2479,9 @@ String rfValuesShort(const RfSensorReading& r)
     if (r.hasTemp)      add(String(temperatureForOutput(r.tempC, gCfg), 1) + "&deg;" + temperatureUnitLabel(gCfg));
     if (r.hasHumidity)  add(String(r.humidity) + " %");
     if (r.hasWind)      add(TF(T_set_tv_wind, String(windSpeedForOutput(r.windAvgMs, gCfg), 1) + " " + windSpeedUnitLabel(gCfg)));
-    RfStat* st = (r.hasRain || r.hasLightning) ? rfStatFor(r.id, false) : nullptr;   // today (rf_stats.h)
-    uint32_t t = 0, ymd = 0;
-    if (st) { rfStatsClock(t, ymd); rfStatRoll(*st, t, ymd); }
+    RfStat stCopy;   // today (rf_stats.h): a rolled copy
+    uint32_t t = 0;
+    const RfStat* st = (r.hasRain || r.hasLightning) && rfStatSnapshot(r.id, stCopy, t) ? &stCopy : nullptr;
     if (r.hasRain && st && st->ymd) add(TF(T_st_rf_rain_today, String(rainForOutput(st->rainTodayMm, gCfg), 1) + " " + rainUnitLabel(gCfg)));
     else if (r.hasRain) add(TF(T_st_rain_total, String(rainForOutput(r.rainTotalMm, gCfg), 1) + " " + rainUnitLabel(gCfg)));
     if (r.hasPressure)  add(String(pressureForOutput(r.pressureHpa, gCfg), gCfg.unitSystem == 1 ? 2 : 1) + " " + pressureUnitLabel(gCfg));
@@ -1882,12 +2512,29 @@ void addRfSensorTable(HtmlOut& html)
 {
     sectionStart(html, T(T_set_wireless_sensors), false,
                  T(T_set_9733_mine_numbered_first_in));
-    html += "<table class='rft'><tr><th>#</th><th>"; html += T(T_set_th_state); html += "</th><th>ID</th><th>";
-    html += T(T_set_th_name); html += "</th><th>";
+    const unsigned long now = millis();
+    auto readingOf = [](uint32_t rid) { for (int i = 0; i < RF_MAX_SENSORS; i++) if (gRfSensors[i].used && gRfSensors[i].id == rid) return i; return -1; };
+    // "New sensor ... replaces <name>?" (battery change, rfReplaceCandidate()): one click re-binds
+    for (int k = 0; k < gLogicalSensors.count(); k++) {
+        const LogicalSensor& e = gLogicalSensors.s[k];
+        const int si = readingOf(e.radioId);
+        if (si < 0) continue;
+        const int ci = rfReplaceCandidate(gRfSensors, RF_MAX_SENSORS, gRfSensors[si], now);
+        if (ci < 0) continue;
+        char hex[12];
+        snprintf(hex, sizeof(hex), "%08lX", (unsigned long)gRfSensors[ci].id);
+        String who;
+        appendEscaped(who, e.displayName[0] ? e.displayName : e.customId);
+        html += "<p class='note'>"; html += TF(T_set_replaces_q, hex, rfKindText(gRfSensors[ci]), "<b>" + who + "</b>");
+        html += " <button class='sb' name='rfreplace' value='"; html += e.internalId; html += ":"; html += hex; html += "'>";
+        html += T(T_set_replaces_btn); html += "</button></p>";
+    }
+    html += "<table class='rft'><tr><th>#</th><th>"; html += T(T_set_th_state); html += "</th><th>"; html += T(T_set_th_radio_id); html += "</th><th>";
+    html += T(T_set_th_name); html += "</th><th class='adv' title='"; html += T(T_set_th_minrssi_hint); html += "'>";
+    html += T(T_set_th_minrssi); html += "</th><th>";
     html += T(T_set_th_sensor); html += "</th><th class='hm'>"; html += T(T_set_th_signal); html += "</th><th class='hm'>";
     html += T(T_set_th_values); html += "</th><th></th></tr>";
-    const std::vector<uint32_t> mine = rfParseIds(gCfg.rfIds);
-    const unsigned long now = millis();
+    const std::vector<uint32_t> mine = lsRadioIds(gLogicalSensors);
     bool any = false;
     auto row = [&](int slot, uint32_t id, int idx, RfSensorState st, size_t minePos) {
         any = true;
@@ -1898,17 +2545,46 @@ void addRfSensorTable(HtmlOut& html)
         html += "</td><td>";
         rfStateSelect(html, ids, st);
         html += "</td><td class='num'>"; html += ids;
+        const int ls = st == RF_STATE_MINE ? lsFindByRadioId(gLogicalSensors, id) : -1;   // logical sensor: internal ID, re-bind (radio ID)
+        if (ls >= 0) {
+            const LogicalSensor& e = gLogicalSensors.s[ls];
+            html += "<br><small class='dim' title='"; html += T(T_set_internal_id); html += "'>"; html += e.internalId; html += "</small>";
+            String opts;   // received, not ★, not hidden, of the same kind (as far as the ★ one is known)
+            for (int j = 0; j < RF_MAX_SENSORS; j++) {
+                const RfSensorReading& c = gRfSensors[j];
+                if (!c.used || rfStateOf(c.id) != RF_STATE_RECEIVED || (idx >= 0 && !rfSameKind(gRfSensors[idx], c))) continue;
+                char ch[12]; snprintf(ch, sizeof(ch), "%08lX", (unsigned long)c.id);
+                opts += "<option value='"; opts += ch; opts += "'>"; opts += ch; opts += " &middot; "; opts += rfKindText(c); opts += "</option>";
+            }
+            if (opts.length()) {
+                html += "<br><select name='rfrebind_"; html += e.internalId; html += "' title='"; html += T(T_set_rebind_hint); html += "'>";
+                html += "<option value=''>"; html += T(T_set_rebind); html += " &hellip;</option>"; html += opts; html += "</select>";
+            }
+        }
         uint32_t eco;
         if (rfEcowittId(id, eco) && (idx < 0 || gRfSensors[idx].proto == RF_PROTO_FINEOFFSET)) {
             char e[8]; snprintf(e, sizeof(e), "%lX", (unsigned long)eco);
             html += "<br><small class='dim'>Ecowitt "; html += e; html += "</small>";
         }
+        if (rfTwinIndex(id) >= 0) {   // IT+ ID shared with another received sensor (rfItPlusTwin())
+            html += "<br><small style='color:var(--warn)' title='"; html += T(T_set_rf_twin_hint); html += "'>&#9888; ";
+            html += T(T_set_rf_twin); html += "</small>";
+        }
         // user-defined name (rf_names.h)
-        html += "</td><td><input name='rfnm_"; html += ids; html += "' maxlength='24' size='10' value='";
-        appendEscaped(html, rfNameOf(id)); html += "'></td><td>";
+        html += "</td><td><input name='rfname_"; html += ids; html += "' maxlength='24' size='10' value='";
+        appendEscaped(html, rfNameOf(id)); html += "'>";
+        if (ls >= 0) {   // custom ID (lsCustomIdProblem), what other systems see
+            html += "<br><input name='rfcustomid_"; html += gLogicalSensors.s[ls].internalId; html += "' maxlength='16' size='10' title='"; html += T(T_set_custom_id_hint);
+            html += "' placeholder='"; html += T(T_set_th_custom_id); html += "' value='"; appendEscaped(html, gLogicalSensors.s[ls].customId); html += "'>";
+        }
+        html += "</td>";
+        // minimum signal (rf_minrssi.h), advanced only
+        html += "<td class='adv'><input name='rfminrssi_"; html += ids; html += "' maxlength='4' size='4' placeholder='&ndash;' value='";
+        if (const int mr = rfMinRssiOf(id)) html += String(mr);
+        html += "'></td><td>";
         if (idx >= 0) {
             const RfSensorReading& r = gRfSensors[idx];
-            html += rfKindText(r) + "</td><td class='hm'>" + String(r.rssi, 0) + " dBm &middot; " + agoText(r.lastMs) +
+            html += rfKindText(r) + "</td><td class='hm'>" + (rfIsNetProto(r.proto) ? String() : String(r.rssi, 0) + " dBm &middot; ") + agoText(r.lastMs) +
                     "</td><td class='hm'>" + rfValuesShort(r);
         } else {
             html += "<span class='dim'>"; html += T(T_set_not_received); html += "</span></td><td class='hm'></td><td class='hm'>";
@@ -1936,16 +2612,17 @@ void addRfSensorTable(HtmlOut& html)
             row(-1, gRfSensors[i].id, i, RF_STATE_RECEIVED, 0);
     html += "</table>";
     if (!any) { html += "<p class='dim' id='rfnone'>"; html += T(T_set_no_sensor_yet); html += "</p>"; }
+    if (gLogicalSensors.count()) { html += "<p class='dim'>"; html += T(T_set_custom_id_hint); html += "</p>"; }
     if (rfOnlyMineActive()) { html += "<p class='dim'>"; html += T(T_set_only_mine_note); html += "</p>"; }
 
     int hiddenNear = 0;
     for (const RfHiddenSeen& h : gRfHidden)
-        if (h.id && now - h.lastMs <= RF_HIDDEN_RANGE_MS && rfStateOf(h.id) == RF_STATE_HIDDEN) hiddenNear++;
+        if (rfHiddenSeenInRange(h, now)) hiddenNear++;
     html += "<details><summary>" + TF(T_set_hidden_in_range, String(hiddenNear)) + "</summary>";
     if (hiddenNear) {
         html += "<table class='rft'>";
         for (const RfHiddenSeen& h : gRfHidden) {
-            if (!h.id || now - h.lastMs > RF_HIDDEN_RANGE_MS || rfStateOf(h.id) != RF_STATE_HIDDEN) continue;
+            if (!rfHiddenSeenInRange(h, now)) continue;
             char ids[12];
             snprintf(ids, sizeof(ids), "%08lX", (unsigned long)h.id);
             html += "<tr><td>";
@@ -1958,6 +2635,125 @@ void addRfSensorTable(HtmlOut& html)
     html += "</details></section>";
 }
 
+// ---- Outputs -> Virtual sensors (vsensor.h, docs/virtual-sensors.md) ----
+// Field names: vsen, vsdbm, per slot vs<i>t (type), vs<i>e (on), vs<i>c
+// (WH31 channel), vs<i>_<field> (value name, placeholder form). The ID is
+// shown, never asked for: it is derived from the node (vsDeriveId()).
+const TextId VS_FIELD_TEXT[VF_COUNT] = { T_se_f_temp, T_se_f_hum, T_se_f_press, T_al_src_wind, T_al_src_gust,
+    T_set_vs_f_dir, T_set_vs_f_rain, T_se_f_uv, T_se_f_lux };
+
+// stored value name -> shown ("@L3F9A2C_temp" -> "garten_temp")
+String vsShowSrc(const char* stored)
+{
+    if (!stored[0]) return String();
+    String v = phShow((String("{") + stored + "}").c_str());
+    if (v.startsWith("{") && v.endsWith("}")) v = v.substring(1, v.length() - 1);
+    return v;
+}
+
+void placeholderBox(HtmlOut& html, const char* ctx, const char* fieldRe);
+
+void renderVirtualSensors(HtmlOut& html)
+{
+    sectionStart(html, T(T_set_vs), false, T(T_set_vs_note), true);
+    VsSettingsCopy vs = vsSettingsCopy();   // 1.2 KB: on the heap (PSRAM), not on this task's stack
+    if (!vs) { html += "</section>"; return; }
+    const VsSlotCfg* cfg = vs->slot;
+    fieldCheck(html, "vsen", T(T_set_vs_en), vs->enabled);
+    DepScope depOn("vsen=1");
+    fieldText(html, "vsdbm", T(T_set_vs_dbm), String((int)vs->txPowerDbm), 3, T(T_set_vs_dbm_hint), "number");
+    uint8_t mac[6];
+    vsNodeMac(mac);
+    Option types[VS_TYPE_COUNT];
+    types[0] = { VS_OFF, T(T_se_off) };
+    for (int t = 1; t < VS_TYPE_COUNT; t++) types[t] = { t, VS_TYPES[t].model };
+    Option chans[8];
+    static const char* const chText[8] = { "1", "2", "3", "4", "5", "6", "7", "8" };
+    for (int k = 0; k < 8; k++) chans[k] = { k + 1, chText[k] };
+    placeholderBox(html, "vs", "^vs\\d_");   // above the slots, as in the other forms with placeholders
+    char n[24], dep[64];
+    for (int i = 0; i < VS_SLOTS; i++) {
+        const VsSlotCfg& c = cfg[i];
+        html += "<h4 data-dep='vsen=1'>"; html += TF(T_set_vs_slot, String(i + 1)); html += "</h4>";
+        snprintf(n, sizeof(n), "vs%dt", i);
+        fieldSelect(html, n, T(T_set_vs_type), c.type, types, VS_TYPE_COUNT, i == 0 ? T(T_set_vs_type_hint) : nullptr);
+        char depSlot[24];   // d1 points into it while the inner scopes reuse dep
+        snprintf(depSlot, sizeof(depSlot), "vsen=1&vs%dt!=0", i);
+        DepScope d1(depSlot);
+        snprintf(n, sizeof(n), "vs%de", i);
+        fieldCheck(html, n, T(T_set_vs_slot_en), c.enabled);
+        if (c.type != VS_OFF) {
+            char id[12];
+            snprintf(id, sizeof(id), "%08lX", (unsigned long)vsSlotTableId(c, i, mac));
+            fieldReadonly(html, T(T_set_vs_id), id, T(T_set_vs_id_hint));
+        }
+        {
+            snprintf(dep, sizeof(dep), "vsen=1&vs%dt=%d", i, (int)VS_WH31);
+            DepScope d2(dep);
+            snprintf(n, sizeof(n), "vs%dc", i);
+            fieldSelect(html, n, T(T_st_channel), c.channel >= 1 && c.channel <= 8 ? c.channel : 1, chans, 8);
+        }
+        for (int f = 0; f < VF_COUNT; f++) {
+            String alt;
+            for (int t = 1; t < VS_TYPE_COUNT; t++)
+                if (VS_TYPES[t].fields & (1u << f)) { if (alt.length()) alt += '|'; alt += t; }
+            snprintf(dep, sizeof(dep), "vsen=1&vs%dt=%s", i, alt.c_str());
+            DepScope d3(dep);
+            snprintf(n, sizeof(n), "vs%d_%s", i, vsFieldKey((uint8_t)f));
+            fieldText(html, n, T(VS_FIELD_TEXT[f]), vsShowSrc(c.src[f]), 40, i == 0 && f == VF_TEMP ? T(T_set_vs_src_hint) : nullptr);
+        }
+    }
+    html += "</section>";
+}
+
+// ---- Sensors -> Network sensors (net_sensor.h, docs/network-sensors.md) ----
+// Field names per slot: ns<i>t (type), ns<i>f (format), ns<i>a (topic / URL),
+// ns<i>m (freshness, min), ns<i>p (REST poll, s), ns<i>_<value> (key).
+void renderNetworkSensors(HtmlOut& html)
+{
+    sectionStart(html, T(T_set_net), false, T(T_set_net_note), true);
+    const Option types[NET_TYPE_COUNT] = { { NET_OFF, T(T_se_off) }, { NET_MQTT, "MQTT" }, { NET_REST, "REST (HTTP GET)" } };
+    const Option formats[NET_FMT_COUNT] = { { NET_FMT_JSON, T(T_set_net_fmt_json) }, { NET_FMT_PLAIN, T(T_set_net_fmt_plain) },
+                                            { NET_FMT_UWN, "Universal Weather Node" } };
+    std::unique_ptr<NetSlotCfg> cBuf(new (std::nothrow) NetSlotCfg());
+    if (!cBuf) { html += "</section>"; return; }
+    NetSlotCfg& c = *cBuf;
+    char n[24], dep[48];
+    for (int i = 0; i < NET_SLOTS; i++) {
+        netLock();
+        c = gCfg.net[i];
+        netUnlock();
+        char id[12];
+        snprintf(id, sizeof(id), "%08lX", (unsigned long)netSensorId(i));
+        html += "<h4>"; html += TF(T_set_net_slot, String(i + 1)); html += " <small class='dim'>ID "; html += id; html += "</small></h4>";
+        snprintf(n, sizeof(n), "ns%dt", i);
+        fieldSelect(html, n, T(T_set_net_type), c.type, types, NET_TYPE_COUNT, i == 0 ? T(T_set_net_type_hint) : nullptr);
+        snprintf(dep, sizeof(dep), "ns%dt!=0", i);
+        DepScope d1(dep);
+        snprintf(n, sizeof(n), "ns%df", i);
+        fieldSelect(html, n, T(T_set_net_format), c.format, formats, NET_FMT_COUNT, i == 0 ? T(T_set_net_format_hint) : nullptr);
+        snprintf(n, sizeof(n), "ns%da", i);
+        fieldText(html, n, T(T_set_net_addr), c.addr, NET_ADDR_LEN - 1, i == 0 ? T(T_set_net_addr_hint) : nullptr);
+        snprintf(n, sizeof(n), "ns%dm", i);
+        fieldText(html, n, T(T_set_net_fresh), String(c.freshMin), 4, i == 0 ? T(T_set_net_fresh_hint) : nullptr, "number");
+        {
+            char depP[48];
+            snprintf(depP, sizeof(depP), "ns%dt=%d", i, (int)NET_REST);
+            DepScope d2(depP);
+            snprintf(n, sizeof(n), "ns%dp", i);
+            fieldText(html, n, T(T_set_net_poll), String(c.pollSec), 4, T(T_set_net_poll_hint), "number");
+        }
+        char depK[48];
+        snprintf(depK, sizeof(depK), "ns%dt!=0&ns%df=%d|%d", i, i, (int)NET_FMT_JSON, (int)NET_FMT_PLAIN);
+        DepScope d3(depK);
+        for (int f = 0; f < VF_COUNT; f++) {
+            snprintf(n, sizeof(n), "ns%d_%s", i, vsFieldKey((uint8_t)f));
+            fieldText(html, n, T(VS_FIELD_TEXT[f]), c.key[f], NET_KEY_LEN - 1, i == 0 && f == VF_TEMP ? T(T_set_net_key_hint) : nullptr);
+        }
+    }
+    html += "</section>";
+}
+
 // ---- Settings tab "Alarms" (alarms.h, docs/alarms.md) ----
 // Field names: a<i>_<x> per rule slot, nt* / po* / tg* / wh* for the channels.
 // Custom series (series.h): per slot a name, a source (none / the board's
@@ -1965,22 +2761,29 @@ void addRfSensorTable(HtmlOut& html)
 const TextId SERIES_FIELD_TEXT[SF_COUNT] = {
     T_se_f_temp, T_se_f_hum, T_se_f_moist, T_se_f_leaf, T_se_f_strikes, T_se_f_dist, T_se_f_pm25, T_se_f_pm10,
     T_se_f_co2, T_se_f_ec, T_se_f_press, T_se_f_lux, T_se_f_uv, T_se_f_batt, T_se_f_supercap,
-    T_se_f_ds1, T_se_f_ds2, T_se_f_ds3 };
+    T_se_f_ds1, T_se_f_ds2, T_se_f_ds3, T_se_f_ldist };
 
 void renderSeriesSection(HtmlOut& html)
 {
     sectionStart(html, T(T_se_title), false, T(T_se_note));
     const int lim = seriesLimit();
     char n[8];
+    const SeriesDef* defs = seriesDefs();   // the web task is the only writer: read directly
     for (int i = 0; i < lim; i++) {
-        const SeriesDef& d = gCfg.series[i];
-        html += "<h4>"; html += T(T_se_series); html += ' '; html += (unsigned)(i + 1); html += "</h4>";
+        const SeriesDef& d = defs[i];
+        // one collapsible block per slot: the defined ones open, the free ones closed
+        html += d.used() ? "<details open><summary>" : "<details><summary>";
+        html += T(T_se_series); html += ' '; html += (unsigned)(i + 1); html += " &middot; ";
+        if (d.used()) { appendEscaped(html, d.name); html += " &middot; {series_"; html += (unsigned)(i + 1); html += '}'; }
+        else html += T(T_se_free);
+        html += "</summary>";
         snprintf(n, sizeof(n), "se%dn", i);
-        fieldText(html, n, T(T_se_name), String(d.used() ? d.name : ""), SERIES_NAME_LEN - 1, i == 0 ? T(T_se_name_hint) : nullptr);
-        // source: off, the board probes, the known wireless sensors (+ the configured one if not in range)
+        fieldText(html, n, T(T_se_name), String(d.used() ? d.name : ""), SERIES_NAME_LEN - 1, T(T_se_name_hint));
+        // source: off, the board probes, the ★ sensors (logical sensors by internal
+        // ID, lsensors.h; + the configured one if no longer in the table)
         snprintf(n, sizeof(n), "se%ds", i);
         char cur[12] = "";
-        if (d.used()) { if (SERIES_FIELDS[d.field].board) strcpy(cur, "B"); else snprintf(cur, sizeof(cur), "%08lX", (unsigned long)d.rfId); }
+        if (d.used()) snprintf(cur, sizeof(cur), "%s", SERIES_FIELDS[d.field].board ? "B" : d.sensorInternalId);
         capture(n, cur);
         labelStart(html, T(T_se_source), nullptr);
         html += "<select name='"; html += n; formAttr(html); html += "'>";
@@ -1992,18 +2795,18 @@ void renderSeriesSection(HtmlOut& html)
         opt("", T(T_se_off));
         opt("B", T(T_se_board));
         bool listed = !d.used() || SERIES_FIELDS[d.field].board;
-        for (const RfSensorReading& x : gRfSensors) {
-            if (!x.used) continue;
+        for (int k = 0; k < gLogicalSensors.count(); k++) {
+            const LogicalSensor& e = gLogicalSensors.s[k];
             char hex[12];
-            snprintf(hex, sizeof(hex), "%08lX", (unsigned long)x.id);
+            snprintf(hex, sizeof(hex), "%08lX", (unsigned long)e.radioId);
             String t;
-            const char* nm = rfNameOf(x.id);
-            if (nm[0]) appendEscaped(t, nm); else t = rfKindText(x);
+            const int ri = rfSensorIndexForSlot(k);
+            if (e.displayName[0]) appendEscaped(t, e.displayName); else if (ri >= 0) t = rfKindText(gRfSensors[ri]); else t = e.customId;
             t += " &middot; "; t += hex;
-            opt(hex, t);
-            if (!strcmp(hex, cur)) listed = true;
+            opt(e.internalId, t);
+            if (!strcmp(e.internalId, cur)) listed = true;
         }
-        if (!listed) opt(cur, String(cur));   // not in range now
+        if (!listed) opt(cur, String(cur));   // no longer a ★ sensor
         html += "</select></label>";
         // value; the value now as hint
         snprintf(n, sizeof(n), "se%df", i);
@@ -2021,6 +2824,12 @@ void renderSeriesSection(HtmlOut& html)
             } else hint = T(T_se_none_now);
         }
         fieldSelect(html, n, T(T_se_value), d.used() ? d.field : SF_MOIST, fopts, SF_COUNT, hint.length() ? hint.c_str() : nullptr);
+        // aggregation: the one in effect preselected (the value's default unless overridden)
+        snprintf(n, sizeof(n), "se%da", i);
+        const Option aopts[SA_COUNT] = { { SA_MEAN, T(T_se_agg_mean) }, { SA_SUM, T(T_se_agg_sum) },
+                                         { SA_MIN, T(T_se_agg_min) }, { SA_MAX, T(T_se_agg_max) } };
+        fieldSelect(html, n, T(T_se_agg), d.used() ? seriesAgg(d) : SA_MEAN, aopts, SA_COUNT, T(T_se_agg_hint));
+        html += "</details>";
     }
     if (lim < SERIES_MAX) { html += "<p class='dim'>"; html += TF(T_se_limit_v3, String(lim), String(SERIES_MAX)); html += "</p>"; }
     html += "</section>";
@@ -2044,7 +2853,8 @@ void renderAlarmsTab(HtmlOut& html)
         T_al_src_qnh, T_al_src_ptend, T_al_src_wind, T_al_src_gust, T_al_src_rainrate, T_al_src_rainday, T_al_src_rain1h,
         T_al_src_uv, T_al_src_frost, T_al_src_fog, T_al_src_sultry, T_al_src_rf };
     static const TextId rfText[AF_COUNT] = { T_al_rf_temp, T_al_rf_hum, T_al_rf_wind, T_al_rf_gust, T_al_rf_uv, T_al_rf_lux,
-        T_al_rf_leak, T_al_rf_lightning, T_al_rf_moisture, T_al_rf_co2, T_al_rf_pm25, T_al_rf_silent, T_al_rf_battery };
+        T_al_rf_leak, T_al_rf_lightning, T_al_rf_moisture, T_al_rf_co2, T_al_rf_pm25, T_al_rf_silent, T_al_rf_battery,
+        T_al_rf_reception };
     static const char* const chName[AC_COUNT] = { "ntfy", "Pushover", "Telegram", "MQTT", "Webhook" };
     std::unique_ptr<AlarmRule[]> rules(new (std::nothrow) AlarmRule[ALARM_RULES]);
     std::unique_ptr<AlarmState[]> st(new (std::nothrow) AlarmState[ALARM_RULES]);
@@ -2082,57 +2892,41 @@ void renderAlarmsTab(HtmlOut& html)
         auto nm = [&n, i](const char* x) { snprintf(n, sizeof(n), "a%d_%s", i, x); return (const char*)n; };
         // dependent fields (DepScope): a free slot shows only "Monitor"; sensor fields only for
         // "Wireless sensor …"; thresholds not for yes/no values (warnings, leak, battery low)
-        char dUsed[24], dRf[24], dManual[48], dNum[96];
+        char dUsed[24], dRf[24], dNum[96];
         snprintf(dUsed, sizeof(dUsed), "a%d_src!=0", i);
         snprintf(dRf, sizeof(dRf), "a%d_src=%d", i, AS_RF);
-        snprintf(dManual, sizeof(dManual), "a%d_src=%d&a%d_rfsel=", i, AS_RF, i);
         snprintf(dNum, sizeof(dNum), "a%d_src!=0|%d|%d|%d|%d,a%d_src=%d&a%d_rff!=%d|%d", i, AS_FROST, AS_FOG, AS_SULTRY, AS_RF,
                  i, AS_RF, i, AF_LEAK, AF_BATTERY_LOW);
         fieldCheck (html, nm("en"),   T(T_al_enabled), r.enabled);
         fieldSelect(html, nm("src"),  T(T_al_value), r.src, srcOpts, AS_COUNT);
         DepScope usedDep(dUsed);
         fieldText  (html, nm("name"), T(T_al_name), r.name, sizeof(r.name) - 1);
-        char id[12] = "";
-        if (r.rfId) snprintf(id, sizeof(id), "%08lX", (unsigned long)r.rfId);
-        {   // known sensors (★ first, then the received ones, plus the rule's own) - or a manual ID
+        {   // the ★ sensors (logical sensors by internal ID, lsensors.h - only those
+            // can be watched), plus the rule's own if no longer in the table
             DepScope rfDep(dRf);
+            capture(nm("rfsel"), String(r.sensorInternalId));
             labelStart(html, T(T_al_sensor_id), nullptr);
             html += "<select name='"; html += nm("rfsel"); formAttr(html); html += "' class='alsel' data-rule='"; html += i; html += "'>";
-            html += "<option value=''>"; html += T(T_al_sensor_manual); html += "</option>";
-            auto opt = [&](uint32_t sid, const RfSensorReading* sr) {
+            html += "<option value=''>&ndash;</option>";
+            bool listed = !r.sensorInternalId[0];
+            for (int k = 0; k < gLogicalSensors.count(); k++) {
+                const LogicalSensor& e = gLogicalSensors.s[k];
+                const int ri = rfSensorIndexForSlot(k);
+                const RfSensorReading* sr = ri >= 0 ? &gRfSensors[ri] : nullptr;
                 char hex[12];
-                snprintf(hex, sizeof(hex), "%08lX", (unsigned long)sid);
-                html += "<option value='"; html += hex; html += "'";
-                if (sid == r.rfId) html += " selected";
+                snprintf(hex, sizeof(hex), "%08lX", (unsigned long)e.radioId);
+                html += "<option value='"; html += e.internalId; html += "'";
+                if (!strcmp(e.internalId, r.sensorInternalId)) { html += " selected"; listed = true; }
                 html += ">";
-                const char* nmv = rfNameOf(sid);
-                if (nmv[0]) appendEscaped(html, nmv); else html += sr ? rfKindText(*sr) : String(hex);
+                if (e.displayName[0]) appendEscaped(html, e.displayName); else html += sr ? rfKindText(*sr) : String(e.customId);
                 uint32_t eco;
                 html += " &middot; ";
-                if (sr && sr->proto == RF_PROTO_FINEOFFSET && rfEcowittId(sid, eco)) { char e[8]; snprintf(e, sizeof(e), "%lX", (unsigned long)eco); html += e; }
+                if (sr && sr->proto == RF_PROTO_FINEOFFSET && rfEcowittId(e.radioId, eco)) { char ec[8]; snprintf(ec, sizeof(ec), "%lX", (unsigned long)eco); html += ec; }
                 else html += hex;
                 html += "</option>";
-            };
-            std::vector<uint32_t> shown = rfParseIds(gCfg.rfIds);
-            for (uint32_t sid : shown) {
-                const RfSensorReading* sr = nullptr;
-                for (const RfSensorReading& x : gRfSensors) if (x.used && x.id == sid) sr = &x;
-                opt(sid, sr);
             }
-            for (const RfSensorReading& x : gRfSensors) {
-                if (!x.used) continue;
-                bool dup = false;
-                for (uint32_t sid : shown) if (sid == x.id) dup = true;
-                if (!dup) { opt(x.id, &x); shown.push_back(x.id); }
-            }
-            bool ruleListed = !r.rfId;
-            for (uint32_t sid : shown) if (sid == r.rfId) ruleListed = true;
-            if (!ruleListed) opt(r.rfId, nullptr);   // not in range now
+            if (!listed) { html += "<option value='"; html += r.sensorInternalId; html += "' selected>"; html += r.sensorInternalId; html += "</option>"; }
             html += "</select></label>";
-        }
-        {   // manual hex ID (not in range now)
-            DepScope manDep(dManual);
-            fieldText  (html, nm("rfid"), T(T_al_sensor_id_manual), id, 8, T(T_al_sensor_id_hint));
         }
         {
             DepScope rfDep(dRf);
@@ -2154,21 +2948,21 @@ void renderAlarmsTab(HtmlOut& html)
             fieldCheck(html, nm(cn), (String(T(T_al_channel)) + ": " + chName[c]).c_str(), r.channels & (1 << c));
         }
         fieldCheck (html, nm("clr"),  T(T_al_allclear), r.allClear);
-        fieldText  (html, nm("msg"),  T(T_al_msg), r.msg, sizeof(r.msg) - 1, T(T_al_msg_hint));
-        fieldText  (html, nm("cmsg"), T(T_al_cmsg), r.clearMsg, sizeof(r.clearMsg) - 1);
+        fieldText  (html, nm("msg"),  T(T_al_msg), phShow(r.msg), sizeof(r.msg) - 1, T(T_al_msg_hint));
+        fieldText  (html, nm("cmsg"), T(T_al_cmsg), phShow(r.clearMsg), sizeof(r.clearMsg) - 1);
         html += "</details>";
     }
     {   // which measurements each known sensor provides (filters the "Measurement" list; silent / battery: always)
         html += "<script>var ALCAP={";
         bool first = true;
-        for (const RfSensorReading& x : gRfSensors) {
-            if (!x.used) continue;
-            char hex[12];
-            snprintf(hex, sizeof(hex), "%08lX", (unsigned long)x.id);
+        for (int k = 0; k < gLogicalSensors.count(); k++) {   // by internal ID (the select's values); received ★ sensors only
+            const int ri = rfSensorIndexForSlot(k);
+            if (ri < 0) continue;
+            const RfSensorReading& x = gRfSensors[ri];
             html += first ? "'" : ",'"; first = false;
-            html += hex; html += "':[";
+            html += gLogicalSensors.s[k].internalId; html += "':[";
             const bool has[AF_COUNT] = { x.hasTemp, x.hasHumidity, x.hasWind, x.hasWind, x.hasUv, x.hasLight, x.hasLeak, x.hasLightning,
-                                         x.hasMoisture, x.hasCo2, x.hasPm25, true, true };
+                                         x.hasMoisture, x.hasCo2, x.hasPm25, true, true, !rfIsNetProto(x.proto) };
             bool f2 = true;
             for (int k = 0; k < AF_COUNT; k++) if (has[k]) { if (!f2) html += ","; html += k; f2 = false; }
             html += "]";
@@ -2204,9 +2998,9 @@ void renderAlarmsTab(HtmlOut& html)
     fieldCheck (html, "almqtt",  T(T_al_mqtt), ch.mqttEn, T(T_al_mqtt_hint));
     testBtn(AC_MQTT);
     const Option methods[] = { { 0, "GET" }, { 1, "POST" } };
-    fieldText  (html, "whurl",   T(T_al_wh_url), ch.whUrl, sizeof(ch.whUrl) - 1, T(T_al_wh_url_hint));
+    fieldText  (html, "whurl",   T(T_al_wh_url), phShow(ch.whUrl), sizeof(ch.whUrl) - 1, T(T_al_wh_url_hint));
     fieldSelect(html, "whpost",  T(T_al_wh_method), ch.whPost, methods, 2);
-    { DepScope dep("whpost=1"); fieldText(html, "whbody", T(T_al_wh_body), ch.whBody, sizeof(ch.whBody) - 1, T(T_al_wh_body_hint)); }
+    { DepScope dep("whpost=1"); fieldText(html, "whbody", T(T_al_wh_body), phShow(ch.whBody), sizeof(ch.whBody) - 1, T(T_al_wh_body_hint)); }
     testBtn(AC_WEBHOOK);
     placeholderBox(html, "alarm", "^(a\\d+_c?msg|whurl|whbody)$");
     html += "</section>";
@@ -2226,11 +3020,11 @@ void renderCustomUploads(HtmlOut& html)
     char n[12];
     for (int i = 0; i < CUSTOM_UPLOADS; i++) {
         auto nm = [&n, i](const char* x) { snprintf(n, sizeof(n), "cu%d%s", i, x); return (const char*)n; };
-        fieldText  (html, nm("url"),  TF(T_cu_url, String(i + 1)).c_str(), u[i].url, sizeof(u[i].url) - 1, T(T_cu_url_hint));
+        fieldText  (html, nm("url"),  TF(T_cu_url, String(i + 1)).c_str(), phShow(u[i].url), sizeof(u[i].url) - 1, T(T_cu_url_hint));
         fieldSelect(html, nm("post"), T(T_al_wh_method), u[i].post, methods, 2);
         char dPost[16];
         snprintf(dPost, sizeof(dPost), "cu%dpost=1", i);
-        { DepScope dep(dPost); fieldText(html, nm("body"), T(T_cu_body), u[i].body, sizeof(u[i].body) - 1, T(T_al_wh_body_hint)); }
+        { DepScope dep(dPost); fieldText(html, nm("body"), T(T_cu_body), phShow(u[i].body), sizeof(u[i].body) - 1, T(T_al_wh_body_hint)); }
         fieldText  (html, nm("int"),  T(T_cu_int), String(u[i].intervalSec), 4, "60&ndash;3600", "number");
     }
     html += "</section>";
@@ -2238,8 +3032,28 @@ void renderCustomUploads(HtmlOut& html)
 
 String gRestoreReport;   // what a settings restore changed: shown once on the next settings page
 
+// A copy of gCfg taken under the locks of the fields other tasks read and
+// the web task writes (weather networks, location / time: wxUploadLock;
+// Loxone host / prefix: loxoneLock). The pages are streamed from it, so no
+// lock is held across socket sends (a slow client would stall the main
+// loop, which takes the same locks). ~7 KB: heap / PSRAM, not the stack.
+std::unique_ptr<Config> lockedConfigCopy()
+{
+    std::unique_ptr<Config> c(new (std::nothrow) Config());
+    if (!c) return c;
+    wxUploadLock();
+    loxoneLock();
+    *c = gCfg;
+    loxoneUnlock();
+    wxUploadUnlock();
+    return c;
+}
+
 void renderSettings(const String& message, bool isError, int httpCode)
 {
+    std::unique_ptr<Config> lockedBuf = lockedConfigCopy();
+    if (!lockedBuf) { server.send(503, "text/plain", "low memory"); return; }
+    const Config& locked = *lockedBuf;
     const Option unitSystems[] = { { 0, T(T_opt_metric_c_mm_hpa) }, { 1, T(T_opt_imperial_f_in_inhg_mph) } };
     const Option windUnits[]  = { { 1, "m/s" }, { 0, "km/h" } };
     const Option windSamples[] = { { 1, "1 s" }, { 3, T(T_opt_3_s_less_wake_ups) } };
@@ -2250,9 +3064,6 @@ void renderSettings(const String& message, bool isError, int httpCode)
     const Option payFmts[]    = { { 1, T(T_opt_compact_binary_fport_3_recommended) }, { 0, T(T_opt_cayennelpp_fport_1_about_twice) } };
     const Option tlsModes[]   = { { MQTT_TLS_NONE, T(T_opt_plain_no_tls) }, { MQTT_TLS_INSECURE, T(T_opt_tls_trust_any_certificate) },
                                          { MQTT_TLS_VERIFY, T(T_opt_tls_verify_against_ca_below) } };
-    const Option boards[]     = { { BOARD_SEL_AUTO, T(T_opt_auto_by_flash_size_8) },
-                                         { BOARD_V3, "Heltec WiFi LoRa 32 V3" }, { BOARD_V4, T(T_opt_heltec_wifi_lora_32_v4) } };
-    const Option pcbRevs[]    = { { PCB_REV_1_2, "Rev 1.2" }, { PCB_REV_1_3, "Rev 1.3" }, { PCB_REV_2_0, "v2.0" } };
     const Option heatModes[]  = { { 0, T(T_opt_off) }, { 1, T(T_opt_on) }, { 2, T(T_opt_auto_below_the_threshold) } };
     const Option fanModes[]   = { { 0, T(T_opt_off) }, { 1, T(T_opt_on) }, { 2, T(T_opt_auto_above_the_threshold) } };
     const Option wind2Modes[] = { { 0, T(T_opt_off_aux_inputs_free) }, { 1, T(T_opt_speed_anemometer_at_aux_pulse) },
@@ -2320,20 +3131,19 @@ void renderSettings(const String& message, bool isError, int httpCode)
 
     sectionStart(html, T(T_set_location), false, T(T_set_altitude_for_the_sea_level));
     fieldText  (html, "altitude",  T(T_set_altitude_above_sea_level_m), String(gCfg.altitudeM), 5, T(T_set_0_4000_for_sea_level), "number");
-    wxUploadLock();
-    fieldText  (html, "lat", T(T_set_latitude), gCfg.latitude, sizeof(gCfg.latitude) - 1, T(T_set_decimal_degrees_e_g_47));
-    fieldText  (html, "lon", T(T_set_longitude), gCfg.longitude, sizeof(gCfg.longitude) - 1, T(T_set_decimal_degrees_e_g_11));
+    fieldText  (html, "lat", T(T_set_latitude), locked.latitude, sizeof(locked.latitude) - 1, T(T_set_decimal_degrees_e_g_47));
+    fieldText  (html, "lon", T(T_set_longitude), locked.longitude, sizeof(locked.longitude) - 1, T(T_set_decimal_degrees_e_g_11));
     {
         double la, lo;
         if (!astroLocation(la, lo)) fieldReadonly(html, T(T_set_astro), T(T_set_astro_needs_loc));
     }
+    if (gnssActive() && (locked.gnssPos || locked.gnssAlt)) fieldReadonly(html, T(T_set_gnss), T(T_set_gnss_loc_note));
     html += "</section>";
     sectionStart(html, T(T_set_time), false);
-    fieldText(html, "tz",  T(T_set_time_zone_posix_tz), gCfg.timeZone, sizeof(gCfg.timeZone) - 1,
+    fieldText(html, "tz",  T(T_set_time_zone_posix_tz), locked.timeZone, sizeof(locked.timeZone) - 1,
               T(T_set_central_europe_cet_1cest_m3));
-    fieldText(html, "ntp", T(T_set_ntp_server), gCfg.ntpServer, sizeof(gCfg.ntpServer) - 1);
+    fieldText(html, "ntp", T(T_set_ntp_server), locked.ntpServer, sizeof(locked.ntpServer) - 1);
     html += "</section>";
-    wxUploadUnlock();
 
     sectionStart(html, T(T_set_units), false, T(T_set_device_wide_also_affects_mqtt));
     fieldSelect(html, "unitsys",  T(T_set_unit_system), gCfg.unitSystem, OPTS(unitSystems));
@@ -2375,11 +3185,10 @@ void renderSettings(const String& message, bool isError, int httpCode)
     fieldCheck (html, "rfonly", T(T_set_only_my_sensors), gCfg.rfOnlyMine,
                 T(T_set_on_only_the_sensors_marked));
     advField = true;
-    fieldText  (html, "rfids",    T(T_set_mine_ids_as_text), gCfg.rfIds, sizeof(gCfg.rfIds) - 1,
-                T(T_set_hex_comma_separated_max_32));
     fieldText  (html, "rfignore", T(T_set_hidden_ids_as_text), gCfg.rfIgnore, sizeof(gCfg.rfIgnore) - 1,
                 T(T_set_hex_comma_separated_max_322));
     fieldText  (html, "rfnames",  T(T_set_names_as_text), gCfg.rfNames, sizeof(gCfg.rfNames) - 1, T(T_set_names_as_text_hint));
+    fieldText  (html, "rfminrssi", T(T_set_rf_minrssi_as_text), gCfg.rfMinRssi, sizeof(gCfg.rfMinRssi) - 1, T(T_set_rf_minrssi_as_text_hint));
     advField = false;
     html += "</section>";
     addRfSensorTable(html);
@@ -2387,12 +3196,10 @@ void renderSettings(const String& message, bool isError, int httpCode)
     // of the listed ones refreshed (GET /api/settings/rfsensors). Cells with
     // a field are never replaced, so a name being typed or a changed state
     // stays as it is; sensors that went silent stay until the page is reloaded.
-    // Only while the Sensors tab is shown and no firmware upload runs: the
-    // WebServer keeps ONE digest nonce, and a request that gets challenged
-    // renews it - a firmware upload in flight then fails its auth, the
-    // browser sends it again and finally asks for the password.
+    // Only while the Sensors tab is shown and no firmware upload runs (no
+    // extra requests while the node writes flash).
     html += "<script>(function(){var T=document.querySelector('table.rft');if(!T||!window.fetch||!window.DOMParser)return;"
-            "function k(tr){var i=tr.querySelector('input[name^=\"rfnm_\"]');return i?i.name:null;}"
+            "function k(tr){var i=tr.querySelector('input[name^=\"rfname_\"]');return i?i.name:null;}"
             "function upd(){if(document.hidden||location.hash!='#sensors'||window.wnBusy)return;fetch('/api/settings/rfsensors',{cache:'no-store'})"
             ".then(function(r){return r.ok?r.text():null;}).then(function(h){if(!h)return;"
             "var N=new DOMParser().parseFromString(h,'text/html').querySelector('table.rft');if(!N)return;"
@@ -2402,51 +3209,60 @@ void renderSettings(const String& message, bool isError, int httpCode)
             "for(var c=0;c<tr.cells.length&&c<e.cells.length;c++)if(!e.cells[c].querySelector('input,select,button'))e.cells[c].innerHTML=tr.cells[c].innerHTML;"
             "});}).catch(function(){});}"
             "setInterval(upd,5000);})();</script>";
+    renderNetworkSensors(html);
     sectionStart(html, T(T_set_value_sources), false, T(T_set_value_sources_note));
     {
-        // value sources (sources.h): one select per group; the wireless sensors that
-        // exist (received or ★, up to 32) with their name and ID - an empty number
-        // only while it is chosen
-        std::vector<uint32_t> ids = rfParseIds(gCfg.rfIds);
-        std::vector<String> rfLabel;
-        std::vector<Option> srcOpts;
-        rfLabel.reserve(RF_MAX_SENSORS);
-        srcOpts.reserve(RF_MAX_SENSORS + 3);
-        srcOpts.push_back({ SRC_AUTO, T(T_opt_auto_board_first_then_wireless) });
-        srcOpts.push_back({ SRC_BOARD, T(T_opt_board_sensor) });
-        for (int k = 0; k < RF_MAX_SENSORS; k++) {
-            const int idx = rfSensorIndexForSlot(k);
-            bool chosen = false;
-            for (int g = 0; g < SG_COUNT; g++) chosen |= srcSelSlot(gCfg.srcSel[g]) == k;
-            // "Garten · 900181A2" with a user-defined name (rf_names.h), else the ID
-            auto who = [](uint32_t id) {
-                char h[12]; snprintf(h, sizeof(h), "%08lX", (unsigned long)id);
-                String w;
-                const char* nm = rfNameOf(id);
-                if (nm && *nm) { appendEscaped(w, nm); w += " &middot; "; }
-                return w + h;
-            };
-            if (idx >= 0) {
-                rfLabel.push_back(TF(T_set_wireless_slot, String(k + 1), who(gRfSensors[idx].id)));
-            } else if (k < (int)ids.size()) {
-                rfLabel.push_back(TF(T_set_wireless_slot_not_received, String(k + 1), who(ids[k])));
-            } else if (chosen) {
-                rfLabel.push_back(TF(T_set_wireless_slot_empty, String(k + 1)));
-            } else {
-                continue;
-            }
-            srcOpts.push_back({ srcSelForSlot(k), rfLabel.back().c_str() });
+        // value sources (sources.h): one select per group; the ★ sensors (logical
+        // sensors, lsensors.h - only those can be a source) with their name and
+        // radio ID. The option value is the internal ID, so a save never moves a
+        // source to the sensor that happens to have the same number now.
+        std::vector<std::pair<String, String>> srcOpts;   // value, text
+        srcOpts.reserve(LS_MAX + 3 + SG_COUNT);
+        // "Garten - 900181A2" with a name, else the radio ID
+        auto who = [](const LogicalSensor& e) {
+            char h[12]; snprintf(h, sizeof(h), "%08lX", (unsigned long)e.radioId);
+            String w;
+            if (e.displayName[0]) { appendEscaped(w, e.displayName); w += " &middot; "; }
+            w += h;
+            const int ns = netSlotOfId(e.radioId);   // a network sensor: labelled as such (net_sensor.h)
+            if (ns >= 0) w += gCfg.net[ns].type == NET_REST ? " (REST)" : " (MQTT)";
+            return w;
+        };
+        auto offered = [&](const String& v) { for (const auto& o : srcOpts) if (o.first == v) return true; return false; };
+        srcOpts.push_back({ String((int)SRC_AUTO),  String(T(T_opt_auto_board_first_then_wireless)) });
+        srcOpts.push_back({ String((int)SRC_BOARD), String(T(T_opt_board_sensor)) });
+        for (int k = 0; k < gLogicalSensors.count() && k < SRC_RF_SLOTS_MAX; k++) {
+            const LogicalSensor& e = gLogicalSensors.s[k];
+            const bool rx = rfSensorIndexForSlot(k) >= 0;
+            srcOpts.push_back({ String(e.internalId), TF(rx ? T_set_wireless_slot : T_set_wireless_slot_not_received, String(k + 1), who(e)) });
         }
-        srcOpts.push_back({ SRC_OFF, T(T_opt_off_not_reported) });
+        for (int g = 0; g < SG_COUNT; g++) {   // chosen, but no ★ sensor now (removed, or a number set by parameter)
+            char v[12]; srcFormValue((SrcGroup)g, v, sizeof(v));
+            if (srcSelSlot(gCfg.srcSel[g]) < 0 || offered(v)) continue;
+            srcOpts.push_back({ String(v), srcBoundInternalId((SrcGroup)g)[0] ? TF(T_set_wireless_slot_not_received, String("&ndash;"), String(v))
+                                                                       : TF(T_set_wireless_slot_empty, String(srcSelSlot(gCfg.srcSel[g]) + 1)) });
+        }
+        srcOpts.push_back({ String((int)SRC_OFF), String(T(T_opt_off_not_reported)) });
         static const char* const names[SG_COUNT]  = { "srcair", "srcwind", "srcrain", "srcuv", "srclight", "srcpress" };
         const char* const labels[SG_COUNT] = { T(T_opt_source_temperature_humidity), T(T_set_source_wind),
                                                       T(T_set_source_rain), T(T_set_source_uv), T(T_set_source_light), T(T_opt_source_pressure) };
         for (int g = 0; g < SG_COUNT; g++)
-            fieldSelect(html, names[g], labels[g], gCfg.srcSel[g], srcOpts.data(), srcOpts.size(),
-                        g == SG_AIR   ? T(T_set_used_for_lorawan_mqtt_weather) :
-                        g == SG_PRESS ? T(T_set_station_pressure_bme280_or_a) :
-                        g == SG_LIGHT ? T(T_set_only_wireless_sensors_e_g) :
-                        g == SG_RAIN  ? T(T_set_switching_keeps_the_rain_totals) : nullptr);
+{
+            const char* hint = g == SG_AIR   ? T(T_set_used_for_lorawan_mqtt_weather) :
+                               g == SG_PRESS ? T(T_set_station_pressure_bme280_or_a) :
+                               g == SG_LIGHT ? T(T_set_only_wireless_sensors_e_g) :
+                               g == SG_RAIN  ? T(T_set_switching_keeps_the_rain_totals) : nullptr;
+            char cur[12]; srcFormValue((SrcGroup)g, cur, sizeof(cur));
+            capture(names[g], String(cur));
+            labelStart(html, labels[g], hint);
+            html += "<select name='"; html += names[g]; formAttr(html); html += "'>";
+            for (const auto& o : srcOpts) {
+                html += "<option value='"; html += o.first; html += "'";
+                if (o.first == cur) html += " selected";
+                html += ">"; html += o.second; html += "</option>";
+            }
+            html += "</select></label>";
+        }
     }
     html += "</section>";
     renderSeriesSection(html);
@@ -2472,6 +3288,20 @@ void renderSettings(const String& message, bool isError, int httpCode)
         fieldSelect(html, "sunmethod", T(T_set_sun_method), gCfg.sunMethod, OPTS(sunOpts), T(T_set_sun_method_hint));
     }
     html += "</section>";
+
+    if (!boardPcbAllowed()) {   // GNSS connector: only on a V4 without PCB (heltec_board.h)
+        sectionStart(html, T(T_set_gnss), true, T(T_set_gnss_note));
+        fieldCheck(html, "gnssen", T(T_set_gnss_en), gCfg.gnssEn);
+        {
+            DepScope dep("gnssen=1");
+            const Option bauds[] = { { 0, T(T_set_gnss_baud_auto) }, { 9600, "9600" }, { 38400, "38400" }, { 115200, "115200" } };
+            fieldSelect(html, "gnssbaud", T(T_set_gnss_baud), gCfg.gnssBaud, OPTS(bauds));
+            fieldCheck(html, "gnsstime", T(T_set_gnss_time), gCfg.gnssTime, T(T_set_gnss_time_hint));
+            fieldCheck(html, "gnsspos",  T(T_set_gnss_pos),  gCfg.gnssPos,  T(T_set_gnss_pos_hint));
+            fieldCheck(html, "gnssalt",  T(T_set_gnss_alt),  gCfg.gnssAlt,  T(T_set_gnss_alt_hint));
+        }
+        html += "</section>";
+    }
 
     sectionStart(html, T(T_set_sensor_calibration), false, T(T_set_defaults_match_the_davis_6410));
     fieldText  (html, "rainmmtip",  T(T_set_rain_per_tip_mm), String(gCfg.rainMmPerTip, 4), 10, T(T_set_davis_0_2), "number");
@@ -2499,8 +3329,8 @@ void renderSettings(const String& message, bool isError, int httpCode)
     }
     html += "</section>";
 
-    if (ioV2()) {
-        sectionStart(html, T(T_set_inputs_outputs_pcb_v2_0), false,
+    if (ioFull()) {
+        sectionStart(html, T(T_set_inputs_outputs_v4_full), false,
                      T(T_set_heater_max_3_a_and));
         fieldCheck (html, "auxainen",    T(T_set_aux_analog_input_gpio4), gCfg.auxAinEn);
         advField = true;
@@ -2614,70 +3444,79 @@ void renderSettings(const String& message, bool isError, int httpCode)
     html += "</textarea></label></section>";
 
 
-    wxUploadLock();
     sectionStart(html, T(T_set_weather_networks), false,
                  T(T_set_direct_uploads_over_wifi_each));
-    fieldText  (html, "awkuser", T(T_set_awekas_user_name), gCfg.awekasUser, sizeof(gCfg.awekasUser) - 1);
+    fieldText  (html, "awkuser", T(T_set_awekas_user_name), locked.awekasUser, sizeof(locked.awekasUser) - 1);
     { DepScope dep("awkuser!=");
-    fieldSecret(html, "awkpass", T(T_set_awekas_password), gCfg.awekasPass[0], true, sizeof(gCfg.awekasPass) - 1);
-    fieldText  (html, "awkint",  T(T_set_awekas_interval_s), String(gCfg.awekasIntervalSec), 4, "300&ndash;3600", "number");
+    fieldSecret(html, "awkpass", T(T_set_awekas_password), locked.awekasPass[0], true, sizeof(locked.awekasPass) - 1);
+    fieldText  (html, "awkint",  T(T_set_awekas_interval_s), String(locked.awekasIntervalSec), 4, "300&ndash;3600", "number");
     }
-    fieldText  (html, "wuid",    T(T_set_weather_underground_station_id), gCfg.wuStationId, sizeof(gCfg.wuStationId) - 1);
+    fieldText  (html, "wuid",    T(T_set_weather_underground_station_id), locked.wuStationId, sizeof(locked.wuStationId) - 1);
     { DepScope dep("wuid!=");
-    fieldSecret(html, "wukey",   T(T_set_weather_underground_station_key), gCfg.wuStationKey[0], true, sizeof(gCfg.wuStationKey) - 1);
-    fieldText  (html, "wuint",   T(T_set_weather_underground_interval_s), String(gCfg.wuIntervalSec), 4, "60&ndash;3600", "number");
+    fieldSecret(html, "wukey",   T(T_set_weather_underground_station_key), locked.wuStationKey[0], true, sizeof(locked.wuStationKey) - 1);
+    fieldText  (html, "wuint",   T(T_set_weather_underground_interval_s), String(locked.wuIntervalSec), 4, "60&ndash;3600", "number");
     }
-    fieldText  (html, "wcid",    T(T_set_weathercloud_id), gCfg.wcloudId, sizeof(gCfg.wcloudId) - 1);
+    fieldText  (html, "wcid",    T(T_set_weathercloud_id), locked.wcloudId, sizeof(locked.wcloudId) - 1);
     { DepScope dep("wcid!=");
-    fieldSecret(html, "wckey",   T(T_set_weathercloud_key), gCfg.wcloudKey[0], true, sizeof(gCfg.wcloudKey) - 1);
-    fieldText  (html, "wcint",   T(T_set_weathercloud_interval_s), String(gCfg.wcloudIntervalSec), 4, T(T_set_60_3600_free_accounts_600), "number");
+    fieldSecret(html, "wckey",   T(T_set_weathercloud_key), locked.wcloudKey[0], true, sizeof(locked.wcloudKey) - 1);
+    fieldText  (html, "wcint",   T(T_set_weathercloud_interval_s), String(locked.wcloudIntervalSec), 4, T(T_set_60_3600_free_accounts_600), "number");
     }
-    fieldText  (html, "wnpid",   T(T_set_wetternetzwerk_pro_station_id), gCfg.wnetproId, sizeof(gCfg.wnetproId) - 1);
+    fieldText  (html, "wnpid",   T(T_set_wetternetzwerk_pro_station_id), locked.wnetproId, sizeof(locked.wnetproId) - 1);
     { DepScope dep("wnpid!=");
-    fieldSecret(html, "wnpkey",  T(T_set_wetternetzwerk_pro_station_key), gCfg.wnetproKey[0], true, sizeof(gCfg.wnetproKey) - 1);
-    fieldText  (html, "wnpint",  T(T_set_wetternetzwerk_pro_interval_s), String(gCfg.wnetproIntervalSec), 4, "60&ndash;3600", "number");
+    fieldSecret(html, "wnpkey",  T(T_set_wetternetzwerk_pro_station_key), locked.wnetproKey[0], true, sizeof(locked.wnetproKey) - 1);
+    fieldText  (html, "wnpint",  T(T_set_wetternetzwerk_pro_interval_s), String(locked.wnetproIntervalSec), 4, "60&ndash;3600", "number");
     }
-    fieldText  (html, "windyid", T(T_set_windy_station_id), gCfg.windyId, sizeof(gCfg.windyId) - 1, T(T_set_stations_windy_com_my_stations));
+    fieldText  (html, "windyid", T(T_set_windy_station_id), locked.windyId, sizeof(locked.windyId) - 1, T(T_set_stations_windy_com_my_stations));
     { DepScope dep("windyid!=");
-    fieldSecret(html, "windypw", T(T_set_windy_station_password), gCfg.windyPass[0], true, sizeof(gCfg.windyPass) - 1);
-    fieldText  (html, "windyint",T(T_set_windy_interval_s), String(gCfg.windyIntervalSec), 4, "300&ndash;3600", "number");
+    fieldSecret(html, "windypw", T(T_set_windy_station_password), locked.windyPass[0], true, sizeof(locked.windyPass) - 1);
+    fieldText  (html, "windyint",T(T_set_windy_interval_s), String(locked.windyIntervalSec), 4, "300&ndash;3600", "number");
     }
-    fieldText  (html, "osemid",  T(T_set_opensensemap_sensebox_id), gCfg.osemBoxId, sizeof(gCfg.osemBoxId) - 1);
+    fieldText  (html, "osemid",  T(T_set_opensensemap_sensebox_id), locked.osemBoxId, sizeof(locked.osemBoxId) - 1);
     { DepScope dep("osemid!=");
-    fieldSecret(html, "osemtok", T(T_set_opensensemap_access_token), gCfg.osemToken[0], true, sizeof(gCfg.osemToken) - 1,
+    fieldSecret(html, "osemtok", T(T_set_opensensemap_access_token), locked.osemToken[0], true, sizeof(locked.osemToken) - 1,
                 T(T_set_only_for_boxes_with_authentication));
-    fieldText  (html, "osemmap", T(T_set_opensensemap_sensor_ids), gCfg.osemSensors, sizeof(gCfg.osemSensors) - 1,
+    fieldText  (html, "osemmap", T(T_set_opensensemap_sensor_ids), locked.osemSensors, sizeof(locked.osemSensors) - 1,
                 T(T_set_osem_hint));
-    fieldText  (html, "osemint", T(T_set_opensensemap_interval_s), String(gCfg.osemIntervalSec), 4, "60&ndash;3600", "number");
+    fieldText  (html, "osemint", T(T_set_opensensemap_interval_s), String(locked.osemIntervalSec), 4, "60&ndash;3600", "number");
     }
-    fieldText  (html, "wowid",   T(T_set_wow_id), gCfg.wowSiteId, sizeof(gCfg.wowSiteId) - 1, T(T_set_wow_hint));
+    fieldText  (html, "wowid",   T(T_set_wow_id), locked.wowSiteId, sizeof(locked.wowSiteId) - 1, T(T_set_wow_hint));
     { DepScope dep("wowid!=");
-    fieldSecret(html, "wowpin",  T(T_set_wow_pin), gCfg.wowPin[0], true, sizeof(gCfg.wowPin) - 1);
-    fieldText  (html, "wowint",  T(T_set_wow_int), String(gCfg.wowIntervalSec), 4, "300&ndash;3600", "number");
+    fieldSecret(html, "wowpin",  T(T_set_wow_pin), locked.wowPin[0], true, sizeof(locked.wowPin) - 1);
+    fieldText  (html, "wowint",  T(T_set_wow_int), String(locked.wowIntervalSec), 4, "300&ndash;3600", "number");
     }
-    fieldText  (html, "cwopcall", T(T_set_cwop_call), gCfg.cwopCall, sizeof(gCfg.cwopCall) - 1, T(T_set_cwop_hint));
+    fieldText  (html, "cwopcall", T(T_set_cwop_call), locked.cwopCall, sizeof(locked.cwopCall) - 1, T(T_set_cwop_hint));
     { DepScope dep("cwopcall!=");
-    fieldText  (html, "cwoppass", T(T_set_cwop_pass), String(gCfg.cwopPasscode), 6, T(T_set_cwop_pass_hint), "number");
-    fieldText  (html, "cwopint",  T(T_set_cwop_int), String(gCfg.cwopIntervalSec), 4, "300&ndash;3600", "number");
+    fieldText  (html, "cwoppass", T(T_set_cwop_pass), String(locked.cwopPasscode), 6, T(T_set_cwop_pass_hint), "number");
+    fieldText  (html, "cwopint",  T(T_set_cwop_int), String(locked.cwopIntervalSec), 4, "300&ndash;3600", "number");
     }
     html += "</section>";
 
-    wxUploadUnlock();
     renderCustomUploads(html);
 
     sectionStart(html, T(T_set_loxone_udp), false,
                  T(T_set_sends_every_value_as_its));
     fieldCheck (html, "loxen",     T(T_set_loxone_udp_output), gCfg.loxEn);
-    loxoneLock();
     { DepScope dep("loxen=1");
-    fieldText  (html, "loxhost",   T(T_set_miniserver_ip_or_host_name), gCfg.loxHost, sizeof(gCfg.loxHost) - 1,
+    fieldText  (html, "loxhost",   T(T_set_miniserver_ip_or_host_name), locked.loxHost, sizeof(locked.loxHost) - 1,
                 T(T_set_a_host_name_is_resolved));
-    fieldText  (html, "loxprefix", T(T_set_name_prefix), gCfg.loxPrefix, sizeof(gCfg.loxPrefix) - 1,
+    fieldText  (html, "loxprefix", T(T_set_name_prefix), locked.loxPrefix, sizeof(locked.loxPrefix) - 1,
                 T(T_set_optional_a_z_a_z));
-    loxoneUnlock();
     fieldText  (html, "loxport",   T(T_set_udp_port), String(gCfg.loxPort), 5, T(T_set_1_65535_default_7000), "number");
     fieldText  (html, "loxsec",    T(T_set_loxone_interval_s), String(gCfg.loxSec), 5,
                 T(T_set_0_every_measurement_cycle_else), "number");
+    }
+    html += "</section>";
+
+    // InfluxDB / VictoriaMetrics push (influx.cpp, wx_upload.cpp): read at every push - no restart
+    sectionStart(html, T(T_set_influx), false);
+    fieldCheck (html, "influxen",   T(T_set_influx_en), gCfg.influxEn);
+    { DepScope dep("influxen=1");
+    fieldText  (html, "influxurl",  T(T_set_influx_url), gCfg.influxUrl, sizeof(gCfg.influxUrl) - 1, T(T_set_influx_url_hint));
+    fieldSecret(html, "influxtok",  T(T_set_influx_token), gCfg.influxToken[0], true, sizeof(gCfg.influxToken) - 1, T(T_set_influx_token_hint));
+    fieldText  (html, "influxint",  T(T_set_influx_int), String(gCfg.influxIntervalSec), 4, "10&ndash;3600", "number");
+    advField = true;
+    fieldText  (html, "influxmeas", T(T_set_influx_meas), gCfg.influxMeasurement, sizeof(gCfg.influxMeasurement) - 1);
+    advField = false;
     }
     html += "</section>";
 
@@ -2685,7 +3524,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
     fieldCheck (html, "loraen", T(T_set_lorawan_enabled), gCfg.loraEn);
     { DepScope dep("loraen=1");
     fieldCheck (html, "lowpower", T(T_set_low_power_mode), gCfg.lowPowerEn, T(T_set_light_sleep_between_samples_only));
-    fieldCheck (html, "vanesave", T(T_set_low_power_switch_wind_vane), gCfg.vanePowerSave, T(T_set_pcb_v2_0_off_for));
+    fieldCheck (html, "vanesave", T(T_set_low_power_switch_wind_vane), gCfg.vanePowerSave, T(T_set_vane_switch_pcb_hint));
     fieldText  (html, "deveui",  T(T_set_deveui), hexOf(gCfg.devEui), 16, T(T_set_16_hex_characters));
     fieldText  (html, "joineui", T(T_set_joineui), hexOf(gCfg.joinEui), 16, T(T_set_16_hex_characters));
     fieldSecret(html, "appkey",  T(T_set_appkey), true, false, 32, T(T_set_32_hex_characters));
@@ -2702,6 +3541,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
                   TF(T_set_decoder_hint, FIRMWARE_VERSION).c_str());
     }
     html += "</section>";
+    renderVirtualSensors(html);
 
     html += "</div>";
 
@@ -2718,17 +3558,31 @@ void renderSettings(const String& message, bool isError, int httpCode)
         for (int k = 0; k < OS_COUNT; k++) {
             char n[8];
             snprintf(n, sizeof(n), "dsp%d", k);
-            const String name = k < OS_CUSTOM1 ? String(T(scr[k])) : String(T(T_set_disp_cust)) + " " + (k - OS_CUSTOM1 + 1);
+            const String name = k < OS_CUSTOM1 ? String(T(scr[k])) : k == OS_QR ? String(T(T_set_disp_s_qr))
+                              : String(T(T_set_disp_cust)) + " " + (k - OS_CUSTOM1 + 1);
             fieldCheck(html, n, (String(T(T_set_disp_screen)) + ": " + name).c_str(), gCfg.dispScreens & (1 << k));
         }
         fieldText  (html, "disprot",  T(T_set_disp_rot), String(gCfg.dispRotateSec), 3, "2&ndash;60", "number");
+        {   // screensaver (screensaver.h): takes over the display now and then, against burn-in
+            const Option svm[] = { { 0, T(T_set_disp_sv0) }, { 1, T(T_set_disp_sv1) }, { 2, T(T_set_disp_sv2) }, { 3, T(T_set_disp_sv3) }, { 4, T(T_set_disp_sv4) } };
+            fieldSelect(html, "svmode", T(T_set_disp_sv), gCfg.saverMode, OPTS(svm), T(T_set_disp_sv_hint));
+            DepScope dep("svmode=1,svmode=2,svmode=3,svmode=4");
+            fieldText  (html, "svmin", T(T_set_disp_svmin), String(gCfg.saverMin), 2, "1&ndash;60", "number");
+            fieldText  (html, "svsec", T(T_set_disp_svsec), String(gCfg.saverSec), 2, "3&ndash;30", "number");
+            html += "<p class='dim' data-dep='svmode=1,svmode=2,svmode=3,svmode=4'><canvas id='svpv' width='128' height='64' "
+                    "style='width:256px;max-width:100%;image-rendering:pixelated;background:#000;border-radius:3px'></canvas>"
+                    "<br><button type='button' class='sb' id='svbtn'>"; html += T(T_set_disp_svpv); html += "</button></p>";
+        }
         fieldText  (html, "dispcon",  T(T_set_disp_con), String(gCfg.dispContrast), 3, "1&ndash;255", "number");
         {
             const Option flips[] = { { 0, T(T_set_disp_flip0) }, { 1, T(T_set_disp_flip1) } };
             fieldSelect(html, "dispflip", T(T_set_disp_flip), gCfg.dispFlip, OPTS(flips));
         }
         fieldCheck (html, "dispbat",  T(T_set_disp_bat), gCfg.dispBattery, T(T_set_disp_bat_hint));
-        fieldCheck (html, "displed",  T(T_set_disp_led), gCfg.dispLed, T(T_set_disp_led_hint));
+        {
+            const Option leds[] = { { 0, T(T_set_disp_led0) }, { 1, T(T_set_disp_led1) }, { 2, T(T_set_disp_led2) }, { 3, T(T_set_disp_led3) } };
+            fieldSelect(html, "displed", T(T_set_disp_led), gCfg.dispLed, OPTS(leds), T(T_set_disp_led_hint));
+        }
         {   // night off: only with "always on"
             DepScope dep("dispmode=1");
             fieldText  (html, "dispnf",   T(T_set_disp_nf), String(gCfg.dispNightFrom), 2, T(T_set_disp_night_hint), "number");
@@ -2736,7 +3590,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
         }
         html += "</section>";
         // custom screens (oled_custom.h): lines with placeholders, live preview (handleDisplayPreview)
-        static const char* const bigOnly[] = { "dc0m=0", "dc1m=0", "dc2m=0", "dc3m=0" };
+        static const char* const bigOnly[] = { "dc0m=0", "dc1m=0", "dc2m=0", "dc3m=0" };   // custom screens
         static_assert(sizeof(bigOnly) / sizeof(bigOnly[0]) >= OLED_CUSTOM_COUNT, "one data-dep per custom screen");
         const Option lays[] = { { OCL_SMALL, T(T_set_disp_cust_lay0) }, { OCL_BIG, T(T_set_disp_cust_lay1) } };
         for (int k = 0; k < OLED_CUSTOM_COUNT; k++) {
@@ -2748,12 +3602,12 @@ void renderSettings(const String& message, bool isError, int httpCode)
             snprintf(n, sizeof(n), "dc%dm", k);
             fieldSelect(html, n, T(T_set_disp_cust_layout), c.layout, OPTS(lays));
             snprintf(n, sizeof(n), "dc%dt", k);
-            fieldText(html, n, T(T_set_disp_cust_title), String(c.title), OLED_CUSTOM_TITLE - 1);
+            fieldText(html, n, T(T_set_disp_cust_title), phShow(c.title), OLED_CUSTOM_TITLE - 1);
             for (int j = 0; j < OLED_CUSTOM_LINES; j++) {
                 DepScope dep(j >= 3 ? bigOnly[k] : nullptr);
                 snprintf(n, sizeof(n), "dc%dl%d", k, j);
                 const String lab = String(T(T_set_disp_cust_line)) + " " + (j + 1);
-                fieldText(html, n, lab.c_str(), String(c.line[j]), OLED_CUSTOM_LINE - 1, j == 0 ? T(T_set_disp_cust_big) : nullptr);
+                fieldText(html, n, lab.c_str(), phShow(c.line[j]), OLED_CUSTOM_LINE - 1, j == 0 ? T(T_set_disp_cust_big) : nullptr);
             }
             html += "<p class='dim'>"; html += T(T_set_disp_cust_preview); html += "<br><canvas class='oledpv' data-k='";
             html += (unsigned)k;
@@ -2784,6 +3638,25 @@ void renderSettings(const String& message, bool isError, int httpCode)
     }
     html += "</section>";
 
+    {   // own access point (wifi_ap.h) - live: the AP follows the next main-loop pass
+        sectionStart(html, T(T_set_ap), false, T(T_set_ap_note));
+        const Option apm[] = { { AP_OFF, T(T_set_ap_mode0) }, { AP_FALLBACK, T(T_set_ap_mode1) }, { AP_ALWAYS, T(T_set_ap_mode2) } };
+        fieldSelect(html, "apmode", T(T_set_ap_mode), gCfg.apMode, OPTS(apm), T(T_set_ap_mode_hint));
+        DepScope dep("apmode=1,apmode=2");
+        char def[33];
+        uint8_t mac[6] = {};
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        apDefaultSsid(mac, def, sizeof(def));
+        fieldText  (html, "apssid", T(T_set_ap_ssid), gCfg.apSsid, sizeof(gCfg.apSsid) - 1, TF(T_set_ap_ssid_hint, def).c_str());
+        fieldText  (html, "appass", T(T_set_ap_pass), gCfg.apPass, sizeof(gCfg.apPass) - 1, T(T_set_ap_pass_hint));
+        Option ch[14];
+        char chText[13][4];
+        ch[0] = { 0, T(T_set_ap_chan0) };
+        for (int i = 1; i <= 13; i++) { snprintf(chText[i - 1], sizeof(chText[0]), "%d", i); ch[i] = { i, chText[i - 1] }; }
+        fieldSelect(html, "apchan", T(T_set_ap_chan), gCfg.apChannel, ch, 14);
+        html += "</section>";
+    }
+
     sectionStart(html, T(T_set_firmware_update_check), false);
     fieldCheck (html, "updchk", T(T_set_check_daily_for_newer_firmware), gCfg.updateCheckEn,
                 T(T_set_shown_on_the_status_page));
@@ -2793,16 +3666,65 @@ void renderSettings(const String& message, bool isError, int httpCode)
     advField = false;
     html += "</section>";
 
-    sectionStart(html, T(T_set_hardware), true);
-    {
-        String boardHint = TF(boardIsR8() ? T_set_board_hint_r8 : T_set_board_hint, boardName(gBoard.detected),
-                              String((unsigned long)(gBoard.flashBytes >> 20)));
-        fieldSelect(html, "board", T(T_set_heltec_board), gCfg.boardSel, OPTS(boards), boardHint.c_str());
+    sectionStart(html, T(T_set_webui), false, T(T_set_webui_note));
+    fieldCheck (html, "uiflash", T(T_set_webui_flash), gCfg.uiFlashEn, T(T_set_webui_flash_hint));
+    fieldCheck (html, "uiage",   T(T_set_webui_age),   gCfg.uiAgeEn,   T(T_set_webui_age_hint));
+    html += "</section>";
+
+    {   // HTTPS with the admin's own certificate (https_cert.h, handleSettingsPost: storeHttps())
+        sectionStart(html, "HTTPS", true, T(T_set_https_note));
+        fieldCheck(html, "httpsen", T(T_set_https_en), gCfg.httpsEn, T(T_set_https_en_hint));
+        DepScope dep("httpsen=1");
+        const Option pm[] = { { HTTP_PORT_KEEP, T(T_set_https_port0) }, { HTTP_PORT_REDIRECT_PAGES, T(T_set_https_port1) },
+                              { HTTP_PORT_HTTPS_ONLY, T(T_set_https_port2) } };
+        fieldSelect(html, "httpport", T(T_set_https_port), gCfg.httpPortMode, OPTS(pm), T(T_set_https_port_hint));
+        {   // the running certificate; a generated one: download (public, like in every handshake) and "generate new"
+            HttpsStatus hs;
+            httpsStatus(hs);
+            if (hs.state != HTTPS_OFF) {
+                String d = httpsStatusText(hs);
+                if (hs.source == HTTPS_SOURCE_GENERATED || hs.state == HTTPS_GENERATE_FAILED) {
+                    if (hs.source == HTTPS_SOURCE_GENERATED) {
+                        d += "<br><button type='submit' form='hcaform'>"; d += T(T_set_https_download); d += "</button> ";
+                    } else d += "<br>";
+                    d += "<button type='submit' form='hgform'>"; d += T(T_set_https_regenerate); d += "</button>";
+                }
+                fieldReadonly(html, T(T_set_https_active), d, hs.source == HTTPS_SOURCE_GENERATED ? T(T_set_https_generated_hint) : nullptr);
+            }
+        }
+        HttpsPem pem;
+        httpsPemLoad(pem);
+        HttpsCertInfo info;
+        if (pem.certLen && httpsCertInfo(pem.cert, pem.certLen, info)) {
+            String d;
+            appendEscaped(d, info.subject);
+            d += " &middot; "; d += info.keyType;
+            d += " &middot; "; d += TF(T_st_https_until, String(info.notAfter));
+            if (info.expired) { d += " &middot; <b>"; d += T(T_set_https_expired); d += "</b>"; }
+            fieldReadonly(html, T(T_set_https_info), d);
+        }
+        capture("httpscert", pem.cert);
+        labelStart(html, T(T_set_https_cert), T(T_set_https_cert_hint));
+        html += "<textarea name='httpscert' rows='6' spellcheck='false' maxlength='"; html += (unsigned)HTTPS_CERT_MAX;
+        html += "' placeholder='-----BEGIN CERTIFICATE-----'>";
+        appendEscaped(html, pem.cert);
+        html += "</textarea></label>";
+        // the key is write-only like a password: never sent to the browser,
+        // in a backup only with "include passwords and keys" (capture() checks)
+        if (pem.keyLen) capture("httpskey", pem.key);
+        labelStart(html, T(T_set_https_key), T(T_set_https_key_hint));
+        html += "<span><textarea name='httpskey' rows='3' spellcheck='false' autocomplete='off' maxlength='"; html += (unsigned)HTTPS_KEY_MAX;
+        html += "' placeholder='"; html += T(pem.keyLen ? T_set_pw_set : T_set_pw_not_set); html += "'></textarea>";
+        if (pem.certLen || pem.keyLen) {
+            html += "<span class='clear'><input type='checkbox' name='httpskey_clear'>"; html += T(T_set_https_remove); html += "</span>";
+        }
+        html += "</span></label></section>";
     }
-    if (boardPcbAllowed())
-        fieldSelect(html, "pcbver", T(T_set_pcb_revision), gCfg.pcbVersion, OPTS(pcbRevs));
-    else
-        fieldReadonly(html, T(T_set_pcb_revision), T(T_set_ignored_on_heltec_v4), T(T_set_wireless_build_only_pcb_inputs2));
+
+    sectionStart(html, T(T_set_hardware), true);
+    fieldReadonly(html, T(T_set_heltec_board), "Heltec WiFi LoRa 32 V4");
+    if (boardPcbAllowed()) fieldReadonly(html, T(T_set_pcb_revision), T(boardPcbFull() ? T_st_v4_full_detected : T_st_v4_light_detected));
+    else fieldReadonly(html, T(T_set_pcb_revision), "&ndash;", T(T_set_wireless_build_only_pcb_inputs2));
     advField = true;
     fieldSelect(html, "cpufreq",   T(T_set_cpu_frequency), gCfg.cpuFreqMhz, OPTS(cpuFreqs));
     fieldCheck (html, "debugmode", T(T_set_debug_mode), gCfg.debugMode, T(T_set_adds_diagnostic_fields_to_every));
@@ -2845,17 +3767,44 @@ void renderSettings(const String& message, bool isError, int httpCode)
             { "records", T_set_rec_reset_periods }, { "recordsall", T_set_rec_reset_all }, { "history", T_set_hist_reset },
             { "rain", T_set_rain_reset }, { "sunshine", T_set_sun_reset }, { "aux", T_set_aux_reset } };
         for (const auto& a : acts) {
-            if (!strcmp(a.what, "aux") && !ioV2()) continue;   // AUX pulse input: PCB v2.0 only
+            if (!strcmp(a.what, "aux") && !ioFull()) continue;   // AUX pulse input: V4 Full only
             html += "<button type='submit' form='rform' name='what' value='"; html += a.what;
             html += "' onclick='return confirm(this.dataset.q)' data-q='"; html += T(T_set_reset_confirm); html += "'>";
             html += T(a.text); html += "</button> ";
         }
         html += "</p><p><small>"; html += T(T_set_rec_reset_hint); html += "</small></p></section>";
     }
+    {   // the two resets (handleSystemReset, settings_reset.h): own forms after the settings form, typed confirmation
+        sectionStart(html, T(T_set_reset_title), false, nullptr, false, false);   // actions: no live/restart tag
+        labelStart(html, T(T_set_reset_settings), T(T_set_reset_settings_hint));
+        html += "<span><input type='hidden' name='what' value='settings' form='xsform'>"
+                "<input name='confirm' form='xsform' size='7' autocomplete='off' placeholder='RESET'> "
+                "<button type='submit' form='xsform'>"; html += T(T_set_reset_settings_run); html += "</button></span></label>";
+        labelStart(html, T(T_set_erase_all), T(T_set_erase_all_hint));
+        html += "<span><input type='hidden' name='what' value='everything' form='xeform'>"
+                "<input name='confirm' form='xeform' size='7' autocomplete='off' placeholder='ERASE'> "
+                "<button type='submit' form='xeform'>"; html += T(T_set_erase_all_run); html += "</button></span></label>";
+        html += "</section>";
+    }
     sectionStart(html, T(T_set_diagnostics), false);
     fieldReadonly(html, T(T_set_log), T(T_set_open_the_device_log));
     fieldReadonly(html, T(T_set_radio_trace), T(T_set_status_page_wireless_sensors_radio),
                   T(T_set_records_every_packet_the_receiver));
+    {   // crash report (reset_history.h): the last crash, its core dump (admin download), a test crash
+        const CrashSummary& c = resetHistory().lastCrash;
+        size_t dumpAddr, dumpSize;
+        String v = c.valid ? crashSummaryText(c) : String(T(T_set_crash_none));
+        if (resetHistoryCoreDump(dumpAddr, dumpSize)) {
+            v += " &middot; <a href='/api/diag/coredump'>"; v += T(T_set_crash_dl); v += "</a> ("; v += (unsigned)(dumpSize / 1024); v += " KB)";
+        }
+        fieldReadonly(html, T(T_set_crash_report), v, T(T_set_crash_dl_hint));
+        // the test: own form 'cform' after the settings form; typed confirmation, never a setting (not in a backup)
+        labelStart(html, T(T_set_crash_test), T(T_set_crash_test_hint));
+        html += "<select name='kind' form='cform'><option value='panic'>"; html += T(T_set_crash_test_panic);
+        html += "</option><option value='watchdog'>"; html += T(T_set_crash_test_hang);
+        html += "</option></select> <input name='confirm' form='cform' size='7' autocomplete='off' placeholder='CRASH'> "
+                "<button type='submit' form='cform'>"; html += T(T_set_crash_test_run); html += "</button></label>";
+    }
     html += "</section>";
     html += "</div>";
     #undef OPTS
@@ -2875,6 +3824,11 @@ void renderSettings(const String& message, bool isError, int httpCode)
     html += "<p><button type='submit'>"; html += T(T_set_save); html += "</button></p></form></div>";
     html += "<form id='oform' method='POST' action='ota' enctype='multipart/form-data'></form>"
             "<form id='rform' method='POST' action='/api/settings/reset'></form>"
+            "<form id='cform' method='POST' action='/api/diag/crash'></form>"
+            "<form id='xsform' method='POST' action='/api/system/reset'></form>"
+            "<form id='xeform' method='POST' action='/api/system/reset'></form>"
+            "<form id='hgform' method='POST' action='/api/https/regenerate'></form>"
+            "<form id='hcaform' method='GET' action='/api/https/certificate'></form>"
             "<script>(function(){var d=document,ids=['basics','sensors','outputs','alarms','display','system'];"
             "d.documentElement.className+=' js';"
             "function show(){var h=location.hash.slice(1);if(ids.indexOf(h)<0)h='basics';"
@@ -2896,14 +3850,23 @@ void renderSettings(const String& message, bool isError, int httpCode)
             // 600 ms after the last input and with the button - at most one request at a time
             // (pvRun: a change during a request draws once more afterwards)
             "var pv=d.querySelectorAll('canvas.oledpv'),pvOn=false;"
+            "function pvPaint(cv,h){if(h.length!=2048)return;var x=cv.getContext('2d'),im=x.createImageData(128,64),a=im.data;"
+            "for(var p=0;p<8;p++)for(var c=0;c<128;c++){var v=parseInt(h.substr((p*128+c)*2,2),16);"
+            "for(var t=0;t<8;t++){var o=((p*8+t)*128+c)*4,g=v>>t&1?255:0;a[o]=a[o+1]=a[o+2]=g;a[o+3]=255;}}"
+            "x.putImageData(im,0,0);}"
+            // screensaver preview: 24 frames over the takeover, one request at a time, fixed seed
+            "var svb=d.getElementById('svbtn'),svc=d.getElementById('svpv'),svRun=false;"
+            "if(svb)svb.addEventListener('click',function(){if(svRun)return;svRun=true;var f=d.getElementById('sform').elements,"
+            "seed=String(Math.floor(Math.random()*4e9)),dur=parseInt(f['svsec'].value)||8,i=0;"
+            "function nx(){if(i>=24){svRun=false;return;}var b=new URLSearchParams();b.append('m',f['svmode'].value);b.append('seed',seed);"
+            "b.append('dur',dur);b.append('t',Math.round(i*dur*1000/24));i++;"
+            "fetch('/api/display/saver',{method:'POST',body:b,credentials:'same-origin'}).then(function(r){return r.ok?r.text():'';})"
+            ".then(function(h){pvPaint(svc,h);setTimeout(nx,Math.max(0,dur*1000/24-120));}).catch(function(){svRun=false;});}nx();});"
             "function pvDraw(cv){var k=cv.getAttribute('data-k'),f=d.getElementById('sform').elements,b=new URLSearchParams();"
             "b.append('m',f['dc'+k+'m'].value);b.append('t',f['dc'+k+'t'].value);"
             "for(var j=0;j<5;j++)b.append('l'+j,f['dc'+k+'l'+j].value);"
             "return fetch('/api/display/preview',{method:'POST',body:b,credentials:'same-origin'}).then(function(r){return r.ok?r.text():'';})"
-            ".then(function(h){if(h.length!=2048)return;var x=cv.getContext('2d'),im=x.createImageData(128,64),a=im.data;"
-            "for(var p=0;p<8;p++)for(var c=0;c<128;c++){var v=parseInt(h.substr((p*128+c)*2,2),16);"
-            "for(var t=0;t<8;t++){var o=((p*8+t)*128+c)*4,g=v>>t&1?255:0;a[o]=a[o+1]=a[o+2]=g;a[o+3]=255;}}"
-            "x.putImageData(im,0,0);}).catch(function(){});}"
+            ".then(function(h){pvPaint(cv,h);}).catch(function(){});}"
             "var pvBusy=false,pvWant={};"
             "function pvRun(cv){pvWant[cv.getAttribute('data-k')]=cv;if(pvBusy)return;var k=Object.keys(pvWant)[0];if(k===undefined)return;"
             "var c=pvWant[k];delete pvWant[k];pvBusy=true;pvDraw(c).then(function(){pvBusy=false;var n=Object.keys(pvWant)[0];if(n!==undefined)pvRun(pvWant[n]);});}"
@@ -2972,7 +3935,7 @@ void wizardNav(HtmlOut& html, int step)
 void addAutoSearchRowsWizard(HtmlOut& html)
 {
     const AutoSearch& as = rfAutoSearchState();
-    const float thr = autoRssiThreshold(boardIsV4());
+    const float thr = autoRssiThreshold(true);
     for (const AutoCand& c : as.c) {
         if (!c.id) continue;
         html += "<p class='dim'>"; html += TF(T_st_auto_cand_info, rfProtoName(c.proto), String(c.inWindow), String(AUTO_MIN_PACKETS),
@@ -2982,9 +3945,11 @@ void addAutoSearchRowsWizard(HtmlOut& html)
     }
 }
 
-void wizardSensorRows(HtmlOut& html)
+// ids: the sensors listed (their quick-action forms follow the wizard's form)
+void wizardSensorRows(HtmlOut& html, uint32_t ids[RF_MAX_SENSORS], int& idCount)
 {
     bool any = false;
+    idCount = 0;
     html += "<table class='rft'>";
     for (int i = 0; i < RF_MAX_SENSORS; i++) {
         const RfSensorReading& r = gRfSensors[i];
@@ -3002,9 +3967,12 @@ void wizardSensorRows(HtmlOut& html)
         }
         html += "</span><br><small>" + String(r.rssi, 0) + " dBm &middot; " + agoText(r.lastMs) + " &middot; " + rfValuesShort(r) + "</small>";
         // name (rf_names.h), saved with "Save and next"
-        html += "<br><input name='rfnm_"; html += id; html += "' maxlength='24' size='14' placeholder='";
+        html += "<br><input name='rfname_"; html += id; html += "' maxlength='24' size='14' placeholder='";
         html += T(T_set_th_name); html += "' value='"; appendEscaped(html, rfNameOf(r.id)); html += "'></td><td>";
-        html += rfQuickActions(r.id, "setup");
+        char formId[12];
+        quickActionFormId(r.id, formId);
+        html += rfQuickActionButtons(r.id, formId);
+        ids[idCount++] = r.id;
         html += "</td></tr>";
     }
     html += "</table>";
@@ -3030,8 +3998,16 @@ void wizardSensorRows(HtmlOut& html)
 void renderWizard(int step, const String& message, int httpCode)
 {
     step = wizardClampStep(step);
-    // the dashboard sends a browser here only once per session (wizardAutoStart())
-    server.sendHeader("Set-Cookie", "wnSetup=1; Path=/; SameSite=Lax");
+    std::unique_ptr<Config> lockedBuf = lockedConfigCopy();
+    if (!lockedBuf) { server.send(503, "text/plain", "low memory"); return; }
+    const Config& locked = *lockedBuf;
+    uint32_t quickActionIds[RF_MAX_SENSORS];
+    int quickActionCount = 0;
+    // the dashboard sends a browser here only once per session and start (wizardAutoStart())
+    char cookie[48];
+    wizardCookieValue(wizardBootId(), cookie, sizeof(cookie));
+    strlcat(cookie, "; Path=/; SameSite=Lax", sizeof(cookie));
+    server.sendHeader("Set-Cookie", cookie);
     HtmlOut html(server, httpCode);
     pageStart(html, T(T_wz_title), "/setup", 0);
     // step 2: the sensor list reloads every 10 s - not while a name is being typed
@@ -3070,7 +4046,7 @@ void renderWizard(int step, const String& message, int httpCode)
                 html += "<p><b>"; html += T(T_wz_rf_off); html += "</b> <button name='rfen' value='1'>";
                 html += T(T_wz_rf_on); html += "</button></p>";
             } else {
-                wizardSensorRows(html);
+                wizardSensorRows(html, quickActionIds, quickActionCount);
                 html += "<p><button name='rfen' value='0' class='sb'>"; html += T(T_wz_no_sensors); html += "</button></p>";
             }
             break;
@@ -3078,11 +4054,9 @@ void renderWizard(int step, const String& message, int httpCode)
             html += "<p>"; html += T(T_wz_location_intro); html += "</p>";
             fieldText(html, "devname", T(T_set_device_name), gCfg.deviceName, sizeof(gCfg.deviceName) - 1, T(T_wz_name_hint));
             fieldText(html, "altitude", T(T_set_altitude_above_sea_level_m), String(gCfg.altitudeM), 5, T(T_wz_altitude_hint), "number");
-            wxUploadLock();
-            fieldText(html, "lat", T(T_set_latitude), gCfg.latitude, sizeof(gCfg.latitude) - 1, T(T_set_decimal_degrees_e_g_47));
-            fieldText(html, "lon", T(T_set_longitude), gCfg.longitude, sizeof(gCfg.longitude) - 1, T(T_set_decimal_degrees_e_g_11));
-            fieldText(html, "tz", T(T_set_time_zone_posix_tz), gCfg.timeZone, sizeof(gCfg.timeZone) - 1, T(T_set_central_europe_cet_1cest_m3));
-            wxUploadUnlock();
+            fieldText(html, "lat", T(T_set_latitude), locked.latitude, sizeof(locked.latitude) - 1, T(T_set_decimal_degrees_e_g_47));
+            fieldText(html, "lon", T(T_set_longitude), locked.longitude, sizeof(locked.longitude) - 1, T(T_set_decimal_degrees_e_g_11));
+            fieldText(html, "tz", T(T_set_time_zone_posix_tz), locked.timeZone, sizeof(locked.timeZone) - 1, T(T_set_central_europe_cet_1cest_m3));
             // position: only where the browser allows it (secure context: https or localhost - mostly not on http://<ip>/);
             // time zone: browser zone -> POSIX TZ for the common zones
             html += "<p id='geo' style='display:none'><button type='button' class='sb' onclick='wzGeo()'>"; html += T(T_wz_geo);
@@ -3134,29 +4108,25 @@ void renderWizard(int step, const String& message, int httpCode)
                 fieldSelect(html, "mqtttls",  T(T_set_security), gCfg.mqttTlsMode, tlsModes, 3);
             }
             html += "</details>";
-            wxUploadLock();
-            const bool wx = gCfg.awekasUser[0] || gCfg.wuStationId[0] || gCfg.wcloudId[0] || gCfg.wnetproId[0] || gCfg.windyId[0] || gCfg.osemBoxId[0];
+            const bool wx = locked.awekasUser[0] || locked.wuStationId[0] || locked.wcloudId[0] || locked.wnetproId[0] || locked.windyId[0] || locked.osemBoxId[0];
             html += wx ? "<details open><summary>" : "<details><summary>"; html += T(T_set_weather_networks); html += "</summary>";
-            fieldText  (html, "awkuser", T(T_set_awekas_user_name), gCfg.awekasUser, sizeof(gCfg.awekasUser) - 1);
-            fieldSecret(html, "awkpass", T(T_set_awekas_password), gCfg.awekasPass[0], true, sizeof(gCfg.awekasPass) - 1);
-            fieldText  (html, "wuid",    T(T_set_weather_underground_station_id), gCfg.wuStationId, sizeof(gCfg.wuStationId) - 1);
-            fieldSecret(html, "wukey",   T(T_set_weather_underground_station_key), gCfg.wuStationKey[0], true, sizeof(gCfg.wuStationKey) - 1);
-            fieldText  (html, "wcid",    T(T_set_weathercloud_id), gCfg.wcloudId, sizeof(gCfg.wcloudId) - 1);
-            fieldSecret(html, "wckey",   T(T_set_weathercloud_key), gCfg.wcloudKey[0], true, sizeof(gCfg.wcloudKey) - 1);
-            fieldText  (html, "wnpid",   T(T_set_wetternetzwerk_pro_station_id), gCfg.wnetproId, sizeof(gCfg.wnetproId) - 1);
-            fieldSecret(html, "wnpkey",  T(T_set_wetternetzwerk_pro_station_key), gCfg.wnetproKey[0], true, sizeof(gCfg.wnetproKey) - 1);
-            fieldText  (html, "windyid", T(T_set_windy_station_id), gCfg.windyId, sizeof(gCfg.windyId) - 1);
-            fieldSecret(html, "windypw", T(T_set_windy_station_password), gCfg.windyPass[0], true, sizeof(gCfg.windyPass) - 1);
-            fieldText  (html, "osemid",  T(T_set_opensensemap_sensebox_id), gCfg.osemBoxId, sizeof(gCfg.osemBoxId) - 1);
-            fieldSecret(html, "osemtok", T(T_set_opensensemap_access_token), gCfg.osemToken[0], true, sizeof(gCfg.osemToken) - 1);
-            fieldText  (html, "osemmap", T(T_set_opensensemap_sensor_ids), gCfg.osemSensors, sizeof(gCfg.osemSensors) - 1, T(T_set_osem_hint));
-            wxUploadUnlock();
+            fieldText  (html, "awkuser", T(T_set_awekas_user_name), locked.awekasUser, sizeof(locked.awekasUser) - 1);
+            fieldSecret(html, "awkpass", T(T_set_awekas_password), locked.awekasPass[0], true, sizeof(locked.awekasPass) - 1);
+            fieldText  (html, "wuid",    T(T_set_weather_underground_station_id), locked.wuStationId, sizeof(locked.wuStationId) - 1);
+            fieldSecret(html, "wukey",   T(T_set_weather_underground_station_key), locked.wuStationKey[0], true, sizeof(locked.wuStationKey) - 1);
+            fieldText  (html, "wcid",    T(T_set_weathercloud_id), locked.wcloudId, sizeof(locked.wcloudId) - 1);
+            fieldSecret(html, "wckey",   T(T_set_weathercloud_key), locked.wcloudKey[0], true, sizeof(locked.wcloudKey) - 1);
+            fieldText  (html, "wnpid",   T(T_set_wetternetzwerk_pro_station_id), locked.wnetproId, sizeof(locked.wnetproId) - 1);
+            fieldSecret(html, "wnpkey",  T(T_set_wetternetzwerk_pro_station_key), locked.wnetproKey[0], true, sizeof(locked.wnetproKey) - 1);
+            fieldText  (html, "windyid", T(T_set_windy_station_id), locked.windyId, sizeof(locked.windyId) - 1);
+            fieldSecret(html, "windypw", T(T_set_windy_station_password), locked.windyPass[0], true, sizeof(locked.windyPass) - 1);
+            fieldText  (html, "osemid",  T(T_set_opensensemap_sensebox_id), locked.osemBoxId, sizeof(locked.osemBoxId) - 1);
+            fieldSecret(html, "osemtok", T(T_set_opensensemap_access_token), locked.osemToken[0], true, sizeof(locked.osemToken) - 1);
+            fieldText  (html, "osemmap", T(T_set_opensensemap_sensor_ids), locked.osemSensors, sizeof(locked.osemSensors) - 1, T(T_set_osem_hint));
             html += "</details>";
             html += gCfg.loxEn ? "<details open><summary>" : "<details><summary>"; html += T(T_set_loxone_udp); html += "</summary>";
             fieldCheck(html, "loxen",   T(T_set_loxone_udp_output), gCfg.loxEn);
-            loxoneLock();
-            fieldText (html, "loxhost", T(T_set_miniserver_ip_or_host_name), gCfg.loxHost, sizeof(gCfg.loxHost) - 1);
-            loxoneUnlock();
+            fieldText (html, "loxhost", T(T_set_miniserver_ip_or_host_name), locked.loxHost, sizeof(locked.loxHost) - 1);
             fieldText (html, "loxport", T(T_set_udp_port), String(gCfg.loxPort), 5, T(T_set_1_65535_default_7000), "number");
             html += "</details>";
             break;
@@ -3165,20 +4135,20 @@ void renderWizard(int step, const String& message, int httpCode)
             html += "<section><table>";
             String v;
             addRow(html, T(T_set_language), gCfg.uiLang ? String(langCode((uint8_t)(gCfg.uiLang - 1))) : String(T(T_set_lang_auto)));
-            const size_t mine = rfParseIds(gCfg.rfIds).size();
+            const size_t mine = lsRadioIds(gLogicalSensors).size();
             addRow(html, T(T_st_wireless_box), !gCfg.rfEn ? String(T(T_c_off)) : TF(T_wz_sum_mine, String((unsigned)mine)));
             v = String(); appendEscaped(v, gCfg.deviceName[0] ? gCfg.deviceName : "&ndash;");
             addRow(html, T(T_set_device_name), v);
             v = String(gCfg.altitudeM) + " m";
-            if (gCfg.latitude[0]) { v += " &middot; "; appendEscaped(v, gCfg.latitude); v += ", "; appendEscaped(v, gCfg.longitude); }
+            if (locked.latitude[0]) { v += " &middot; "; appendEscaped(v, locked.latitude); v += ", "; appendEscaped(v, locked.longitude); }
             addRow(html, T(T_set_location), v);
-            v = String(); appendEscaped(v, gCfg.timeZone);
+            v = String(); appendEscaped(v, locked.timeZone);
             addRow(html, T(T_set_time_zone_posix_tz), v);
             addRow(html, T(T_set_units), T(gCfg.unitSystem ? T_opt_imperial_f_in_inhg_mph : T_opt_metric_c_mm_hpa));
             addRow(html, T(T_set_admin_password), gCfg.webAdminPass[0] ? String(T(T_wz_sum_set)) : String("<b>") + T(T_wz_sum_not_set) + "</b>");
             String out;
             if (gCfg.mqttEn) out += "MQTT";
-            if (gCfg.awekasUser[0] || gCfg.wuStationId[0] || gCfg.wcloudId[0] || gCfg.wnetproId[0] || gCfg.windyId[0] || gCfg.osemBoxId[0])
+            if (locked.awekasUser[0] || locked.wuStationId[0] || locked.wcloudId[0] || locked.wnetproId[0] || locked.windyId[0] || locked.osemBoxId[0])
                 { if (out.length()) out += ", "; out += T(T_set_weather_networks); }
             if (gCfg.loxEn) { if (out.length()) out += ", "; out += "Loxone"; }
             addRow(html, T(T_wz_t_outputs), out.length() ? out : String("&ndash;"));
@@ -3196,6 +4166,12 @@ void renderWizard(int step, const String& message, int httpCode)
     if (step < WIZ_STEPS) {
         html += "</section>";
         wizardNav(html, step);
+        html += "</form>";
+    }
+    for (int i = 0; i < quickActionCount; i++) {   // step 2: the forms the sensor rows' buttons point to
+        char formId[12];
+        quickActionFormId(quickActionIds[i], formId);
+        html += rfQuickActionFormStart(quickActionIds[i], "setup", formId);
         html += "</form>";
     }
     // closes the wizard for good (also "later": it can be started again in Settings -> System)
@@ -3251,6 +4227,8 @@ const char* phUnit(uint8_t kind, const char* name, bool display)
     static char t[8];
     const char* f = strrchr(name, '_');
     if (!strcmp(name, "hum") || (f && !strcmp(f, "_hum"))) return "%";
+    const int slot = seriesPlaceholderSlot(name);
+    if (slot >= 0 && kind == PK_PLAIN) { const SeriesDef d = seriesDefAt(slot); return d.field < SF_COUNT ? SERIES_FIELDS[d.field].unit : ""; }
     switch (kind) {
         case PK_TEMP:  if (!display) return "\xC2\xB0" "C"; snprintf(t, sizeof(t), "\xC2\xB0%s", temperatureUnitLabel(gCfg)); return t;
         case PK_SPEED: return display ? windSpeedUnitLabel(gCfg) : "m/s";
@@ -3278,7 +4256,7 @@ void handlePlaceholders()
     if (!requireAuth()) return;
     const String forWhat = server.arg("for");
     const bool display = forWhat == "display";
-    JsonDocument doc;
+    JsonDocument doc(psramJsonAllocator());
     PhOut o{ doc["items"].to<JsonArray>(), display, nullptr, nullptr };
     std::unique_ptr<PhLive> live(display ? nullptr : new (std::nothrow) PhLive());
     if (!display) { if (!live) { server.send(503, "text/plain; charset=utf-8", "low memory"); return; } phLiveInit(*live, nullptr); }
@@ -3309,14 +4287,31 @@ void handlePlaceholders()
         if (idx < 0 || !gRfSensors[idx].used) continue;
         const RfSensorReading& r = gRfSensors[idx];
         char label[48];
-        const char* nm = rfNameOf(r.id);
-        if (nm && *nm) snprintf(label, sizeof(label), "%s", nm);
+        const RfNameBuf nm = rfNameOf(r.id);
+        if (nm && *nm) snprintf(label, sizeof(label), "%s", nm.s);
         else snprintf(label, sizeof(label), "%s %08lX", r.model ? r.model : "", (unsigned long)r.id);
         o.sensor = label;
-        char names[PH_RF_FIELD_COUNT][16];
+        // a ★ sensor by its custom ID (lsensors.h; saved in the stored form {@<internal ID>_...}),
+        // a received-only one by its radio ID
+        const int ls = lsFindByRadioId(gLogicalSensors, r.id);
+        char names[PH_RF_FIELD_COUNT][LS_CUSTOM_ID_MAX + 8];
         const char* ptrs[PH_RF_FIELD_COUNT];
-        for (int f = 0; f < PH_RF_FIELD_COUNT; f++) { snprintf(names[f], sizeof(names[f]), "rf%d_%s", slot, PH_RF_FIELDS[f]); ptrs[f] = names[f]; }
+        for (int f = 0; f < PH_RF_FIELD_COUNT; f++) {
+            if (ls >= 0) snprintf(names[f], sizeof(names[f]), "%s_%s", gLogicalSensors.s[ls].customId, PH_RF_FIELDS[f]);
+            else         snprintf(names[f], sizeof(names[f]), "rf%08lX_%s", (unsigned long)r.id, PH_RF_FIELDS[f]);
+            ptrs[f] = names[f];
+        }
         addEach(ptrs, PH_RF_FIELD_COUNT);
+        o.sensor = nullptr;
+    }
+    for (int i = 0; i < seriesLimit(); i++) {   // custom series (series.h): {series_<slot>}, labelled with the series' name
+        const SeriesDef& d = seriesDefs()[i];
+        if (!d.used()) continue;
+        char name[12];
+        snprintf(name, sizeof(name), "series_%d", i + 1);
+        const char* ptr = name;
+        o.sensor = d.name;
+        addEach(&ptr, 1);
         o.sensor = nullptr;
     }
     if (forWhat == "alarm") {
@@ -3355,6 +4350,32 @@ void handleDisplayPreview()
     server.send(200, "text/plain", out);
 }
 
+// Preview of the screensaver (settings page, Display tab): frame t ms of a takeover of dur ms in mode
+// (posted, possibly unsaved), with the current values; the same seed gives the same scene, so the page
+// can ask for a series of frames. Same answer format as handleDisplayPreview.
+void handleSaverPreview()
+{
+    if (webBusyRefused()) return;
+    if (!requireAuth()) return;
+    if (!sameOriginRequest()) { server.send(403, "text/plain; charset=utf-8", "cross-site request refused"); return; }
+    std::unique_ptr<uint8_t[]> px(new (std::nothrow) uint8_t[1024]);
+    if (!px) { server.send(503, "text/plain; charset=utf-8", "low memory"); return; }
+    long mode = server.arg("m").toInt();
+    if (mode < 1 || mode > 4) mode = 3;
+    SaverInput in;
+    if (mode == SV_FIGURE) oledSaverInput(in);
+    const SaverScene sc = saverStart((uint8_t)mode, in, (uint32_t)strtoul(server.arg("seed").c_str(), nullptr, 10));
+    long dur = server.arg("dur").toInt(); if (dur < 3 || dur > 30) dur = 8;
+    long t = server.arg("t").toInt(); if (t < 0) t = 0;
+    saverRender(sc, (uint32_t)t, (uint32_t)dur * 1000UL, px.get());
+    static const char hex[] = "0123456789abcdef";
+    String out;
+    if (!out.reserve(2048)) { server.send(503, "text/plain; charset=utf-8", "low memory"); return; }
+    for (int i = 0; i < 1024; i++) { out += hex[px[i] >> 4]; out += hex[px[i] & 15]; }
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "text/plain", out);
+}
+
 void handleSettingsGet()
 {
     selectLanguage();
@@ -3377,6 +4398,14 @@ void addRejected(String& rejected, const char* label)
 // "settings" object stands in for the submitted form, so it goes through
 // exactly the same checks as a manual save. Null = the HTTP request.
 JsonObjectConst gFormOverride;
+// A restore in progress (handleSettingsRestore): the backup's ★ sensor table
+// (nullptr = keep the current one) is taken over by handleSettingsPost() only
+// once its entry checks passed - a refused POST changes nothing at all.
+struct PendingRestore {
+    const LogicalSensorTable* sensors = nullptr;
+    bool accepted = false;   // handleSettingsPost() went past its entry checks
+};
+PendingRestore* gPendingRestore = nullptr;
 bool formHas(const char* name) { return gFormOverride.isNull() ? server.hasArg(name) : !gFormOverride[name].isNull(); }
 bool formHas(const String& name) { return formHas(name.c_str()); }
 String formRaw(const char* name)
@@ -3416,11 +4445,12 @@ void storeText(char (&dst)[N], const char* name, bool& changed)
 }
 
 // Write-only secret: empty keeps, "<name>_clear" (optional secrets) wipes.
+enum class SecretClear : uint8_t { ALLOWED, NEVER };
 template <size_t N>
-void storeSecret(char (&dst)[N], const char* name, bool& changed)
+void storeSecret(char (&dst)[N], const char* name, bool& changed, SecretClear clear = SecretClear::ALLOWED)
 {
     String clearName = String(name) + "_clear";
-    if (formHas(clearName)) {
+    if (clear == SecretClear::ALLOWED && formHas(clearName)) {
         if (dst[0]) { dst[0] = '\0'; changed = true; }
         return;
     }
@@ -3434,8 +4464,9 @@ void storeInt(int& dst, const char* name, long minV, long maxV, const char* labe
 {
     if (!formHas(name)) return;
     String v = formArg(name);
-    long n = v.toInt();
-    if (v.isEmpty() || n < minV || n > maxV) { addRejected(rejected, label); return; }
+    char* end = nullptr;
+    const long n = strtol(v.c_str(), &end, 10);   // the whole field a number: "12abc" / "abc" refused
+    if (v.isEmpty() || *end != '\0' || n < minV || n > maxV) { addRejected(rejected, label); return; }
     if (dst != n) { dst = (int)n; changed = true; }
 }
 
@@ -3444,15 +4475,104 @@ template <size_t N>
 void storeCoord(char (&dst)[N], const char* name, float limit, const char* label, String& rejected)
 {
     if (!formHas(name)) return;
-    String v = formArg(name);
-    if (v.length()) {
-        char* end = nullptr;
-        float f = strtof(v.c_str(), &end);
-        if (*end != '\0' || f < -limit || f > limit || v.length() >= N) { addRejected(rejected, label); return; }
-    }
-    strlcpy(dst, v.c_str(), N);
+    char v[N];
+    if (!coordParse(formArg(name).c_str(), limit, v, sizeof(v))) { addRejected(rejected, label); return; }   // also "49,88"
+    strlcpy(dst, v, N);
 }
 
+
+// Settings -> Virtual sensors (vsensor.h, live): the switch and the power
+// always; a slot only as a whole and only if valid; all slots only if the
+// plan stays within the airtime budget.
+void applyVirtualSensorForm(String& rejected)
+{
+    auto checked = [](const char* name) { String v = formRaw(name); return v.length() && v != "0"; };   // as in the POST
+    VsSettingsCopy vs = vsSettingsCopy(), formSlots = vsSettingsCopy();   // 2 x 1.2 KB: heap (PSRAM), not this task's stack
+    if (!vs || !formSlots) { addRejected(rejected, T(T_set_vs)); return; }
+    bool dummy = false;
+    vs->enabled = checked("vsen") ? 1 : 0;
+    int v = vs->txPowerDbm;
+    storeInt(v, "vsdbm", VS_DBM_MIN, VS_DBM_MAX, T(T_set_vs_dbm), rejected, dummy);
+    vs->txPowerDbm = (int8_t)v;
+    for (int i = 0; i < VS_SLOTS; i++) {
+        char n[24];
+        snprintf(n, sizeof(n), "vs%dt", i);
+        if (!formHas(n)) continue;
+        VsSlotCfg d;
+        const long t = formArg(n).toInt();
+        d.type = (uint8_t)(t > VS_OFF && t < VS_TYPE_COUNT ? t : VS_OFF);
+        snprintf(n, sizeof(n), "vs%de", i);
+        d.enabled = checked(n) ? 1 : 0;
+        snprintf(n, sizeof(n), "vs%dc", i);
+        const long ch = formHas(n) ? formArg(n).toInt() : 1;
+        d.channel = (uint8_t)(ch >= 1 && ch <= 8 ? ch : 1);
+        bool bad = false;
+        for (int f = 0; f < VF_COUNT && d.type != VS_OFF; f++) {
+            if (!(VS_TYPES[d.type].fields & (1u << f))) continue;
+            snprintf(n, sizeof(n), "vs%d_%s", i, vsFieldKey((uint8_t)f));
+            char typed[48];
+            if (!vsCleanSrc(formArg(n).c_str(), typed, sizeof(typed))) { bad = true; continue; }
+            if (!typed[0]) continue;
+            bool fit = true;   // a ★ sensor's key -> its internal ID ("garten_temp" -> "@L3F9A2C_temp")
+            String st = phStore(String("{") + typed + "}", sizeof(typed) + 2, fit);
+            if (st.startsWith("{") && st.endsWith("}")) st = st.substring(1, st.length() - 1);
+            if (!fit || !vsCleanSrc(st.c_str(), d.src[f], VS_SRC_LEN)) bad = true;
+        }
+        if (bad) { addRejected(rejected, TF(T_set_vs_bad_value, String(i + 1)).c_str()); continue; }
+        if (vsCheckSlot(d) != VS_CHECK_OK) { addRejected(rejected, TF(T_set_vs_bad_slot, String(i + 1)).c_str()); continue; }
+        formSlots->slot[i] = d;
+    }
+    if (vsPlannedMsPerHour(formSlots->slot) > VS_PLAN_MAX_MS_PER_H) addRejected(rejected, T(T_set_vs_bad_budget));
+    else for (int i = 0; i < VS_SLOTS; i++) vs->slot[i] = formSlots->slot[i];
+    vsSettingsWrite(*vs);
+}
+
+// The "Network sensors" fields present in the form (settings POST, restore).
+// A slot is taken only as a whole; one switched on is made a ★ sensor.
+void applyNetForm(String& rejected)
+{
+    for (int i = 0; i < NET_SLOTS; i++) {
+        char n[24];
+        auto nm = [&n, i](const char* x) { snprintf(n, sizeof(n), "ns%d%s", i, x); return (const char*)n; };
+        if (!formHas(nm("t"))) continue;
+        std::unique_ptr<NetSlotCfg> dBuf(new (std::nothrow) NetSlotCfg());
+        if (!dBuf) return;
+        NetSlotCfg& d = *dBuf;
+        const long t = formArg(nm("t")).toInt();
+        d.type = (uint8_t)(t > NET_OFF && t < NET_TYPE_COUNT ? t : NET_OFF);
+        const long f = formArg(nm("f")).toInt();
+        d.format = (uint8_t)(f >= 0 && f < NET_FMT_COUNT ? f : NET_FMT_JSON);
+        bool bad = false;
+        const String a = formArg(nm("a"));
+        if (a.length() >= NET_ADDR_LEN) bad = true;
+        else strlcpy(d.addr, a.c_str(), sizeof(d.addr));
+        const long m = formHas(nm("m")) ? formArg(nm("m")).toInt() : NET_FRESH_MIN_DEFAULT;
+        if (m < 1 || m > NET_FRESH_MIN_MAX) bad = true; else d.freshMin = (uint16_t)m;
+        const long p = formHas(nm("p")) ? formArg(nm("p")).toInt() : NET_POLL_SEC_DEFAULT;
+        if (p < NET_POLL_SEC_MIN || p > NET_POLL_SEC_MAX) bad = true; else d.pollSec = (uint16_t)p;
+        for (int k = 0; k < VF_COUNT; k++) {
+            snprintf(n, sizeof(n), "ns%d_%s", i, vsFieldKey((uint8_t)k));
+            const String key = formArg(n);
+            if (key.length() >= NET_KEY_LEN || key.indexOf(' ') >= 0) bad = true;
+            else strlcpy(d.key[k], key.c_str(), NET_KEY_LEN);
+        }
+        if (d.type == NET_REST && strncmp(d.addr, "http://", 7) && strncmp(d.addr, "https://", 8)) bad = true;
+        if (!netSlotTopicsValid(d)) bad = true;   // MQTT: exact topics only
+        if (d.type == NET_REST && d.format == NET_FMT_PLAIN) bad = true;
+        if (bad && d.type != NET_OFF) { addRejected(rejected, TF(T_set_net_bad, String(i + 1)).c_str()); continue; }
+        netSanitize(d);
+        netLock();
+        const bool wasOn = netOn(gCfg.net[i]);
+        const bool changed = memcmp(&gCfg.net[i], &d, sizeof(d)) != 0;
+        if (changed) gCfg.net[i] = d;
+        netUnlock();
+        if (!changed) continue;
+        gNetCfgGen = gNetCfgGen + 1;
+        // switched on: a ★ sensor right away (value sources, custom ID, Home Assistant, "only my sensors")
+        const uint32_t id = netSensorId(i);
+        if (!wasOn && netOn(d) && rfStateOf(id) != RF_STATE_MINE) rfSetState(id, RF_STATE_MINE);
+    }
+}
 
 // Applies the "Alarms" tab fields present in the form (settings POST, restore, test button).
 void applyAlarmForm(String& rejected)
@@ -3471,15 +4591,10 @@ void applyAlarmForm(String& rejected)
         if (formHas(nm("en")))   { String v = formRaw(nm("en")); r.enabled = v.length() && v != "0"; }
         if (formHas(nm("name"))) strlcpy(r.name, formRaw(nm("name")).c_str(), sizeof(r.name));
         if (formHas(nm("rff")))  { long f = formRaw(nm("rff")).toInt(); if (f >= 0 && f < AF_COUNT) r.rfField = (uint8_t)f; }
-        String sel = formHas(nm("rfsel")) ? formRaw(nm("rfsel")) : String();
-        if (sel.length()) {   // a known sensor chosen from the list
-            r.rfId = (uint32_t)strtoul(sel.c_str(), nullptr, 16);
-        } else if (formHas(nm("rfid"))) {
-            String id = formRaw(nm("rfid")); id.trim();
-            char* end = nullptr;
-            unsigned long v = strtoul(id.c_str(), &end, 16);
-            if (id.length() && (*end || id.length() > 8)) addRejected(rejected, T(T_al_sensor_id));
-            else r.rfId = v;
+        if (formHas(nm("rfsel"))) {   // a ★ sensor; a radio ID of a version-1 backup is ignored (not converted)
+            const String sel = formRaw(nm("rfsel"));
+            if (sel.isEmpty()) r.sensorInternalId[0] = '\0';
+            else if (lsIsInternalId(sel.c_str())) strlcpy(r.sensorInternalId, sel.c_str(), sizeof(r.sensorInternalId));
         }
         if (formHas(nm("cmp")))  r.above = formRaw(nm("cmp")).toInt() ? 1 : 0;
         const PhKind k = alarmKind(r);
@@ -3496,19 +4611,30 @@ void applyAlarmForm(String& rejected)
             if (v.length() && v != "0") r.channels |= 1 << c; else r.channels &= ~(1 << c);
         }
         if (formHas(nm("clr")))  { String v = formRaw(nm("clr")); r.allClear = v.length() && v != "0"; }
-        if (formHas(nm("msg")))  strlcpy(r.msg, formRaw(nm("msg")).c_str(), sizeof(r.msg));
-        if (formHas(nm("cmsg"))) strlcpy(r.clearMsg, formRaw(nm("cmsg")).c_str(), sizeof(r.clearMsg));
-        if (r.src == AS_RF && !r.rfId) { addRejected(rejected, T(T_al_sensor_id)); r.enabled = 0; }
-        if (r.src == AS_RF && r.rfId) {   // a sensor in range: only a measurement it provides (alarms.h)
+        // placeholders in the stored form (phStore()): a line that does not
+        // fit is refused and keeps its old text, never stored cut
+        auto storeMessage = [&](const char* field, char* dst, size_t cap, const char* label) {
+            if (!formHas(nm(field))) return;
+            bool fit = true;
+            const String v = phStore(formRaw(nm(field)), cap, fit);
+            if (fit) strlcpy(dst, v.c_str(), cap);
+            else     addRejected(rejected, label);
+        };
+        storeMessage("msg",  r.msg,      sizeof(r.msg),      T(T_al_msg));
+        storeMessage("cmsg", r.clearMsg, sizeof(r.clearMsg), T(T_al_cmsg));
+        if (r.src == AS_RF && !r.sensorInternalId[0]) { addRejected(rejected, T(T_al_sensor_id)); r.enabled = 0; }
+        if (r.src == AS_RF && r.sensorInternalId[0]) {   // a sensor in range: only a measurement it provides (alarms.h)
+            const int e = lsFindByInternalId(gLogicalSensors, r.sensorInternalId);
+            const uint32_t rid = e >= 0 ? gLogicalSensors.s[e].radioId : 0;
             for (const RfSensorReading& x : gRfSensors) {
-                if (!x.used || x.id != r.rfId) continue;
+                if (!rid || !x.used || x.id != rid) continue;
                 const uint16_t cap = alarmCapMask(x.hasTemp, x.hasHumidity, x.hasWind, x.hasUv, x.hasLight, x.hasLeak, x.hasLightning,
-                                                  x.hasMoisture, x.hasCo2, x.hasPm25);
+                                                  x.hasMoisture, x.hasCo2, x.hasPm25, !rfIsNetProto(x.proto));
                 if (!alarmFieldAvailable(r.rfField, cap)) { addRejected(rejected, T(T_al_sensor_value)); r.rfField = rules[i].rfField; }
             }
         }
         if (memcmp(&r, &rules[i], sizeof(r)) != 0) {
-            const bool cond = r.src != rules[i].src || r.rfId != rules[i].rfId || r.rfField != rules[i].rfField;
+            const bool cond = r.src != rules[i].src || strcmp(r.sensorInternalId, rules[i].sensorInternalId) || r.rfField != rules[i].rfField;
             rules[i] = r;
             if (cond) alarmsResetState(i);
             changed = true;
@@ -3548,11 +4674,18 @@ void applyAlarmForm(String& rejected)
     if (formHas("almqtt")) { String v = formRaw("almqtt"); const uint8_t on = v.length() && v != "0"; if (on != ch.mqttEn) { ch.mqttEn = on; changed = true; } }
     if (formHas("whurl")) {
         String v = formRaw("whurl"); v.trim();
+        bool fit = true;
         if (v.length() && !v.startsWith("http://") && !v.startsWith("https://")) addRejected(rejected, T(T_al_wh_url));
-        else text(ch.whUrl, sizeof(ch.whUrl), "whurl");
+        else if ((v = phStore(v, sizeof(ch.whUrl), fit)), !fit) addRejected(rejected, T(T_al_wh_url));
+        else if (strcmp(ch.whUrl, v.c_str())) { strlcpy(ch.whUrl, v.c_str(), sizeof(ch.whUrl)); changed = true; }
     }
     if (formHas("whpost")) { const uint8_t p = formRaw("whpost").toInt() ? 1 : 0; if (p != ch.whPost) { ch.whPost = p; changed = true; } }
-    if (formHas("whbody")) { String v = formRaw("whbody"); if (strcmp(ch.whBody, v.c_str())) { strlcpy(ch.whBody, v.c_str(), sizeof(ch.whBody)); changed = true; } }
+    if (formHas("whbody")) {
+        bool fit = true;
+        const String v = phStore(formRaw("whbody"), sizeof(ch.whBody), fit);
+        if (!fit) addRejected(rejected, T(T_al_wh_body));
+        else if (strcmp(ch.whBody, v.c_str())) { strlcpy(ch.whBody, v.c_str(), sizeof(ch.whBody)); changed = true; }
+    }
     if (changed) alarmsSave();
     alarmsUnlock();
 }
@@ -3567,11 +4700,18 @@ void applyCustomUploadForm(String& rejected)
         auto nm = [&n, i](const char* x) { snprintf(n, sizeof(n), "cu%d%s", i, x); return (const char*)n; };
         if (formHas(nm("url"))) {
             String v = formRaw(nm("url")); v.trim();
+            bool fit = true;
             if (v.length() && !v.startsWith("http://") && !v.startsWith("https://")) addRejected(rejected, TF(T_cu_url, String(i + 1)).c_str());
+            else if ((v = phStore(v, sizeof(u.url), fit)), !fit) addRejected(rejected, TF(T_cu_url, String(i + 1)).c_str());
             else if (strcmp(u.url, v.c_str())) { strlcpy(u.url, v.c_str(), sizeof(u.url)); changed = true; }
         }
         if (formHas(nm("post"))) { const uint8_t p = formRaw(nm("post")).toInt() ? 1 : 0; if (p != u.post) { u.post = p; changed = true; } }
-        if (formHas(nm("body"))) { String v = formRaw(nm("body")); if (strcmp(u.body, v.c_str())) { strlcpy(u.body, v.c_str(), sizeof(u.body)); changed = true; } }
+        if (formHas(nm("body"))) {
+            bool fit = true;
+            const String v = phStore(formRaw(nm("body")), sizeof(u.body), fit);
+            if (!fit) addRejected(rejected, T(T_cu_body));
+            else if (strcmp(u.body, v.c_str())) { strlcpy(u.body, v.c_str(), sizeof(u.body)); changed = true; }
+        }
         if (formHas(nm("int"))) {
             long v = formRaw(nm("int")).toInt();
             if (v < 60 || v > 3600) addRejected(rejected, T(T_cu_int));
@@ -3580,6 +4720,96 @@ void applyCustomUploadForm(String& rejected)
     }
     if (changed) customUploadSave();
     customUploadUnlock();
+}
+
+// HTTPS (https_cert.h): the certificate field holds the stored PEM (the
+// form always sends it back), the key field is write-only - empty keeps the
+// stored key. A changed pair is checked (PEM text, then mbedTLS: parses, key
+// matches) before it is stored; a bad one is listed and the stored pair
+// stays. An emptied certificate field or "remove" deletes both. Applied by
+// the restart (the listener reads the pair once at its start).
+String httpsPemReason(HttpsPemCheck c)
+{
+    switch (c) {
+        case HPEM_EMPTY:         return T(T_set_https_pem_empty);
+        case HPEM_TOO_LONG:      return T(T_set_https_pem_too_long);
+        case HPEM_NO_CERT:       return T(T_set_https_pem_no_cert);
+        case HPEM_NO_KEY:        return T(T_set_https_pem_no_key);
+        case HPEM_KEY_IN_CERT:   return T(T_set_https_pem_key_in_cert);
+        case HPEM_KEY_ENCRYPTED: return T(T_set_https_pem_encrypted);
+        case HPEM_FOREIGN:       return T(T_set_https_pem_foreign);
+        default:                 return T(T_set_https_pem_broken);
+    }
+}
+
+void storeHttpsPair(Config& next, String& rejected, bool& restart)
+{
+    auto reject = [&rejected](TextId label, const String& why) {
+        addRejected(rejected, (String(T(label)) + " (" + why + ")").c_str());
+    };
+    HttpsPem cur;
+    httpsPemLoad(cur);
+    const bool clear = formHas("httpskey_clear");
+    const String keyIn = formRaw("httpskey");
+    if (clear || formHas("httpscert") || keyIn.length()) {
+        struct Buf { char cert[HTTPS_CERT_MAX + 2]; char key[HTTPS_KEY_MAX + 2]; };   // ~12 KB: PSRAM
+        std::unique_ptr<Buf, void (*)(void*)> b((Buf*)heap_caps_malloc(sizeof(Buf), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT), heap_caps_free);
+        if (!b) { addRejected(rejected, "HTTPS"); return; }
+        size_t certLen = 0, keyLen = 0;
+        bool tooLong = false;
+        if (!clear) {
+            const String certIn = formHas("httpscert") ? formRaw("httpscert") : String(cur.cert);
+            certLen = httpsPemClean(certIn.c_str(), certIn.length(), b->cert, sizeof(b->cert));
+            tooLong |= !certLen && certIn.length() > HTTPS_CERT_MAX;
+            if (keyIn.length()) {
+                keyLen = httpsPemClean(keyIn.c_str(), keyIn.length(), b->key, sizeof(b->key));
+                if (!keyLen) { reject(T_set_https_key, T(T_set_https_pem_too_long)); return; }
+            } else if (certLen) {
+                memcpy(b->key, cur.key, cur.keyLen + 1);
+                keyLen = cur.keyLen;
+            }
+        }
+        if (tooLong) { reject(T_set_https_cert, T(T_set_https_pem_too_long)); return; }
+        const bool same = certLen == cur.certLen && keyLen == cur.keyLen &&
+                          !memcmp(b->cert, cur.cert, certLen) && !memcmp(b->key, cur.key, keyLen);
+        if (!same) {
+            if (!certLen) {   // removed (key alone is useless)
+                // HTTPS stays on: the next start uses a generated certificate
+                if (httpsPemSave("", 0, "", 0)) { if (next.httpsEn) restart = true; }
+                else addRejected(rejected, "HTTPS");
+            } else {
+                const HttpsPemCheck c = httpsCheckCertPem(b->cert, certLen);
+                const HttpsPemCheck k = keyLen ? httpsCheckKeyPem(b->key, keyLen) : HPEM_NO_KEY;
+                if (c != HPEM_OK) { reject(T_set_https_cert, httpsPemReason(c)); return; }
+                if (k != HPEM_OK) { reject(T_set_https_key, httpsPemReason(k)); return; }
+                int code = 0;
+                const HttpsVerify v = httpsVerifyPair(b->cert, certLen, b->key, keyLen, nullptr, &code);
+                if (v != HV_OK) {
+                    char hex[16];
+                    snprintf(hex, sizeof(hex), " -0x%04X", (unsigned)(code < 0 ? -code : code));
+                    const TextId why = v == HV_CERT ? T_set_https_v_cert : v == HV_KEY ? T_set_https_v_key
+                                     : v == HV_MISMATCH ? T_set_https_v_mismatch : T_set_https_v_mem;
+                    reject(v == HV_KEY ? T_set_https_key : T_set_https_cert, String(T(why)) + (code ? hex : ""));
+                    return;
+                }
+                if (!httpsPemSave(b->cert, certLen, b->key, keyLen)) { addRejected(rejected, "HTTPS"); return; }
+                dbgSerial.println("Web settings: HTTPS certificate / key stored");
+                if (next.httpsEn) restart = true;
+            }
+        }
+    }
+}
+
+void storeHttps(Config& next, String& rejected, bool& restart)
+{
+    storeHttpsPair(next, rejected, restart);
+    if (formHas("httpsen")) {
+        String v = formRaw("httpsen");
+        const int en = v.length() && v != "0";
+        // without an uploaded pair the start generates a self-signed one
+        if (en != (next.httpsEn != 0)) { next.httpsEn = en; restart = true; }
+    }
+    storeInt(next.httpPortMode, "httpport", HTTP_PORT_KEEP, HTTP_PORT_HTTPS_ONLY, T(T_set_https_port), rejected, restart);
 }
 
 void handleSettingsPost()
@@ -3591,9 +4821,25 @@ void handleSettingsPost()
     const bool wizard = formHas("wizard");
     const int  wstep  = formRaw("wstep").toInt();
     if (!(wizard ? requireWizardAuth() : requireAuth()) || !requireSameOrigin()) return;
+    if (wizard && wizardOpenAccess(gCfg)) {   // open (no login): only the fields of its step
+        for (int i = 0; i < server.args(); i++) {
+            if (wizardFieldAllowed(wstep, server.argName(i).c_str())) continue;
+            server.send(403, "text/plain; charset=utf-8", T(T_st_forbidden_no_admin_password_configure));
+            return;
+        }
+    }
     if (!formHas("form")) {
         renderSettings(T(T_set_incomplete_form_submission_nothing_w), true, 400);
         return;
+    }
+    if (configHeldForRestart()) {   // config.h: settings for the coming restart are saved - nothing more until then
+        if (wizard) renderWizard(wstep, T(T_set_restart_pending), 409);
+        else        renderSettings(T(T_set_restart_pending), true, 409);
+        return;
+    }
+    if (gPendingRestore) {   // a restore: its ★ table first - the fields below refer to it by internal ID
+        if (gPendingRestore->sensors) { LsGuard g; gLogicalSensors = *gPendingRestore->sensors; }   // 1.8 KB copy under the lock
+        gPendingRestore->accepted = true;
     }
 
     // Only fields present in the request are changed, so a partial POST
@@ -3637,7 +4883,7 @@ void handleSettingsPost()
     {
         static const char* const names[SG_COUNT] = { "srcair", "srcwind", "srcrain", "srcuv", "srclight", "srcpress" };
         for (int g = 0; g < SG_COUNT; g++)
-            if (formArg(names[g]).length())
+            if (formArg(names[g]).length() && !srcSetFormId((SrcGroup)g, formArg(names[g]).c_str()))
                 applyNum((uint8_t)srcParamId((SrcGroup)g), names[g], T(T_set_value_source));
     }
     applyCheck(PARAM_WIND_EN,                "winden",      T(T_set_wind_sensor));
@@ -3653,7 +4899,7 @@ void handleSettingsPost()
     applyNum(PARAM_WIND_DIR_OFFSET_DEG,      "windoff",     T(T_set_wind_direction_offset_180_to));
     applyNum(PARAM_WIND_DIR_SENSOR_TYPE,     "winddirtyp",  T(T_set_wind_direction_sensor2));
     applyNum(PARAM_PAYLOAD_FORMAT,           "payfmt",      T(T_set_payload_format2));
-    if (ioV2()) {   // the section is only rendered on v2.0
+    if (ioFull()) {   // the section is only rendered on the V4 Full
         auto x10 = [](const char* name) -> long { return lroundf(formArg(name).toFloat() * 10.0f); };
         // 2nd wind sensor first: it takes over the AUX inputs it uses, the
         // AUX checkboxes then only apply to the inputs that are still free.
@@ -3723,18 +4969,23 @@ void handleSettingsPost()
         v = gCfg.dispContrast;  storeInt(v, "dispcon", 1, 255, T(T_set_disp_con), rejected, dummy);   gCfg.dispContrast = v;
         v = gCfg.dispNightFrom; storeInt(v, "dispnf", 0, 23, T(T_set_disp_nf), rejected, dummy);      gCfg.dispNightFrom = v;
         v = gCfg.dispNightTo;   storeInt(v, "dispnt", 0, 23, T(T_set_disp_nt), rejected, dummy);      gCfg.dispNightTo = v;
+        v = gCfg.saverMode;     storeInt(v, "svmode", 0, 4, T(T_set_disp_sv), rejected, dummy);       gCfg.saverMode = v;
+        v = gCfg.saverMin;      storeInt(v, "svmin", 1, 60, T(T_set_disp_svmin), rejected, dummy);    gCfg.saverMin = v;
+        v = gCfg.saverSec;      storeInt(v, "svsec", 3, 30, T(T_set_disp_svsec), rejected, dummy);    gCfg.saverSec = v;
         v = gCfg.dispFlip;      storeInt(v, "dispflip", 0, 1, T(T_set_disp_flip), rejected, dummy);   gCfg.dispFlip = v;
+        v = gCfg.dispLed;       storeInt(v, "displed", 0, LED_MODE_MAX, T(T_set_disp_led), rejected, dummy); gCfg.dispLed = v;   // live
         v = gCfg.measureSec;    storeInt(v, "measuresec", 10, 600, T(T_set_measure_cycle), rejected, dummy); gCfg.measureSec = v;   // live
         if (present("dispmode")) {   // the display tab was in the form: unticked boxes are not sent
             gCfg.dispBattery = checked("dispbat") ? 1 : 0;
-            gCfg.dispLed     = checked("displed") ? 1 : 0;
         }
         if (present("se0n")) {   // custom series (series.h): a slot needs a name, a source and a value that fit
-            SeriesDef defs[SERIES_MAX];
-            for (int i = 0; i < SERIES_MAX; i++) defs[i] = gCfg.series[i];
+            SeriesDef* const cur = seriesDefs();   // changed slot by slot under the lock (other tasks copy one slot at a time)
+            bool changed = false;
             for (int i = 0; i < seriesLimit(); i++) {
                 char n[8];
                 SeriesDef d;
+                snprintf(n, sizeof(n), "se%ds", i);
+                if (!formHas(n)) continue;   // not in the form (a slot left out of a version-1 restore): kept
                 snprintf(n, sizeof(n), "se%dn", i);
                 seriesCleanName(formArg(n).c_str(), d.name, sizeof(d.name));
                 snprintf(n, sizeof(n), "se%ds", i);
@@ -3742,8 +4993,8 @@ void handleSettingsPost()
                 snprintf(n, sizeof(n), "se%df", i);
                 const long f = formArg(n).toInt();
                 d.field = (f >= 0 && f < SF_COUNT) ? (uint8_t)f : SF_COUNT;
-                if (src == "B") d.rfId = 0;
-                else if (src.length()) d.rfId = (uint32_t)strtoul(src.c_str(), nullptr, 16);
+                if (src == "B") d.sensorInternalId[0] = '\0';
+                else if (lsIsInternalId(src.c_str())) strlcpy(d.sensorInternalId, src.c_str(), sizeof(d.sensorInternalId));
                 else d.field = SF_COUNT;   // off
                 if (d.field < SF_COUNT && (SERIES_FIELDS[d.field].board != (src == "B"))) {
                     addRejected(rejected, (String(T(T_se_series)) + " " + (i + 1)).c_str());   // board value with a wireless sensor or the other way round
@@ -3754,22 +5005,35 @@ void handleSettingsPost()
                     d.name[sizeof(d.name) - 1] = '\0';
                     seriesCleanName(d.name, d.name, sizeof(d.name));
                 }
-                defs[i] = d.used() ? d : SeriesDef();
+                snprintf(n, sizeof(n), "se%da", i);
+                const long a = formHas(n) ? formArg(n).toInt() : -1;   // absent: the value's default
+                seriesSetAgg(d, (a >= 0 && a < SA_COUNT) ? (uint8_t)a : (uint8_t)SA_DEFAULT);
+                if (!d.used()) d = SeriesDef();
+                changed |= seriesKey(cur[i]) != seriesKey(d) || cur[i].used() != d.used();
+                { SeriesGuard g; cur[i] = d; }
             }
-            for (int i = 0; i < SERIES_MAX; i++) gCfg.series[i] = defs[i];
-            historySeriesConfigure(gCfg.series, seriesLimit());
+            historySeriesConfigure(cur, seriesLimit());
+            if (changed) seriesDefsChanged();   // Home Assistant entities again
         }
+        applyNetForm(rejected);   // network sensors (net_sensor.h, live)
+        if (present("vsen")) applyVirtualSensorForm(rejected);   // virtual sensors (vsensor.h, live)
         for (int k = 0; k < OLED_CUSTOM_COUNT; k++) {   // custom screens (oled_custom.h)
             char n[8];
             snprintf(n, sizeof(n), "dc%dt", k);
             if (!present(n)) continue;
             OledCustom& c = gCfg.dispCustom[k];
-            oledCustomClean(formArg(n).c_str(), c.title, sizeof(c.title));
+            bool fit = true;   // placeholders in the stored form (phStore()); a cut line is refused, not stored broken
+            String v = phStore(formArg(n), sizeof(c.title), fit);
+            if (fit) oledCustomClean(v.c_str(), c.title, sizeof(c.title));
+            else addRejected(rejected, T(T_set_disp_cust_title));
             snprintf(n, sizeof(n), "dc%dm", k);
-            c.layout = formArg(n).toInt() == OCL_BIG ? OCL_BIG : OCL_SMALL;
+            if (present(n)) c.layout = formArg(n).toInt() == OCL_BIG ? OCL_BIG : OCL_SMALL;   // a partial POST keeps it
             for (int j = 0; j < OLED_CUSTOM_LINES; j++) {
                 snprintf(n, sizeof(n), "dc%dl%d", k, j);
-                if (present(n)) oledCustomClean(formArg(n).c_str(), c.line[j], sizeof(c.line[j]));
+                if (!present(n)) continue;
+                v = phStore(formArg(n), sizeof(c.line[j]), fit);
+                if (fit) oledCustomClean(v.c_str(), c.line[j], sizeof(c.line[j]));
+                else addRejected(rejected, T(T_set_disp_cust_line));
             }
         }
         if (present("dsp0")) {
@@ -3779,7 +5043,24 @@ void handleSettingsPost()
         }
     }
 
+    {   // own access point (wifi_ap.h, live): no mode without a valid password
+        bool dummy = false;
+        storeText(gCfg.apSsid, "apssid", dummy);
+        int v = gCfg.apChannel; storeInt(v, "apchan", 0, 13, T(T_set_ap_chan), rejected, dummy); gCfg.apChannel = v;
+        int mode = gCfg.apMode; storeInt(mode, "apmode", AP_OFF, AP_ALWAYS, T(T_set_ap_mode), rejected, dummy);
+        const String pw = present("appass") ? formRaw("appass") : String(gCfg.apPass);   // not trimmed: spaces may be part of it
+        if ((pw.length() || mode != AP_OFF) && !apPassValid(pw.c_str())) {
+            addRejected(rejected, T(T_set_ap_pass));   // both keep their stored values
+        } else {
+            strlcpy(gCfg.apPass, pw.c_str(), sizeof(gCfg.apPass));
+            gCfg.apMode = mode;
+        }
+    }
+
     bool ignored = false;   // "changed" sink for live fields (no restart needed)
+    if (present("gnsstime")) gCfg.gnssTime = (int)checked("gnsstime");
+    if (present("gnsspos"))  gCfg.gnssPos  = (int)checked("gnsspos");
+    if (present("gnssalt"))  gCfg.gnssAlt  = (int)checked("gnssalt");
     int altitude = gCfg.altitudeM;
     storeInt(altitude, "altitude", 0, 4000, T(T_set_altitude_0_4000_m), rejected, ignored);
     gCfg.altitudeM = altitude;
@@ -3823,8 +5104,20 @@ void handleSettingsPost()
     applyAlarmForm(rejected);
     applyCustomUploadForm(rejected);
     if (present("updchk")) gCfg.updateCheckEn = checked("updchk");
-    if (formArg("updurl").startsWith("http")) storeText(gCfg.updateUrl, "updurl", ignored);
-    else if (present("updurl") && gCfg.updateCheckEn) addRejected(rejected, T(T_set_version_list_url_http_https));
+    if (present("updurl")) {   // an http(s) URL, or empty (no check)
+        const String u = formArg("updurl");
+        if (u.isEmpty() || u.startsWith("http://") || u.startsWith("https://")) storeText(gCfg.updateUrl, "updurl", ignored);
+        else if (gCfg.updateCheckEn) addRejected(rejected, T(T_set_version_list_url_http_https));
+    }
+
+    if (present("uiflash")) gCfg.uiFlashEn = checked("uiflash");
+    if (present("uiage"))   gCfg.uiAgeEn   = checked("uiage");
+
+    if (present("influxen")) gCfg.influxEn = checked("influxen");
+    storeText  (gCfg.influxUrl,         "influxurl", ignored);
+    storeSecret(gCfg.influxToken,       "influxtok", ignored);
+    storeText  (gCfg.influxMeasurement, "influxmeas", ignored);
+    { int v = gCfg.influxIntervalSec; storeInt(v, "influxint", 10, 3600, T(T_set_influx_int), rejected, ignored); gCfg.influxIntervalSec = v; }
     if (present("tz")) {
         if (formArg("tz").isEmpty()) addRejected(rejected, T(T_set_time_zone));
         else                         storeText(gCfg.timeZone, "tz", timeChanged);
@@ -3836,12 +5129,16 @@ void handleSettingsPost()
     wxUploadUnlock();
     if (timeChanged) timeSyncReconfigure();
     // Not clearable: an empty admin password would lock this page out.
-    storeSecret(gCfg.webAdminPass, "webadminpw", ignored);
+    storeSecret(gCfg.webAdminPass, "webadminpw", ignored, SecretClear::NEVER);
     // Wireless sensor states (rf_sensors.cpp picks up changes on its next loop):
-    // the text lists (advanced) first, then the table's selects - each only
-    // if changed against the state the page showed (rfso_*), so an edit of
+    // the hidden list as text (advanced) first, then the table's selects - each
+    // only if changed against the state the page showed (rfso_*), so an edit of
     // the text field is not undone by the unchanged selects - then a move.
-    storeText(gCfg.rfIds, "rfids", ignored);
+    // ★ = a logical sensor (lsensors.h, gLogicalSensors): its name and minimum signal are
+    // in its entry; rfNames / rfMinRssi hold those of received-only sensors.
+    // This task is gLogicalSensors's only writer: every change below holds the table's
+    // lock (LsGuard) for just the write, so readers on the main loop / upload
+    // tasks never see a half-written entry; reads here need no lock.
     storeText(gCfg.rfIgnore, "rfignore", ignored);
     if (present("rfnames") && formArg("rfnames") != gCfg.rfNames) {   // the names as text (also: settings restore)
         String all = formArg("rfnames");
@@ -3864,11 +5161,70 @@ void handleSettingsPost()
     }
     for (int i = 0; i < server.args(); i++) {   // a name typed into the sensor table
         String n = server.argName(i);
-        if (!n.startsWith("rfnm_")) continue;
-        const uint32_t nid = (uint32_t)strtoul(n.c_str() + 5, nullptr, 16);
+        if (!n.startsWith("rfname_")) continue;
+        const uint32_t nid = (uint32_t)strtoul(n.c_str() + strlen("rfname_"), nullptr, 16);
         String v = server.arg(i);
         if (!nid || v == rfNameOf(nid)) continue;
-        if (!rfNameSet(gCfg.rfNames, sizeof(gCfg.rfNames), nid, v.c_str())) addRejected(rejected, T(T_set_th_name));
+        const int ls = lsFindByRadioId(gLogicalSensors, nid);
+        if (ls >= 0) {
+            char nmClean[LS_DISPLAY_NAME_MAX + 1];
+            snprintf(nmClean, sizeof(nmClean), "%s", v.c_str());
+            rfNameClean(nmClean);
+            LsGuard g;
+            memcpy(gLogicalSensors.s[ls].displayName, nmClean, sizeof(nmClean));
+        } else if (!rfNameSet(gCfg.rfNames, sizeof(gCfg.rfNames), nid, v.c_str())) addRejected(rejected, T(T_set_th_name));
+    }
+    if (present("rfminrssi") && formArg("rfminrssi") != gCfg.rfMinRssi) {   // minimum signal as text (also: settings restore)
+        String all = formArg("rfminrssi");
+        char tmp[sizeof(gCfg.rfMinRssi)] = "";
+        bool okMr = true;
+        for (int p = 0; p < (int)all.length();) {   // "ID:dBm|ID:dBm"
+            int bar = all.indexOf('|', p);
+            if (bar < 0) bar = all.length();
+            String e = all.substring(p, bar);
+            p = bar + 1;
+            e.trim();
+            if (!e.length()) continue;
+            int c = e.indexOf(':');
+            char* end = nullptr;
+            const uint32_t nid = c > 0 ? (uint32_t)strtoul(e.substring(0, c).c_str(), &end, 16) : 0;
+            int dbm;
+            if (c <= 0 || !nid || *end || !rfMinRssiParse(e.substring(c + 1).c_str(), dbm)) { okMr = false; continue; }
+            if (!rfMinRssiSet(tmp, sizeof(tmp), nid, dbm)) okMr = false;
+        }
+        if (okMr) strlcpy(gCfg.rfMinRssi, tmp, sizeof(gCfg.rfMinRssi));
+        else addRejected(rejected, T(T_set_rf_minrssi_as_text));
+    }
+    for (int i = 0; i < server.args(); i++) {   // a minimum typed into the sensor table
+        String n = server.argName(i);
+        if (!n.startsWith("rfminrssi_")) continue;
+        const uint32_t nid = (uint32_t)strtoul(n.c_str() + strlen("rfminrssi_"), nullptr, 16);
+        String v = server.arg(i);
+        int dbm;
+        if (!nid) continue;
+        if (!rfMinRssiParse(v.c_str(), dbm)) { addRejected(rejected, T(T_set_th_minrssi)); continue; }
+        if (dbm == rfMinRssiOf(nid)) continue;
+        const int ls = lsFindByRadioId(gLogicalSensors, nid);
+        if (ls >= 0) { LsGuard g; gLogicalSensors.s[ls].minRssiDbm = (int8_t)dbm; }
+        else if (!rfMinRssiSet(gCfg.rfMinRssi, sizeof(gCfg.rfMinRssi), nid, dbm)) addRejected(rejected, T(T_set_th_minrssi));
+    }
+    for (int i = 0; i < server.args(); i++) {   // a custom ID typed into the sensor table (rfcustomid_<internal ID>)
+        String n = server.argName(i);
+        if (!n.startsWith("rfcustomid_")) continue;
+        const int ls = lsFindByInternalId(gLogicalSensors, n.c_str() + strlen("rfcustomid_"));
+        String v = server.arg(i);
+        v.trim();
+        if (ls < 0 || v == gLogicalSensors.s[ls].customId) continue;
+        static const TextId WHY[] = { T_set_custom_id_taken, T_set_custom_id_empty, T_set_custom_id_too_long,
+            T_set_custom_id_chars, T_set_custom_id_looks_internal, T_set_custom_id_looks_legacy,
+            T_set_custom_id_builtin, T_set_custom_id_builtin_start };
+        const LsIdProblem code = lsCustomIdCheck(v.c_str());
+        const char* why = code == LS_ID_OK ? nullptr : T(WHY[code]);
+        if (!why) {
+            LsGuard g;
+            if (!lsSetCustomId(gLogicalSensors, ls, v.c_str())) why = T(T_set_custom_id_taken);
+        }
+        if (why) addRejected(rejected, (String(T(T_set_th_custom_id)) + ": " + why).c_str());
     }
     applyNum(PARAM_UI_LANG,                  "uilang",      T(T_set_language));
     applyCheck(PARAM_RF_ONLY_MINE,           "rfonly",      T(T_set_only_my_sensors2));
@@ -3884,6 +5240,27 @@ void handleSettingsPost()
         String m = formArg("rfmove");
         int c = m.indexOf(':');
         if (c > 0) rfMoveMine((uint32_t)strtoul(m.substring(0, c).c_str(), nullptr, 16), m.substring(c + 1).toInt());
+    }
+    {   // battery change: bind another radio ID to a logical sensor (select rfrebind_<internalId>, or the "replaces?" button)
+        auto rebind = [&](const char* internalId, const String& hex) {
+            const int ls = lsFindByInternalId(gLogicalSensors, internalId);
+            const uint32_t nid = (uint32_t)strtoul(hex.c_str(), nullptr, 16);
+            if (ls < 0 || !nid || nid == gLogicalSensors.s[ls].radioId) return;
+            bool bound = false;
+            if (rfStateOf(nid) == RF_STATE_RECEIVED) { LsGuard g; bound = lsRebindRadioId(gLogicalSensors, ls, nid); }
+            if (!bound) { addRejected(rejected, T(T_set_rebind)); return; }
+            rfNameSet(gCfg.rfNames, sizeof(gCfg.rfNames), nid, "");   // a received-only name / minimum of the new ID would be stale
+            rfMinRssiSet(gCfg.rfMinRssi, sizeof(gCfg.rfMinRssi), nid, 0);
+        };
+        for (int i = 0; i < server.args(); i++) {
+            String n = server.argName(i);
+            if (n.startsWith("rfrebind_") && server.arg(i).length()) rebind(n.c_str() + strlen("rfrebind_"), server.arg(i));
+        }
+        if (present("rfreplace")) {
+            String m = formArg("rfreplace");
+            const int c = m.indexOf(':');
+            if (c > 0) rebind(m.substring(0, c).c_str(), m.substring(c + 1));
+        }
     }
     {   // Davis (diagnostics): live, davis_rx.cpp compares the settings every loop
         auto liveInt = [&](volatile int& field, const char* name, long lo, long hi, const char* label) {
@@ -3936,9 +5313,12 @@ void handleSettingsPost()
     // transports never see a half-applied change before the restart. ----
     applyCheck(PARAM_LOW_POWER_EN,           "lowpower",    T(T_set_low_power_mode2));
     applyCheck(PARAM_VANE_POWER_SAVE,        "vanesave",    T(T_set_wind_vane_power_saving));
-    // heap while saving (~5 KB), not static RAM
+    // heap while saving (~7 KB each, PSRAM), not static RAM; `before` = gCfg
+    // at the same instant: the wizard applies only what the POST changed
+    // (config_merge.h)
     std::unique_ptr<Config> nextBuf(new (std::nothrow) Config(gCfg));
-    if (!nextBuf) { renderSettings(T(T_tr_err_alloc), true, 503); return; }
+    std::unique_ptr<Config> beforeBuf(nextBuf ? new (std::nothrow) Config(*nextBuf) : nullptr);
+    if (!nextBuf || !beforeBuf) { renderSettings(T(T_tr_err_alloc), true, 503); return; }
     Config& next = *nextBuf;
     bool restart = false;
     if (present("loraen")) {
@@ -3966,6 +5346,15 @@ void handleSettingsPost()
     else if (present("region")) addRejected(rejected, "region");
 
     storeText(next.deviceName, "devname", restart);
+    if (present("gnssen")) {
+        const int v = (int)checked("gnssen");
+        if (next.gnssEn != v) { next.gnssEn = v; restart = true; }
+    }
+    if (present("gnssbaud")) {
+        const long v = formArg("gnssbaud").toInt();
+        if (!gnssBaudValid(v)) addRejected(rejected, T(T_set_gnss_baud));
+        else if (next.gnssBaud != (int)v) { next.gnssBaud = (int)v; restart = true; }
+    }
     int staticIpEn = present("staticipen") ? (int)checked("staticipen") : next.staticIpEn;
     auto argOr = [](const char* name, const char* stored) { return formHas(name) ? formArg(name) : String(stored); };
     String ip = argOr("staticip", next.staticIp), gw = argOr("staticgw", next.staticGateway),
@@ -4001,13 +5390,7 @@ void handleSettingsPost()
     storeInt   (next.mqttTlsMode, "mqtttls", MQTT_TLS_NONE, MQTT_TLS_VERIFY, T(T_set_mqtt_security), rejected, restart);
     if (formRaw("mqttcacert").length() >= sizeof(next.mqttCaCert)) addRejected(rejected, T(T_set_ca_certificate_too_long));
     else storeText(next.mqttCaCert, "mqttcacert", restart);
-    int board = present("board") ? formArg("board").toInt() : next.boardSel;
-    if (!boardSelValid(board)) addRejected(rejected, T(T_set_heltec_board));
-    else if (next.boardSel != board) { next.boardSel = board; restart = true; }
-    int pcb = present("pcbver") ? formArg("pcbver").toInt() : next.pcbVersion;
-    if (gIo.hwIdDetected && pcb != PCB_REV_2_0) addRejected(rejected, T(T_set_pcb_revision_the_board_identifies));
-    else if (pcb == PCB_REV_1_2 || pcb == PCB_REV_1_3 || pcb == PCB_REV_2_0) { if (next.pcbVersion != pcb) { next.pcbVersion = pcb; restart = true; } }
-    else addRejected(rejected, T(T_set_pcb_revision));
+    storeHttps(next, rejected, restart);
     {   // Wi-Fi / web interface off: the node then answers only the config
         // portal and LoRaWAN downlinks - so only while LoRaWAN is (and stays)
         // on and joined, and with the confirmation (not in a backup).
@@ -4053,8 +5436,12 @@ void handleSettingsPost()
     if (rejected.length()) rejectedMsg = TF(T_set_invalid_kept, rejected);
 
     if (wifiChange) {
-        if (restart) { saveConfig(next); restartAtMs = millis() + 1000; if (restartAtMs == 0) restartAtMs = 1; }
-        else         saveConfig(gCfg);
+        if (restart) {
+            saveConfig(next);
+            configHoldForRestart();   // the restart waits for the Wi-Fi test (~1 min): no older gCfg save meanwhile
+            restartAtMs = millis() + 1000; if (restartAtMs == 0) restartAtMs = 1;
+        }
+        else saveConfig(gCfg);
         HtmlOut html(server, 200);
         pageStart(html, T(T_c_settings), "/api/settings", 75);
         html += "<div class='banner okb'>";
@@ -4071,14 +5458,21 @@ void handleSettingsPost()
 
     if (restart && wizard) {
         // saved now, applied by one restart at the wizard's "Finish"; the
-        // following steps start from these values
-        saveConfig(next);
-        gCfg = next;
+        // following steps (and every later save) start from these values -
+        // only the fields this POST changed, so a downlink / MQTT change
+        // made meanwhile stays
+        wxUploadLock();   // the locks lockedConfigCopy() takes: no reader of those fields sees a half merge
+        loxoneLock();
+        configApplyChanges(gCfg, *beforeBuf, next);
+        loxoneUnlock();
+        wxUploadUnlock();
+        saveConfig(gCfg);
         wizardRestartPending = true;
         restart = false;
     }
     if (restart) {
         saveConfig(next);
+        configHoldForRestart();   // gCfg keeps the old restart fields until the restart: no save of it may undo this one
         HtmlOut html(server, 200);
         pageStart(html, T(T_c_settings), "/api/settings", 20);
         html += "<div class='banner okb'>"; html += T(T_set_saved_restarting); html += "</div>";
@@ -4134,8 +5528,9 @@ void handleSettingsBackup()
     char date[12] = "undated";
     struct tm lt;
     if (localTimeNow(lt)) strftime(date, sizeof(date), "%Y-%m-%d", &lt);
-    JsonDocument doc;
+    JsonDocument doc(psramJsonAllocator());
     backupHeader(doc, FIRMWARE_VERSION, host, date, secrets);
+    backupSensors(doc["sensors"].to<JsonArray>(), gLogicalSensors);   // the logical sensor table (version 2)
     captureSettings(doc["settings"].to<JsonObject>(), secrets);
     if (doc.overflowed()) { server.send(500, "text/plain", "JSON allocation failed"); return; }
     server.sendHeader("Cache-Control", "no-store");
@@ -4153,16 +5548,36 @@ void handleSettingsRestore()
     if (webBusyRefused()) return;   // tls_gate.h: an HTTPS request runs and the heap is low
     WebHeavyGuard heavy(millis());   // meanwhile no new HTTPS request starts
     if (!requireAuth() || !requireSameOrigin()) return;
-    JsonDocument in;
+    JsonDocument in(psramJsonAllocator());
     const BackupCheck chk = deserializeJson(in, server.arg("backup")) ? BK_INVALID : backupCheck(in);
     if (chk != BK_OK) {
         renderSettings(chk == BK_NEWER ? TF(T_set_bk_newer, String(in["version"] | 0)) : String(T(T_set_bk_invalid)), true, 400);
         return;
     }
-    // what changes, against the settings as they are now
-    JsonDocument cur, changes;
-    captureSettings(cur.to<JsonObject>(), false);
     JsonObject set = in["settings"].as<JsonObject>();
+    // the logical sensor table: read and checked here, swapped in by
+    // handleSettingsPost() together with the fields (they refer to it by
+    // internal ID) - or not at all if that refuses. Version 1 has none (its ★
+    // list and references by radio ID are not converted).
+    PendingRestore pending;
+    String lsReport;
+    std::unique_ptr<LogicalSensorTable> t;
+    if ((in["version"] | 0) >= 2) {
+        t.reset(new (std::nothrow) LogicalSensorTable());
+        int skipped = 0;
+        if (t && backupReadSensors(in["sensors"], *t, &skipped)) {
+            if (!lsEqual(gLogicalSensors, *t)) {
+                pending.sensors = t.get();
+                lsReport = String("sensors: ") + t->count();
+            }
+            if (skipped) lsReport += String(lsReport.length() ? ", " : "sensors: ") + skipped + " skipped";
+        }
+    } else {
+        backupDropV1Refs(set);
+    }
+    // what changes, against the settings as they are now
+    JsonDocument cur(psramJsonAllocator()), changes(psramJsonAllocator());
+    captureSettings(cur.to<JsonObject>(), false);
     const int n = backupPrepare(set, cur.as<JsonObjectConst>(), changes.to<JsonArray>(),
                                 [](const char* key, const char* v) { return secretValue(key) == v; });
     String list;
@@ -4173,11 +5588,16 @@ void handleSettingsRestore()
         list += ": &ldquo;"; appendEscaped(list, c["old"] | ""); list += "&rdquo; &rarr; &ldquo;";
         appendEscaped(list, c["new"] | ""); list += "&rdquo;";
     }
+    if (lsReport.length()) list = lsReport + (list.length() ? ", " : "") + list;
     set["form"] = "1";
-    gRestoreReport = n ? TF(T_set_bk_changed, String(n)) + " " + list : String(T(T_set_bk_nochange));
+    gRestoreReport = n || lsReport.length() ? TF(T_set_bk_changed, String(n + (lsReport.length() ? 1 : 0))) + " " + list
+                                            : String(T(T_set_bk_nochange));
     gFormOverride = set;
+    gPendingRestore = &pending;
     handleSettingsPost();   // validates, saves, restarts if a restart field changed
+    gPendingRestore = nullptr;
     gFormOverride = JsonObjectConst();
+    if (!pending.accepted) gRestoreReport = "";   // refused (busy): nothing changed, nothing to report
 }
 
 // Firmware upload from the settings page (System tab), POST /api/ota:
@@ -4210,7 +5630,12 @@ void handleOtaChunk()
 void handleOtaDone()
 {
     selectLanguage();
+    // the whole request is in: only now may a checked image become the boot one
+    const bool allowed = gCfg.webAdminPass[0] && otaWebAuthorized();
+    if (allowed) otaUploadCommit();
+    else         otaUploadAbort();
     const OtaOutcome o = otaUploadOutcome();
+    const String why = otaUploadError();   // before the reset, which clears it
     otaUploadReset();
     if (!gCfg.webAdminPass[0]) {   // never without a password: the portal (own AP, button) is the fallback
         server.send(403, "text/html; charset=utf-8", T(T_ota_need_password));   // the text carries entities
@@ -4219,8 +5644,8 @@ void handleOtaDone()
     if (!requireAuth() || !requireSameOrigin()) return;
     const bool js = server.hasArg("js");
     String msg = o == OTA_OUT_OK      ? String(T(T_ota_ok))
-               : o == OTA_OUT_REFUSED ? TF(T_ota_refused, otaUploadError())
-               : o == OTA_OUT_FAILED  ? TF(T_ota_failed, otaUploadError())
+               : o == OTA_OUT_REFUSED ? TF(T_ota_refused, why)
+               : o == OTA_OUT_FAILED  ? TF(T_ota_failed, why)
                                       : String(T(T_ota_no_file));
     const int code = o == OTA_OUT_OK ? 200 : 400;
     if (js) {
@@ -4281,8 +5706,13 @@ void handleApiAlarms()
     alarmsLock();
     *ch = alarmsChannels();
     alarmsUnlock();
-    JsonDocument doc;
-    alarmsJson(doc, rules.get(), st.get(), *ch, gCfg, millis() / 1000);
+    JsonDocument doc(psramJsonAllocator());
+    alarmsJson(doc, rules.get(), st.get(), *ch, gCfg, alarmClockSec(), [](const char* internalId, char* customId) -> uint32_t {
+        const int e = lsFindByInternalId(gLogicalSensors, internalId);   // web task: the table's only writer, no lock needed
+        if (e < 0) return 0;
+        snprintf(customId, LS_CUSTOM_ID_MAX + 1, "%s", gLogicalSensors.s[e].customId);
+        return gLogicalSensors.s[e].radioId;
+    });
     sendJsonDoc(doc, "alarms");
 }
 
@@ -4314,6 +5744,7 @@ void mdnsStart()
         MDNS.addServiceTxt(svc, "tcp", "api", ver);
         MDNS.addServiceTxt(svc, "tcp", "path", "/api/info");
     }
+    if (server.tlsRunning()) MDNS.addService("https", "tcp", 443);
     mdnsStarted = true;
     dbgSerial.printf("mDNS: http://%s.local/ (_http._tcp, _weathernode._tcp)\n", host);
 }
@@ -4325,17 +5756,162 @@ void mdnsStop()
     mdnsStarted = false;
 }
 
-// Runs continuously on its own FreeRTOS task (core 0) once webApiSetup()
-// spawns it — this is what used to be webApiPoll(), called once per
-// main-loop() iteration on core 1 alongside sensor sampling and the
-// (blocking) sendLoRa(). Moving it here means an incoming HTTP request no
-// longer has to wait behind LoRa airtime; the tradeoff (cross-task access
-// to `server`/history.cpp's ring buffer/Config's volatile int fields) is
-// handled by serverMutex here, historyMutex in history.cpp, and `volatile`
-// on the relevant Config fields, respectively — see the comments at each.
+// Starts the web server (webApiTask, under serverMutex): plain HTTP on port
+// 80 always; with HTTPS enabled first the HTTPS listener on 443 (see
+// httpsStartListener()). Anything that keeps HTTPS from running leaves plain
+// HTTP with all its connections and says why on the status page
+// (httpsStatus()) - a broken certificate never locks the admin out.
+constexpr int HTTP_SOCKETS          = 7;   // plain alone
+constexpr int HTTP_SOCKETS_WITH_TLS = 3;   // plain next to HTTPS (redirects, the own access point)
+constexpr int HTTPS_SOCKETS         = 5;   // HTTPS connections = TLS sessions (~33 KB PSRAM each)
+
+
+void logHttpsCode(const char* what, HttpsState s, int code, size_t internalFree)
+{
+    dbgSerial.printf("HTTPS not started: %s%s (code %s0x%04X, %u bytes internal RAM free) - plain HTTP only.\n",
+                     httpsStateName(s), what, code < 0 ? "-" : "", (unsigned)(code < 0 ? -code : code), (unsigned)internalFree);
+}
+
+// The HTTPS listener (https_cert.h httpsPlanPair()): the uploaded pair when
+// it is usable; else the generated pair from an earlier start if it still
+// names <hostname>.local and the current station address and has not
+// expired; else a new generated pair (stored, never over the uploaded one).
+// A generated pair needs the station address: without it (only the own
+// access point is up) HTTPS waits and webApiTask restarts the server once
+// Wi-Fi connects.
+// A stored generated pair made for another device name (or before the name
+// scheme "Universal Weather Node <name>") is made again.
+static bool generatedCommonNameIsCurrent(const char* storedCommonName, const char* host)
+{
+    char expected[HTTPS_GENERATED_CN_MAX + 1];
+    return httpsGeneratedCommonName(gCfg.deviceName, host, expected, sizeof(expected)) && !strcmp(storedCommonName, expected);
+}
+
+void httpsStartListener(HttpsStatus& st)
+{
+    HttpsPem uploaded, generated;
+    HttpsCertInfo uploadedInfo, generatedInfo;
+    int code = 0;
+    httpsPemLoad(uploaded, HTTPS_PAIR_UPLOADED);
+    const bool uploadedValid = uploaded.havePair() &&
+        httpsVerifyPair(uploaded.cert, uploaded.certLen, uploaded.key, uploaded.keyLen, &uploadedInfo, &code) == HV_OK;
+    st.uploadedRejected = (uploaded.certLen || uploaded.keyLen) && !uploadedValid;
+    if (st.uploadedRejected)
+        dbgSerial.printf("HTTPS: the uploaded certificate / key is not usable (code -0x%04X) - using a generated one.\n", (unsigned)(code < 0 ? -code : code));
+    uint8_t ip[4];
+    const bool ipKnown = stationIpv4(ip);
+    char host[HOSTNAME_MAX_LEN + 1];
+    deviceHostname(host, sizeof(host));
+    char dnsName[HOSTNAME_MAX_LEN + 8];
+    snprintf(dnsName, sizeof(dnsName), "%s.local", host);
+    bool generatedFits = false;
+    if (!uploadedValid && ipKnown && httpsPemLoad(generated, HTTPS_PAIR_GENERATED) && generated.havePair())
+        generatedFits = httpsVerifyPair(generated.cert, generated.certLen, generated.key, generated.keyLen, &generatedInfo) == HV_OK &&
+                        httpsCertNamesCover(generatedInfo.names, dnsName, ip) && !generatedInfo.expired &&
+                        generatedCommonNameIsCurrent(generatedInfo.subject, host);
+    const HttpsPairPlan plan = httpsPlanPair(true, uploadedValid, ipKnown, generatedFits);
+    const size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (plan == HTTPS_PLAN_WAIT_FOR_STATION_IP) {
+        st.state = HTTPS_WAITING_FOR_NETWORK;
+        httpsWaitingForStation = true;
+        dbgSerial.println("HTTPS: waiting for the Wi-Fi address (the generated certificate names it) - plain HTTP meanwhile.");
+        return;
+    }
+    if (!httpsEnoughMemoryToStart(freeBefore)) {
+        st.state = HTTPS_LOW_MEMORY;
+        logHttpsCode("", HTTPS_LOW_MEMORY, 0, freeBefore);
+        return;
+    }
+    if (plan == HTTPS_PLAN_GENERATE) {
+        char subject[128];
+        httpsGeneratedSubject(gCfg.deviceName, host, subject, sizeof(subject));
+        const size_t psBefore = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        const size_t minBefore = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+        const unsigned long t0 = millis();
+        code = httpsGenerate(subject, dnsName, ip, generated);
+        const unsigned long ms = millis() - t0;
+        if (!code) {   // read back like a stored pair: its names and dates for the status
+            int verifyCode = 0;
+            if (httpsVerifyPair(generated.cert, generated.certLen, generated.key, generated.keyLen, &generatedInfo, &verifyCode) != HV_OK)
+                code = verifyCode ? verifyCode : -1;
+        }
+        if (code) {
+            st.state = HTTPS_GENERATE_FAILED;
+            st.code = code;
+            logHttpsCode(" (certificate generation)", HTTPS_GENERATE_FAILED, code, freeBefore);
+            return;
+        }
+        const size_t minAfter = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+        char low[24] = "";
+        if (minAfter < minBefore) snprintf(low, sizeof(low), " (low %u)", (unsigned)minAfter);
+        dbgSerial.printf("HTTPS: generated a self-signed certificate (%s, %s, %u.%u.%u.%u) in %lu ms; internal RAM %u -> %u%s, "
+                         "PSRAM %u -> %u bytes free; web task stack %u bytes unused.\n",
+                         subject, dnsName, ip[0], ip[1], ip[2], ip[3], ms, (unsigned)freeBefore,
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), low,
+                         (unsigned)psBefore, (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                         (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+    }
+    const bool useUploaded = plan == HTTPS_PLAN_UPLOADED;
+    const HttpsPem& pem = useUploaded ? uploaded : generated;
+    const HttpsCertInfo& info = useUploaded ? uploadedInfo : generatedInfo;
+    const size_t freeStart = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t psStart = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const esp_err_t e = server.beginTls(443, pem.cert, pem.certLen, pem.key, pem.keyLen, HTTPS_SOCKETS);
+    if (e != ESP_OK) {
+        st.state = HTTPS_START_FAILED;
+        st.code = e;
+        logHttpsCode("", HTTPS_START_FAILED, e, freeStart);
+        return;
+    }
+    st.state = HTTPS_RUNNING;
+    st.source = useUploaded ? HTTPS_SOURCE_UPLOADED : HTTPS_SOURCE_GENERATED;
+    st.port = 443;
+    strlcpy(st.subject, info.subject, sizeof(st.subject));
+    strlcpy(st.notAfter, info.notAfter, sizeof(st.notAfter));
+    st.names = info.names;
+    char names[160];
+    httpsCertNamesText(info.names, names, sizeof(names));
+    dbgSerial.printf("HTTPS started on port 443 (%s certificate %s [%s], %s, valid until %s%s); internal RAM %u -> %u, PSRAM %u -> %u bytes free.\n",
+                     httpsCertSourceName((HttpsCertSource)st.source), info.subject, names, info.keyType, info.notAfter,
+                     info.expired ? ", EXPIRED" : "", (unsigned)freeStart, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)psStart, (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+
+void serverStart()
+{
+    HttpsStatus st;
+    httpsWaitingForStation = false;
+    if (gCfg.httpsEn) httpsStartListener(st);
+    httpsSetStatus(st);
+    server.begin(server.tlsRunning() ? HTTP_SOCKETS_WITH_TLS : HTTP_SOCKETS);
+    dbgSerial.println("Web API started on port 80 (/, /status, /api/data, /api/info, /api/history, /api/settings, /help).");
+}
+
+// Stops and starts the server with mDNS (webApiTask, under serverMutex): HTTPS
+// picks its certificate again.
+void serverRestart(const char* why)
+{
+    dbgSerial.printf("Web API: restarting the server (%s).\n", why);
+    server.stop();
+    mdnsStop();
+    serverStart();
+    mdnsStart();
+}
+
+// Runs on its own FreeRTOS task (core 0) once webApiSetup() spawns it:
+// starts / stops the server and mDNS with the Wi-Fi state and carries out
+// a deferred restart. The requests themselves are handled on the server's
+// own task (http_server.cpp, also core 0), never behind the main loop's
+// LoRa airtime; cross-task access to history.cpp's ring buffer / Config's
+// volatile int fields is handled by historyMutex in history.cpp and
+// `volatile` on the relevant Config fields — see the comments at each.
 void webApiTask(void*)
 {
+    // Task watchdog (120 s, main.cpp): a pass takes milliseconds; a stuck
+    // SSE push, captive DNS or server start resets the node with a core dump.
+    esp_task_wdt_add(nullptr);
     for (;;) {
+        esp_task_wdt_reset();
         xSemaphoreTake(serverMutex, portMAX_DELAY);
         if (!gCfg.wifiEn || !gCfg.webApiEn) {
             if (serverStarted) {
@@ -4343,14 +5919,21 @@ void webApiTask(void*)
                 serverStarted = false;
                 mdnsStop();
             }
-        } else if (!serverStarted && !apiStopped && wifiIsConnected()) {
-            server.begin();
+        } else if (!serverStarted && !apiStopped && (wifiIsConnected() || apIsActive())) {
+            serverStart();
             serverStarted = true;
-            dbgSerial.println("Web API started on port 80 (/, /status, /api/data, /api/info, /api/history, /api/settings, /help).");
             mdnsStart();
         }
-        if (serverStarted && !mdnsStarted && millis() - mdnsTriedMs >= 30000 && wifiIsConnected()) mdnsStart();
-        if (serverStarted) server.handleClient();
+        if (serverStarted && httpsRegenerateAtMs && (long)(millis() - httpsRegenerateAtMs) >= 0) {
+            httpsRegenerateAtMs = 0;
+            if (httpsPemSave("", 0, "", 0, HTTPS_PAIR_GENERATED)) serverRestart("new HTTPS certificate requested");
+        } else if (serverStarted && httpsWaitingForStation && wifiIsConnected()) {
+            serverRestart("Wi-Fi up: HTTPS with a certificate for its address");
+        }
+        if (serverStarted && !mdnsStarted && millis() - mdnsTriedMs >= 30000 && (wifiIsConnected() || apIsActive())) mdnsStart();
+        if (serverStarted) ssePoll();   // under the mutex: the server is not stopped meanwhile
+        // captive DNS of the own access point: under the mutex too, so webApiStop() closes it safely
+        apDnsService(serverStarted && !apiStopped);
         xSemaphoreGive(serverMutex);
 
         // Deferred restart after a restart-requiring settings save (see
@@ -4358,7 +5941,9 @@ void webApiTask(void*)
         // A WiFi change test runs first (it would be cut short otherwise).
         if (restartAtMs && (long)(millis() - restartAtMs) >= 0 && !wifiChangeBusy()) systemRestart(restartReason);
 
-        vTaskDelay(5 / portTICK_PERIOD_MS);
+        // only state changes here: no request waits on this loop - but the
+        // captive DNS does (a phone fires a burst of lookups when it joins)
+        vTaskDelay((apIsActive() ? 20 : 50) / portTICK_PERIOD_MS);
     }
 }
 
@@ -4410,7 +5995,10 @@ void webApiSetup()
     server.on("/chart",        HTTP_GET,  handleChartRedirect);
     server.on("/api/data",     HTTP_GET,  handleApiData);
     server.on("/api/info",     HTTP_GET,  handleApiInfo);
+    server.on("/metrics",      HTTP_GET,  handleMetrics);
+    server.on("/api/events",   HTTP_GET,  handleApiEvents);
     server.on("/api/records",  HTTP_GET,  handleApiRecords);
+    server.on("/api/time",     HTTP_POST, handleApiTime);
     server.on("/manifest.webmanifest", HTTP_GET, handleManifest);
     server.on("/sw.js",                HTTP_GET, handleServiceWorker);
     server.on("/icon-192.png",         HTTP_GET, handleIcon192);
@@ -4423,22 +6011,24 @@ void webApiSetup()
     server.on("/api/alarms",   HTTP_GET,  handleApiAlarms);
     server.on("/api/alarms/test", HTTP_POST, handleAlarmTest);
     server.on("/api/alarms/save", HTTP_POST, handleAlarmSave);
-    for (const char* uri : { "/api/data", "/api/info", "/api/history", "/api/records", "/api/alarms" })
+    for (const char* uri : { "/api/data", "/api/info", "/metrics", "/api/history", "/api/records", "/api/alarms", "/api/events" })
         server.on(uri, HTTP_OPTIONS, handlePublicApiOptions);
     server.on("/api/settings", HTTP_GET,  handleSettingsGet);
     server.on("/api/settings", HTTP_POST, handleSettingsPost);
     server.on("/api/settings/backup",  HTTP_GET,  handleSettingsBackup);
     server.on("/api/display/preview",  HTTP_POST, handleDisplayPreview);
+    server.on("/api/display/saver",    HTTP_POST, handleSaverPreview);
     server.on("/api/placeholders",     HTTP_GET,  handlePlaceholders);
     server.on("/api/settings/rfsensors", HTTP_GET, handleRfSensorTable);
     server.on("/api/settings/reset", HTTP_POST, handleSettingsReset);
+    server.on("/api/diag/crash",     HTTP_POST, handleCrashTest);
+    server.on("/api/system/reset",   HTTP_POST, handleSystemReset);
+    server.on("/api/diag/coredump",  HTTP_GET,  handleCoreDump);
+    server.on("/api/https/certificate", HTTP_GET,  handleHttpsCertificate);
+    server.on("/api/https/regenerate",  HTTP_POST, handleHttpsRegenerate);
     server.on("/api/settings/restore", HTTP_POST, handleSettingsRestore);
     server.on("/api/ota",      HTTP_POST, handleOtaDone, handleOtaChunk);
     server.on("/api/log",       HTTP_GET,  handleLogPage);
-    // Origin/Referer for the CSRF check (Authorization is always collected)
-    // and Cookie / Accept-Language for the page language (selectLanguage())
-    static const char* headerKeys[] = { "Origin", "Referer", "Cookie", "Accept-Language", "Accept-Encoding" };
-    server.collectHeaders(headerKeys, 5);
     server.on("/api/log/raw",   HTTP_GET,  handleLogRaw);
     server.on("/api/log/clear", HTTP_POST, handleLogClear);
     server.on("/api/davis/log", HTTP_GET,  handleDavisLog);
@@ -4455,12 +6045,12 @@ void webApiSetup()
     server.on("/calibrate/sample", HTTP_GET,  handleCalibrateSample);
     server.on("/calibrate/save",   HTTP_POST, handleCalibrateSave);
     server.onNotFound(handleNotFound);
+    server.onPreRoute(webPreRoute);
 
     // Priority 1 == the main loop task's own priority (Arduino's default
-    // "loopTask") — neither task should be able to starve the other for
-    // this workload. 8 KB stack covers WebServer's own request parsing plus
-    // our handlers' JSON/String building (matches Arduino's default loop
-    // task stack size).
+    // "loopTask"). The handlers run on the server's task (12 KB stack,
+    // http_server.cpp); this one starts / stops it and calls
+    // systemRestart() (saves rain statistics and records to NVS).
     xTaskCreatePinnedToCore(webApiTask, "webApi", 8192, nullptr, 1, &webApiTaskHandle, 0);
 }
 
@@ -4474,6 +6064,7 @@ void webApiStop()
     // called on the first-boot portal path before webApiSetup() is reached.
     xSemaphoreTake(serverMutex, portMAX_DELAY);
     apiStopped = true;
+    apDnsService(false);   // port 53 free for the portal's DNS server
     if (serverStarted) {
         server.stop();
         serverStarted = false;

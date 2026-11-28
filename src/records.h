@@ -43,6 +43,9 @@ void recordsReset(Records& r, bool allTime);
 constexpr size_t RECORDS_BLOB_SIZE = sizeof(Records) + 8;
 void recordsEncode(const Records& r, uint8_t* out);                // RECORDS_BLOB_SIZE bytes
 bool recordsDecode(const uint8_t* in, size_t len, Records& out);   // false = not a valid blob
+// A blob of a newer firmware ("REC2" and up, any length): kept untouched by
+// this one until the user resets all records (storage_layout.h).
+bool recordsBlobIsNewer(const uint8_t* in, size_t len);
 
 // GET /api/records (docs/api/schemas/records.schema.json), units as configured.
 void recordsJson(JsonDocument& doc, const Records& r, const Config& c, bool clockValid);

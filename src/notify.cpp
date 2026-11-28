@@ -111,11 +111,14 @@ bool notifyWebhook(const AlarmChannels& ch, PhLookup lookup, void* ctx, NotifyRe
 {
     if (!ch.whUrl[0]) return false;
     r = NotifyReq();
-    phRender(ch.whUrl, r.url, sizeof(r.url), PE_URL, lookup, ctx);
+    bool cut = false;
+    phRender(ch.whUrl, r.url, sizeof(r.url), PE_URL, lookup, ctx, &cut);
+    r.truncated = cut;
     if (ch.whPost) {
         r.post = true;
         strcpy(r.contentType, "application/json");
-        phRender(ch.whBody, r.body, sizeof(r.body), PE_JSON, lookup, ctx);
+        phRender(ch.whBody, r.body, sizeof(r.body), PE_JSON, lookup, ctx, &cut);
+        r.truncated = r.truncated || cut;
     }
     return true;
 }

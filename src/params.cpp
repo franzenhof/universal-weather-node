@@ -1,4 +1,5 @@
 #include "params.h"
+#include "settings_reset.h"
 #include "system_restart.h"
 #include "loxone.h"
 #include "wind_window.h"
@@ -16,23 +17,22 @@ __attribute__((weak)) void recordsResetRequest(bool) {}
 // alarms_run.cpp (weak default: host builds without it)
 __attribute__((weak)) bool alarmsSetEnabledMask(uint16_t) { return false; }
 #include <Arduino.h>
-#include <Preferences.h>
 
 bool applyParam(uint8_t paramId, int16_t value)
 {
-    // The v2.0 I/O functions can't be switched on without the hardware; the
+    // The V4 Full I/O functions can't be switched on without the hardware (V4 Light, no PCB); the
     // board_io module picks up every change below on its next poll.
     bool ioParam = (paramId >= PARAM_AUX_AIN_EN && paramId <= PARAM_HEATER_FULL_BELOW_DC) ||
                    paramId == PARAM_WIND2_MODE;
-    if (ioParam && !ioV2()) {
+    if (ioParam && !ioFull()) {
         bool switchesOff = value == 0 && (paramId == PARAM_AUX_AIN_EN || paramId == PARAM_AUX_PULSE_EN ||
                                           paramId == PARAM_WIND2_MODE ||
                                           paramId == PARAM_HEATER_MODE || paramId == PARAM_FAN_MODE ||
                                           paramId == PARAM_TACHO_EN || paramId == PARAM_VEDIRECT_EN);
         if (!switchesOff) return false;
     }
-    if (paramId == PARAM_UV_EN && value != 0 && !ioV2()) return false;
-    // Heltec V4: the PCB's wind/rain inputs collide with the RF front end (GPIO2/GPIO7)
+    if (paramId == PARAM_UV_EN && value != 0 && !ioFull()) return false;
+    // without a PCB (V4 Full / V4 Light) there are no wind/rain inputs (the V4's GPIO2/7 drive the RF front end)
     if ((paramId == PARAM_WIND_EN || paramId == PARAM_RAIN_EN) && value != 0 && !boardPcbAllowed()) return false;
 
     switch (paramId) {
@@ -57,10 +57,13 @@ bool applyParam(uint8_t paramId, int16_t value)
             gCfg.mqttWindAgg = value;
             return true;
         case PARAM_SRC_TEMP_HUM: case PARAM_SRC_WIND: case PARAM_SRC_RAIN:
-        case PARAM_SRC_UV: case PARAM_SRC_LIGHT:
+        case PARAM_SRC_UV: case PARAM_SRC_LIGHT: {
             if (!srcSelValid(value)) return false;
-            gCfg.srcSel[paramId - PARAM_SRC_TEMP_HUM] = (uint8_t)value;
+            const SrcGroup g = (SrcGroup)(paramId - PARAM_SRC_TEMP_HUM);
+            gCfg.srcSel[g] = (uint8_t)value;
+            srcBindSel(g);   // pin the chosen wireless sensor by ID
             return true;
+        }
         case PARAM_RF_ONLY_MINE:
             if (value != 0 && value != 1) return false;
             gCfg.rfOnlyMine = value;
@@ -88,6 +91,7 @@ bool applyParam(uint8_t paramId, int16_t value)
         case PARAM_SRC_PRESSURE:
             if (!srcSelValid(value)) return false;
             gCfg.srcSel[SG_PRESS] = (uint8_t)value;
+            srcBindSel(SG_PRESS);   // pin the chosen wireless sensor by ID
             return true;
         case PARAM_RF_PROTO:
             if (!rfProtoValid(value)) return false;
@@ -324,14 +328,9 @@ void cmdRequestConfigPortal()
 
 void cmdFactoryReset()
 {
-    dbgSerial.println("Command: factory reset — wiping config, restarting...");
-    // Only the settings: the rain statistics ("rainstat") are measurement
-    // data and stay (written once more by systemRestart()).
-    Preferences prefs;
-    if (prefs.begin("config", false, "cfgdata")) {
-        prefs.clear();
-        prefs.end();
-    }
-    delay(500);
-    systemRestart("factory reset");
+    // "Reset settings" (settings_reset.h): defaults, but the node stays
+    // reachable - network access, admin password and LoRaWAN keys are kept;
+    // measurement data too. Erasing everything is the web page's only.
+    dbgSerial.println("Command: reset settings requested.");
+    storageResetRequest(STORAGE_RESET_SETTINGS);
 }

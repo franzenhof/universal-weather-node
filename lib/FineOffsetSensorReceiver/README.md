@@ -37,10 +37,9 @@ The families added last (air quality, WH55, WN35, WH52, WH25 / WH32) are decoded
 only and **not yet tested with real sensors**.
 
 Only the 868 MHz (EU, "A") versions can be received; 433 / 915 MHz versions use the same format on
-another band. Not supported: the older WH1080 / WH1050 (different frame), the LDS01 laser distance
-sensor (other data rate, format not settled), and the OOK sensors (WH2, WH5, WH0530, WH53 — the SX1262
-has no OOK receiver). The WN30 probe thermometer sends the WH31 frame (a humidity of 0 is treated as
-"none").
+another band. Not supported: the older WH1080 / WH1050 (different frame) and the OOK sensors (WH2, WH5, WH0530, WH53 — the SX1262
+has no OOK receiver). The WN30 probe thermometer sends the WH31 frame (a humidity of 0 or above 100 is
+treated as "none"). The LDS01 laser distance sensor: distance and the low byte of the heater count (from a radio trace).
 
 ## Usage
 
@@ -92,7 +91,8 @@ decoder checks only the family's own length. Field layouts and scalings are docu
   that can only be told apart by the preamble length, which the SX1262 does not report. The
   default is WH65 / WS69 (wind step 0.51 m/s with the mean sent ×8, rain 0.254 mm (0.01 in) per
   count); `wh24Units = true` selects WH24 / HP1000 (1.12 m/s, 0.3 mm). The WS69 appends 8 bytes
-  with a 17-bit pressure (Pa) and a second CRC + sum; it is recognised by that second check.
+  with a 17-bit pressure (Pa) and a second CRC + sum; it is recognised by that second check
+  and a pressure of 300..1100 hPa (or `0x1FFFF` = no pressure module).
   The UV value is converted to the console's integer UV index steps. Invalid: temperature `0x7FF`,
   humidity `0xFF`, wind direction / speed `0x1FF`, gust `0xFF`, UV `0xFFFF`, light `0xFFFFFF`.
 - **WS80 / WS90 / WS85 / WS68:** 9-bit wind values (0.1 m/s, direction in degrees) with their MSBs

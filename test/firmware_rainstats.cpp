@@ -425,5 +425,18 @@ int main()
         rainRecordRoll(r, tmOf(t0));
         assert(!rainFlushDue(st, r, 0, false));
     }
+    // ---- the clock steps back over midnight: today's rain stays on today ----
+    {
+        RainRecord r = {};
+        rainRecordRoll(r, tmOf(at(2026, 11, 19, 12)));
+        rainRecordAddRain(r, 2.0f, true, at(2026, 11, 19, 12));
+        assert(rainRecordRoll(r, tmOf(at(2026, 11, 20, 0) + 600)));   // 00:10 next day
+        rainRecordAddRain(r, 0.5f, true, at(2026, 11, 20, 0) + 600);
+        assert(!rainRecordRoll(r, tmOf(at(2026, 11, 19, 23) + 3000)));   // back to 23:50
+        assert(r.d.ymd == 20261120 && near(r.d.mm, 0.5f) && r.d.prevYmd == 20261119 && near(r.d.prevMm, 2.0f));
+        rainRecordAddRain(r, 0.1f, true, at(2026, 11, 19, 23) + 3100);
+        assert(!rainRecordRoll(r, tmOf(at(2026, 11, 20, 0) + 60)) && near(r.d.mm, 0.6f));
+        assert(rainRecordRoll(r, tmOf(at(2026, 11, 17, 12))) && r.d.ymd == 20261117);   // three days back: a real date change
+    }
     return 0;
 }

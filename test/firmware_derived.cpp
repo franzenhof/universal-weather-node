@@ -52,6 +52,7 @@ int main()
     assert(pressureTendency(2.0f) == PT_RISING);
     assert(pressureTendency(-4.0f) == PT_FALLING_QUICKLY);
     assert(pressureTendency(7.0f) == PT_RISING_VERY_RAPIDLY);
+    assert(pressureTendency(NAN) == PT_STEADY);   // no tendency, not "rising very rapidly"
     assert(!strcmp(pressureTendencyText(PT_FALLING_SLOWLY), "falling slowly"));
     assert(!strcmp(weatherTrendText(-6.5f, 1000.0f), "storm warning"));
     assert(!strcmp(weatherTrendText(-2.0f, 1010.0f), "worsening"));

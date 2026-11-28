@@ -1,0 +1,33 @@
+References,Qty,Value,Part / order hint,Footprint,Note
+C1 C3 C4 C6 C8,5,100nF,"ceramic 100 nF 50 V X7R, 2.5 mm pitch",C_Disc_D3.8mm_W2.6mm_P2.50mm,
+C2,1,47uF 16V,"electrolytic 47 uF >= 16 V, radial 5 mm, 2 mm pitch",CP_Radial_D5.0mm_P2.00mm,polarised: + = square pad
+C5 C7 C9,3,1uF,"ceramic 1 uF 50 V X7R, 2.5 mm pitch",C_Disc_D3.8mm_W2.6mm_P2.50mm,
+D1 D2 D3 D8 D9 D16,6,SMLVT3V3,"ST SMLVT3V3 TVS 3.3 V, SMB (DO-214AA)",D_SMB,SMD; cathode band = pad 1 (signal side)
+D4 D5 D6 D7 D10 D11 D12 D13 D14 D15 D17 D18,12,BAT43,"BAT43 Schottky, DO-35",D_DO-35_SOD27_P7.62mm_Horizontal,band = cathode
+D19 D20,2,PESD5V0S2BT,"Nexperia PESD5V0S2BT dual ESD TVS, SOT-23",SOT-23,"optional (may be left out); low capacitance, I2C / 1-Wire DQ"
+F1,1,PTC 0.17A,"Littelfuse RXEF017 (radial PTC, 5.1 mm)",C_Disc_D7.5mm_W2.5mm_P5.00mm,
+F2,1,PTC 0.1A,"Littelfuse RXEF010 (radial PTC, 5.1 mm)",C_Disc_D7.5mm_W2.5mm_P5.00mm,
+J1 J2,2,Heltec V4 header (5V side),"1x18 female header 2.54 mm, 8.5 mm high (e.g. Kinghelm KH-2.54FH-1X18P-H8.5)",PinSocket_1x18_P2.54mm_Vertical,J1 + J2
+J3,1,Heltec V4 P4 (GPIO15/16),"1x2 female header 2.54 mm, 8.5 mm high",PinSocket_1x02_P2.54mm_Vertical,check the position with the real V4
+J4,1,Davis wind (RJ11),"RJ11/RJ12 6P6C jack, horizontal THT, unshielded (EVERCOM 5301-6P6C / Amphenol 54601-906)",RJ12_Amphenol_54601-x06_Horizontal,
+J5,1,Wind,"terminal block 3.5 mm, 4-pole (e.g. DB125-3.5-4P / Phoenix PT 1,5/4-3,5-H)","TerminalBlock_Phoenix_PT-1,5-4-3.5-H_1x04_P3.50mm_Horizontal",
+J6,1,Davis rain (RJ11),"RJ11/RJ12 6P6C jack, horizontal THT, unshielded (EVERCOM 5301-6P6C / Amphenol 54601-906)",RJ12_Amphenol_54601-x06_Horizontal,
+J7,1,Rain,"terminal block 3.5 mm, 2-pole (e.g. DB125-3.5-2P / Phoenix PT 1,5/2-3,5-H)","TerminalBlock_Phoenix_PT-1,5-2-3.5-H_1x02_P3.50mm_Horizontal",
+J8,1,I2C,"terminal block 3.5 mm, 4-pole","TerminalBlock_Phoenix_PT-1,5-4-3.5-H_1x04_P3.50mm_Horizontal",
+J9,1,1-Wire,"terminal block 3.5 mm, 3-pole (e.g. DB125-3.5-3P / Phoenix PT 1,5/3-3,5-H)","TerminalBlock_Phoenix_PT-1,5-3-3.5-H_1x03_P3.50mm_Horizontal",
+JP1,1,Vane pull-up,"pin header 1x2, 2.54 mm + jumper",PinHeader_1x02_P2.54mm_Vertical,fit only for reed-switch vanes
+JP2,1,SDA pull-up,"pin header 1x2, 2.54 mm + jumper",PinHeader_1x02_P2.54mm_Vertical,fit for long I2C cables
+JP3,1,SCL pull-up,"pin header 1x2, 2.54 mm + jumper",PinHeader_1x02_P2.54mm_Vertical,fit for long I2C cables
+Q1 Q2,2,LP0701N3-G,"Microchip LP0701N3-G P-MOSFET, TO-92",TO-92_Inline_Wide,pinout S-G-D: check the flat side against the silkscreen
+Q3,1,TN2106N3-G,"Microchip TN2106N3-G N-MOSFET, TO-92",TO-92_Inline_Wide,pinout S-G-D
+R1,1,1M,"resistor 1M Ohm, metal film 0.6 W 1 %, 0207 (10.16 mm pitch)",R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,
+R2,1,470k,"resistor 470k Ohm, metal film 0.6 W 1 %, 0207 (10.16 mm pitch)",R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,
+R3 R7 R12,3,330,"resistor 330 Ohm, Vishay PR01 1 W (e.g. PR01000103300JA100) or metal film 0.6 W 1 %, 0207 (10.16 mm pitch)",R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,surge series resistor: pulse-rated PR01 preferred (as Rev 1.3)
+R4 R5 R8 R13 R18 R19 R23,7,4.7k,"resistor 4.7k Ohm, metal film 0.6 W 1 %, 0207 (10.16 mm pitch)",R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,
+R6 R10 R15 R21,4,1k,"resistor 1k Ohm, metal film 0.6 W 1 %, 0207 (10.16 mm pitch)",R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,
+R9 R14 R22,3,10k,"resistor 10k Ohm, metal film 0.6 W 1 %, 0207 (10.16 mm pitch)",R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,
+R11,1,100k,"resistor 100k Ohm, metal film 0.6 W 1 %, 0207 (10.16 mm pitch)",R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,
+R16 R17 R24,3,100,"resistor 100 Ohm, Vishay PR01 1 W (e.g. PR01000101000JA100) or metal film 0.6 W 1 %, 0207 (10.16 mm pitch)",R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,surge series resistor: pulse-rated PR01 preferred (as Rev 1.3)
+R20,1,47k,"resistor 47k Ohm, metal film 0.6 W 1 %, 0207 (10.16 mm pitch)",R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,
+U1,1,74HC14,SN74HC14N (DIP-14) + DIP-14 socket,DIP-14_W7.62mm,notch = pin 1
+,1,Heltec WiFi LoRa 32 V4,"Heltec WiFi LoRa 32 V4 (V4.2 / V4.3, not V4-R8)",,on J1/J2/J3

@@ -5,14 +5,16 @@
 #include "rf_sensors.h"
 #include "board_io.h"
 #include "time_sync.h"
+#include "series.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-void phLiveInit(PhLive& l, const WindStats* w10)
+void phLiveInit(PhLive& l, const WindStats* w10, bool liveScalars)
 {
     l = PhLive();
+    l.live = liveScalars ? srcLive() : gSrc;   // display: newest per packet; else the cycle snapshot
     if (w10) {
         l.windValid = w10->valid && srcActive(SG_WIND);
         l.windMs = w10->meanMs; l.gustMs = w10->gustMs; l.dirDeg = w10->dirValid ? w10->dirDeg : windDirection;
@@ -26,7 +28,7 @@ void phLiveInit(PhLive& l, const WindStats* w10)
         time_t t = (time_t)e;
         struct tm u, lt;
         gmtime_r(&t, &u);
-        localtime_r(&t, &lt);
+        localTimeOf(t, lt);
         strftime(l.timeUtc, sizeof(l.timeUtc), "%Y-%m-%d %H:%M:%S", &u);
         strftime(l.timeLocal, sizeof(l.timeLocal), "%Y-%m-%d %H:%M:%S", &lt);
         snprintf(l.epoch, sizeof(l.epoch), "%lld", (long long)e);
@@ -37,9 +39,8 @@ namespace {
 bool num(PhValue& o, PhKind k, float v, int dec = -1) { o.kind = k; o.v = v; o.decimals = (int8_t)dec; return true; }
 bool text(PhValue& o, const char* s) { if (!s || !*s) return false; o.kind = PK_TEXT; o.text = s; return true; }
 
-bool rfLookup(int slot, const char* f, PhValue& o)
+bool rfLookup(int i, const char* f, PhValue& o)
 {
-    const int i = rfSensorIndexForSlot(slot - 1);
     if (i < 0 || !gRfSensors[i].used) return false;
     const RfSensorReading& r = gRfSensors[i];
     if (!strcmp(f, "batt")) return num(o, PK_PLAIN, r.batteryOk ? 1 : 0);
@@ -60,17 +61,22 @@ bool phLiveLookup(const char* n, PhValue& o, void* ctx)
 {
     const PhLive& l = *static_cast<const PhLive*>(ctx);
     const DerivedNow& d = l.d;
-    if (!strncmp(n, "rf", 2) && n[2] >= '0' && n[2] <= '9') {
-        char* end = nullptr;
-        const long slot = strtol(n + 2, &end, 10);
-        return *end == '_' && slot >= 1 && slot <= RF_MAX_SENSORS && rfLookup((int)slot, end + 1, o);
+    {   // a custom series (series.h): "series_3" = slot 3; checked first, "series" is no custom ID
+        const int slot = seriesPlaceholderSlot(n);
+        if (slot >= 0) return seriesPlaceholder(slot, o);
     }
-    if (!strcmp(n, "temp"))      return gSrc.tempValid && num(o, PK_TEMP, gSrc.tempC);
-    if (!strcmp(n, "hum"))       return gSrc.tempValid && gSrc.humValid && num(o, PK_PLAIN, gSrc.humidity);
+    {   // a wireless sensor's: "@L3F9A2C_temp", "<key>_temp", "rf17000008_temp", "rf3_temp"
+        // (keys never equal a built-in name or its start, lsCustomIdProblem())
+        const char* field = nullptr;
+        const int i = rfIndexOfPlaceholder(n, &field);
+        if (field) return i >= 0 && rfLookup(i, field, o);
+    }
+    if (!strcmp(n, "temp"))      return l.live.tempValid && num(o, PK_TEMP, l.live.tempC);
+    if (!strcmp(n, "hum"))       return l.live.tempValid && l.live.humValid && num(o, PK_PLAIN, l.live.humidity);
     if (!strcmp(n, "dew"))       return d.dewValid && num(o, PK_TEMP, d.dewPointC);
     if (!strcmp(n, "feels"))     return d.feelsValid && num(o, PK_TEMP, d.feelsLikeC);
-    if (!strcmp(n, "qnh"))       return gSrc.pressValid && num(o, PK_PRESS, gSrc.pressSeaHpa);
-    if (!strcmp(n, "press"))     return gSrc.pressValid && num(o, PK_PRESS, gSrc.pressAbsHpa);
+    if (!strcmp(n, "qnh"))       return l.live.pressValid && num(o, PK_PRESS, l.live.pressSeaHpa);
+    if (!strcmp(n, "press"))     return l.live.pressValid && num(o, PK_PRESS, l.live.pressAbsHpa);
     if (!strcmp(n, "ptend3h"))   return d.pressTrendValid && num(o, PK_PRESS, d.pressDelta3hHpa);
     if (!strcmp(n, "wind"))      return l.windValid && num(o, PK_SPEED, l.windMs);
     if (!strcmp(n, "gust"))      return l.windValid && num(o, PK_SPEED, l.gustMs);
@@ -81,10 +87,10 @@ bool phLiveLookup(const char* n, PhValue& o, void* ctx)
     if (!strcmp(n, "rain_24h"))  return rain && d.rainValid && num(o, PK_RAIN, d.rain24hMm);
     if (!strcmp(n, "rain_rate")) return rain && num(o, PK_RATE, rainRateMmH);
     if (!strcmp(n, "uv")) {
-        if (gSrc.uvRadio) return num(o, PK_PLAIN, gSrc.uvIndexRadio, 1);
-        return gSrc.uvBoard && gIo.uvIndexCalibrated && isfinite(gIo.uvIndex) && num(o, PK_PLAIN, gIo.uvIndex, 1);
+        if (l.live.uvRadio) return num(o, PK_PLAIN, l.live.uvIndexRadio, 1);
+        return l.live.uvBoard && gIo.uvIndexCalibrated && isfinite(gIo.uvIndex) && num(o, PK_PLAIN, gIo.uvIndex, 1);
     }
-    if (!strcmp(n, "lux"))       return gSrc.lightValid && num(o, PK_PLAIN, gSrc.lightLux);
+    if (!strcmp(n, "lux"))       return l.live.lightValid && num(o, PK_PLAIN, l.live.lightLux);
     if (!strcmp(n, "solar")) {
         const int li = srcResolve(SG_LIGHT);
         return li >= 0 && gRfSensors[li].hasSolar && num(o, PK_PLAIN, gRfSensors[li].solarWm2);

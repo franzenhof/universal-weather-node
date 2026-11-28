@@ -1,21 +1,23 @@
 #include "series.h"
-#include "config.h"
 #include "globals.h"
 #include "psram.h"
 #include "rf_sensors.h"
 #include "sources.h"
+#include "lsensors.h"
 #include <Arduino.h>
 #include <DallasTemperature.h>
 
-extern Config gCfg;
-
-int seriesLimit() { return psramActive() ? SERIES_MAX : 4; }
+int seriesLimit() { return psramActive() ? SERIES_MAX : 4; }   // 4: only if the PSRAM did not start
 
 namespace {
 
-const RfSensorReading* sensorOf(uint32_t id)
+// the received sensor of a logical sensor (lsensors.h), nullptr = not received / not in the table
+const RfSensorReading* sensorOf(const char* internalId)
 {
-    if (!gCfg.rfEn) return nullptr;
+    if (!rfTableOn()) return nullptr;
+    LogicalSensor e;   // copied under the table's lock (lsensors.h)
+    const uint32_t id = lsCopyByInternalId(internalId, e) ? e.radioId : 0;
+    if (!id) return nullptr;
     for (int i = 0; i < RF_MAX_SENSORS; i++)
         if (gRfSensors[i].used && gRfSensors[i].id == id) return &gRfSensors[i];
     return nullptr;
@@ -37,7 +39,7 @@ bool rawValue(const SeriesDef& d, float& v)
         v = bus1Temps[p];
         return true;
     }
-    const RfSensorReading* r = sensorOf(d.rfId);
+    const RfSensorReading* r = sensorOf(d.sensorInternalId);
     if (!r) return false;
     const int i = indexOf(r);
     switch (f) {
@@ -58,6 +60,7 @@ bool rawValue(const SeriesDef& d, float& v)
         case SF_PM10:     if (!r->hasPm10) return false;         v = r->pm10; return true;
         case SF_CO2:      if (!r->hasCo2) return false;          v = r->co2Ppm; return true;
         case SF_EC:       if (!r->hasConductivity) return false; v = r->conductivityUsCm; return true;
+        case SF_LDIST:    if (!r->hasDistance) return false;     v = r->distanceMm; return true;
         case SF_BATT:     if (!r->batteryMv) return false;       v = r->batteryMv / 1000.0f; return true;
         case SF_SUPERCAP: if (!r->hasSupercap) return false;     v = r->supercapV; return true;
         default:          return false;
@@ -65,7 +68,8 @@ bool rawValue(const SeriesDef& d, float& v)
 }
 
 // lightning counter of the previous cycle per slot (-1 = none yet), and whose
-int16_t  prevCount[SERIES_MAX] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+int16_t  prevCount[SERIES_MAX];   // set to -1 by seriesCycle() for unused slots (zero-init: "0" would count once)
+bool     prevInit = false;
 uint32_t prevKey[SERIES_MAX]   = {};
 
 } // namespace
@@ -75,13 +79,16 @@ bool seriesValueNow(const SeriesDef& d, float& v)
     return d.used() && rawValue(d, v);
 }
 
-void seriesCycleValues(float v[SERIES_MAX], bool ok[SERIES_MAX])
+void seriesCycle()
 {
+    float v[SERIES_MAX];
+    bool  ok[SERIES_MAX];
     const int lim = seriesLimit();
+    if (!prevInit) { for (int i = 0; i < SERIES_MAX; i++) prevCount[i] = -1; prevInit = true; }
     for (int i = 0; i < SERIES_MAX; i++) {
         ok[i] = false;
         v[i] = 0.0f;
-        const SeriesDef d = gCfg.series[i];   // a copy: the web task may change it meanwhile
+        const SeriesDef d = seriesDefAt(i);   // a copy: the web task may change it meanwhile
         if (i >= lim || !d.used()) { prevCount[i] = -1; continue; }
         float x;
         const bool have = rawValue(d, x);
@@ -94,4 +101,5 @@ void seriesCycleValues(float v[SERIES_MAX], bool ok[SERIES_MAX])
         if (prevCount[i] >= 0) { ok[i] = true; v[i] = (float)((cur - prevCount[i]) & 0xFF); }
         prevCount[i] = (int16_t)cur;
     }
+    seriesSetNow(v, ok);
 }

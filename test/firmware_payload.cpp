@@ -1,3 +1,4 @@
+#include "heltec_board.h"
 #include "lora_payload.h"
 #include "board_io.h"
 #include "globals.h"
@@ -23,9 +24,9 @@ static const uint8_t* lppFind(uint8_t ch, uint8_t type)
 
 int main()
 {
-    gCfg.pcbVersion=20;
+    gCfg.pcbVersion=20; gBoard.pcb=true;
     gCfg.windEn=gCfg.rainEn=0;
-    gIo.wind2SpeedMs=4.56f;gIo.wind2GustMs=9.87f;gIo.wind2DirDeg=271;
+    gIo.wind2Valid=true;gIo.wind2SpeedMs=4.56f;gIo.wind2GustMs=9.87f;gIo.wind2DirDeg=271;
     for (int mode=1;mode<=2;mode++) {
         gCfg.wind2Mode=mode;
         buildBinaryPacket(BIN_MAX_SIZE);

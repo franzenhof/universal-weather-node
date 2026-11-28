@@ -10,7 +10,7 @@ Host-side project tests (no hardware required, run from the project root):
     Compiles src/payload_binary.cpp together with test/payload_roundtrip.cpp
     for the host (c++/g++/clang++, CXX overrides; skipped if none is found),
     encodes known measurement sets (metric, imperial, minimal, out of range,
-    PCB v2.0 I/O block incl. VE.Direct)
+    PCB V4 Full I/O block incl. VE.Direct)
     and checks that decoder.js returns the same values - and clamps instead
     of wrapping.
 
@@ -38,7 +38,7 @@ Host-side project tests (no hardware required, run from the project root):
     by the normal PlatformIO build. Does not flash or simulate physical timing.
 
 - node test/pcb_protection.test.js
-    Checks PCB v2.0 against tools/pcbgen/design.py: VIN/USB disconnect (J3,
+    Checks the V4 Full (formerly PCB v2.0) against tools/pcbgen/design.py: VIN/USB disconnect (J3,
     JP8), fan high-side switch and gate resistor bank, sensor-rail LDO (U7,
     F3, C35), footprints, nets, fixed positions, silkscreen notes, the SMD BOM
     (47 lines / 135 references), the THT list (8 lines / 22 references) and
@@ -53,7 +53,7 @@ Host-side project tests (no hardware required, run from the project root):
 - node test/api_contract.test.js
     Compiles json_payload.cpp, history.cpp and api_info.cpp with
     test/firmware_api.cpp (five deterministic fixtures: Bresser 7-in-1 +
-    BME280, Ecowitt WS90/WH31/WH51/WH57, PCB v2.0 fully equipped, imperial,
+    BME280, Ecowitt WS90/WH31/WH51/WH57, V4 Full fully equipped, imperial,
     Heltec V4 after boot) and checks /api/data, /api/history and /api/info:
     equal to docs/api/examples/ (numbers within 1e-4), valid against
     docs/api/schemas/ (validator: test/json_schema_lite.js), every emitted

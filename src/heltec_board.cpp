@@ -99,21 +99,17 @@ void boardDetectHardware()
     if (!size) size = ESP.getFlashChipSize();   // JEDEC ID read by the ROM
     gBoard.flashBytes = size;
     gBoard.psramCap   = (int)((REG_READ(EFUSE_RD_MAC_SPI_SYS_4_REG) >> 3) & 3);   // BLK1 bit 131
-    gBoard.detected   = boardDetect(size);
 }
 
-void boardApply(int boardSel)
+void boardLog()
 {
-    gBoard.autoSel = boardSel == BOARD_SEL_AUTO;
-    gBoard.kind    = boardResolve(boardSel, gBoard.detected);
-    dbgSerial.printf("Board: Heltec %s (%s; flash %lu MB, PSRAM cap %d)%s\n", boardName(gBoard.kind),
-                     gBoard.autoSel ? "auto" : "set manually", (unsigned long)(gBoard.flashBytes >> 20), gBoard.psramCap,
-                     boardIsR8() ? " - V4-R8 (ESP32-S3R8) is NOT supported" : "");
+    dbgSerial.printf("Board: flash %lu MB, PSRAM cap %d -> %s\n", (unsigned long)(gBoard.flashBytes >> 20), gBoard.psramCap,
+                     boardSupported() ? "Heltec V4" : boardIsR8() ? "Heltec V4-R8 (ESP32-S3R8) - NOT supported"
+                                                                 : "no Heltec V4 (a V3 needs firmware 2.x) - NOT supported");
 }
 
 void femInit()
 {
-    if (!boardIsV4()) return;
     gpio_hold_dis((gpio_num_t)PIN_VFEM);
     gpio_hold_dis((gpio_num_t)PIN_FEM_CSD);
     pinMode(PIN_VFEM, OUTPUT);

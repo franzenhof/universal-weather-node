@@ -3,6 +3,7 @@
 #include "astro.h"
 #include "globals.h"
 #include "time_sync.h"
+#include "wx_upload.h"
 #include <freertos/FreeRTOS.h>
 #include <math.h>
 #include <stdlib.h>
@@ -37,19 +38,27 @@ int64_t localMidnight(struct tm lt, int addDays)
 
 bool astroLocation(double& lat, double& lon)
 {
-    if (!gCfg.latitude[0] || !gCfg.longitude[0]) return false;
+    // wxUploadLock: the web task (settings) and the GNSS take-over write them
+    wxUploadLock();
     char* e1 = nullptr;
     char* e2 = nullptr;
     lat = strtod(gCfg.latitude, &e1);
     lon = strtod(gCfg.longitude, &e2);
-    return e1 != gCfg.latitude && e2 != gCfg.longitude && fabs(lat) <= 90.0 && fabs(lon) <= 180.0;
+    const bool ok = gCfg.latitude[0] && gCfg.longitude[0] && e1 != gCfg.latitude && e2 != gCfg.longitude;
+    wxUploadUnlock();
+    return ok && fabs(lat) <= 90.0 && fabs(lon) <= 180.0;
 }
 
 void astroCycle()
 {
     double lat, lon;
     struct tm lt;
-    if (!astroLocation(lat, lon) || !localTimeNow(lt)) { dayValid = false; return; }
+    if (!astroLocation(lat, lon) || !localTimeNow(lt)) {
+        portENTER_CRITICAL(&mux);
+        dayValid = false;
+        portEXIT_CRITICAL(&mux);
+        return;
+    }
     const int64_t start = localMidnight(lt, 0);
     if (dayValid && day.dayStart == start && lat == dayLat && lon == dayLon) return;
     AstroDay d;
@@ -63,11 +72,12 @@ bool astroJson(JsonObject o)
 {
     double lat, lon;
     int64_t now;
-    if (!dayValid || !astroLocation(lat, lon) || !epochNow(now)) return false;
     AstroDay d;
-    portENTER_CRITICAL(&mux);
-    d = day;
+    bool valid;
+    portENTER_CRITICAL(&mux);   // the cached day and the location it was computed for
+    valid = dayValid; d = day; lat = dayLat; lon = dayLon;
     portEXIT_CRITICAL(&mux);
+    if (!valid || !epochNow(now)) return false;
     iso(o, "sunrise", d.sunrise);
     iso(o, "sunset", d.sunset);
     iso(o, "civilDawn", d.civilDawn);
@@ -94,7 +104,11 @@ bool astroSunnyByRadiation(float wm2, bool& sunny)
 {
     double lat, lon;
     int64_t now;
-    if (!astroLocation(lat, lon) || !epochNow(now)) return false;
+    bool valid;
+    portENTER_CRITICAL(&mux);   // the location of the cached day (any task, no lock on gCfg)
+    valid = dayValid; lat = dayLat; lon = dayLon;
+    portEXIT_CRITICAL(&mux);
+    if (!valid || !epochNow(now)) return false;
     const double el = astroSunElevation(lat, lon, now);
     sunny = el > 3.0 && wm2 >= 0.4f * astroClearSkyWm2(el);
     return true;

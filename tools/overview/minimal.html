@@ -35,12 +35,12 @@
 </head>
 <body>
 <header>
-  <h1>Minimal wireless build — <span>4 wires</span>, no custom PCB</h1>
-  <p>Heltec V4 / V3 + BME280 + 868 MHz sensors</p>
+  <h1>Minimal wireless build — <span>no custom PCB</span></h1>
+  <p>Heltec V4 + 868 MHz sensors · optional: BME280, GNSS module</p>
 </header>
 
 <div class="card stage">
-<svg viewBox="0 0 1302 640" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 1302 700" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="pcb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b3a47"/><stop offset="1" stop-color="#1c2731"/></linearGradient>
     <linearGradient id="bme" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7a4bb5"/><stop offset="1" stop-color="#5c3591"/></linearGradient>
@@ -57,7 +57,7 @@
   <path d="M146 446 C 180 446, 186 446, 214 446" stroke="#3a4651" stroke-width="7" fill="none" stroke-linecap="round"/>
   <text x="87" y="512" text-anchor="middle" font-size="13" fill="#5d6b78">any phone charger</text>
 
-  <!-- ===== Heltec V3 ===== -->
+  <!-- ===== Heltec V4 ===== -->
   <g filter="url(#sh)">
     <rect x="228" y="326" width="580" height="240" rx="12" fill="url(#pcb)"/>
   </g>
@@ -77,7 +77,7 @@
   <text x="713" y="462" text-anchor="middle" font-size="12" fill="#3d4954">SX1262</text>
   <!-- antenna socket -->
   <circle cx="786" cy="354" r="9" fill="#d9b25c" stroke="#9c7a2e" stroke-width="2"/>
-  <text x="518" y="590" text-anchor="middle" font-size="13" fill="#5d6b78" letter-spacing="1">HELTEC WIFI LORA 32 V3 (V3.1 / V3.2)</text>
+  <text x="518" y="642" text-anchor="middle" font-size="13" fill="#5d6b78" letter-spacing="1">HELTEC WIFI LORA 32 V4 (V4.2 / V4.3)</text>
 
   <!-- top header (3V3 side) -->
   <g id="topHeader"></g>
@@ -97,8 +97,21 @@
   <rect x="448" y="72" width="36" height="36" rx="3" fill="#cfd5da" stroke="#8d99a4"/>
   <circle cx="478" cy="78" r="2.5" fill="#6b7782"/>
   <text x="290" y="88" font-size="16" font-weight="700" fill="#fff">BME280</text>
-  <text x="290" y="106" font-size="12" fill="#e3d6f5">I²C · 3.3 V · 0x76</text>
+  <text x="290" y="106" font-size="12" fill="#e3d6f5">optional · air pressure</text>
+  <text x="290" y="122" font-size="12" fill="#e3d6f5">I²C · 3.3 V · 0x76 / 0x77</text>
   <g id="bmePins"></g>
+
+  <!-- ===== GNSS module (optional) ===== -->
+  <rect x="34" y="62" width="196" height="112" rx="10" fill="#f7f9fa" stroke="#8d99a4" stroke-width="2" stroke-dasharray="7 6"/>
+  <rect x="52" y="82" width="44" height="44" rx="4" fill="#cfd5da" stroke="#8d99a4"/>
+  <text x="74" y="109" text-anchor="middle" font-size="11" fill="#3d4954" font-weight="700">GNSS</text>
+  <text x="108" y="96" font-size="15" font-weight="700" fill="#17212b">GNSS module</text>
+  <text x="108" y="114" font-size="12.5" fill="#5d6b78">optional · Heltec</text>
+  <text x="52" y="150" font-size="12" fill="#5d6b78">time · position · altitude</text>
+  <text x="52" y="166" font-size="12" fill="#5d6b78">plugs into the GNSS connector</text>
+  <path d="M132 174 C 132 280, 180 300, 196 330 S 238 360, 244 372" stroke="#8d99a4" stroke-width="4" fill="none" stroke-dasharray="8 6" stroke-linecap="round"/>
+  <rect x="236" y="372" width="18" height="24" rx="2" fill="#f7f9fa" stroke="#8d99a4"/>
+  <text x="262" y="412" font-size="10" fill="#9fb0bf">GNSS</text>
 
   <!-- ===== wires ===== -->
   <g id="wires" fill="none" stroke-linecap="round"></g>
@@ -107,8 +120,8 @@
   <g transform="translate(560,64)">
     <text x="0" y="0" font-size="13" font-weight="700" fill="#5d6b78" letter-spacing="1.4">WIRING</text>
     <g id="legend"></g>
-    <text x="0" y="150" font-size="12.5" fill="#5d6b78">female–female jumper wires, &lt; 30 cm</text>
-    <text x="0" y="168" font-size="12.5" fill="#5d6b78">or a breadboard — go by the pin labels</text>
+    <text x="0" y="196" font-size="12.5" fill="#5d6b78">female–female jumper wires, &lt; 30 cm;</text>
+    <text x="0" y="214" font-size="12.5" fill="#5d6b78">3V3 / GND top row, 47 / 48 bottom row</text>
   </g>
 
   <!-- ===== wireless sensors ===== -->
@@ -165,14 +178,15 @@
   <text x="986" y="296" text-anchor="middle" font-size="13" fill="#5d6b78">no cable to the node</text>
 
   <!-- caption -->
-  <text x="228" y="612" font-size="13" fill="#5d6b78">Pin labels as printed on the Heltec V3 (the V4 has the same labels). BME280: module pin order varies — connect by label. Keep the BME280 a little away from the warm module (it only provides the air pressure).</text>
+  <text x="228" y="670" font-size="13" fill="#5d6b78">Pin labels as printed on the Heltec V4. BME280 (optional): module pin order varies — connect by label; keep it a little away from the warm module.</text>
+  <text x="228" y="688" font-size="13" fill="#5d6b78">Firmware 4.x: BME280 on 47 / 48 — 41 / 42 belong to the GNSS connector. Without BME280 and GNSS module: no wiring at all.</text>
 </svg>
 </div>
 
 <div class="steps">
   <div class="card step"><b class="n">1</b><div><h4>Flash</h4><p>USB-C cable to the Heltec, flash the firmware once (<code>pio run -t upload</code>). Later updates over Wi-Fi (OTA). The same USB-C socket powers the node.</p></div></div>
-  <div class="card step"><b class="n">2</b><div><h4>Wire</h4><p>Four jumper wires: <code>3V3→VIN</code> <code>GND→GND</code> <code>41→SDA</code> <code>42→SCL</code>. No soldering on the Heltec (pin headers), no resistors.</p></div></div>
-  <div class="card step"><b class="n">3</b><div><h4>Configure</h4><p>Portal / web settings: wind + rain sensor <b>off</b>, wireless sensors <b>on</b> with the matching sensor type, source temperature/humidity = <b>Wireless 1</b>.</p></div></div>
+  <div class="card step"><b class="n">2</b><div><h4>Wire</h4><p>Optional BME280 (air pressure), four jumper wires: <code>3V3→VIN</code> <code>GND→GND</code> <code>47→SDA</code> <code>48→SCL</code>. Optional GNSS module: plug it in. No soldering, no resistors.</p></div></div>
+  <div class="card step"><b class="n">3</b><div><h4>Configure</h4><p>Wi-Fi in the config portal, then the setup wizard: mark your sensor ★. The defaults fit this build (wireless sensors on, <i>Auto (search)</i>).</p></div></div>
 </div>
 
 <div class="card out">
@@ -188,20 +202,20 @@ function el(tag, attrs, parent, text) { const e = document.createElementNS(NS, t
 const topPins = ["GND","3V3","3V3","37","46","45","42","41","40","39","38","1","2","3","4","5","6","7"];
 const bot = ["GND","5V","Ve","Ve","RX","TX","RST","0","36","35","34","33","47","48","26","21","20","19"];
 const X0 = 266, P = 27.4;
-const used = { "GND": "--wgnd", "3V3": "--wscl", "42": "--wscl", "41": "--wsda" };
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const tg = document.getElementById("topHeader"), bg = document.getElementById("botHeader");
 const pinX = {};
 topPins.forEach((n, i) => {
-  const x = X0 + i * P, hot = (i === 0 || i === 1 || n === "41" || n === "42");
+  const x = X0 + i * P, hot = (i === 0 || i === 1);
   el("rect", { x: x - 8, y: 340, width: 16, height: 16, rx: 2, fill: hot ? "#f1c75b" : "#6d7a86" }, tg);
   el("text", { x, y: 376, "text-anchor": "middle", "font-size": 11.5, "font-weight": hot ? 700 : 400, fill: hot ? "#ffffff" : "#8796a3" }, tg, n);
-  if (i === 0) pinX.GND = x; if (i === 1) pinX["3V3"] = x; if (n === "41") pinX["41"] = x; if (n === "42") pinX["42"] = x;
+  if (i === 0) pinX.GND = x; if (i === 1) pinX["3V3"] = x;
 });
 bot.forEach((n, i) => {
-  const x = X0 + i * P;
-  el("rect", { x: x - 8, y: 536, width: 16, height: 16, rx: 2, fill: "#55626e" }, bg);
-  el("text", { x, y: 528, "text-anchor": "middle", "font-size": 11.5, fill: "#6f7e8b" }, bg, n);
+  const x = X0 + i * P, hot = (n === "47" || n === "48");
+  el("rect", { x: x - 8, y: 536, width: 16, height: 16, rx: 2, fill: hot ? "#f1c75b" : "#55626e" }, bg);
+  el("text", { x, y: 528, "text-anchor": "middle", "font-size": 11.5, "font-weight": hot ? 700 : 400, fill: hot ? "#ffffff" : "#6f7e8b" }, bg, n);
+  if (hot) pinX[n] = x;
 });
 // BME280 pins (common GY-BME280 order)
 const bp = ["VIN","GND","SCL","SDA"], bpx = {};
@@ -214,13 +228,23 @@ bp.forEach((n, i) => {
 const wires = [
   { from: "3V3", to: "VIN", c: css("--w3v3"), label: "3V3  →  VIN" },
   { from: "GND", to: "GND", c: css("--wgnd"), label: "GND  →  GND" },
-  { from: "41",  to: "SDA", c: css("--wsda"), label: "41    →  SDA" },
-  { from: "42",  to: "SCL", c: css("--wscl"), label: "42    →  SCL" },
+  { from: "47",  to: "SDA", c: css("--wsda"), label: "47    →  SDA", bottom: true },
+  { from: "48",  to: "SCL", c: css("--wscl"), label: "48    →  SCL", bottom: true },
 ];
 const wg = document.getElementById("wires"), lg = document.getElementById("legend");
 wires.forEach((w, i) => {
-  const x1 = pinX[w.from], y1 = 348, x2 = bpx[w.to], y2 = 168;
-  const d = `M${x1} ${y1} C ${x1} ${y1 - 90 - i * 8}, ${x2} ${y2 + 90 + i * 8}, ${x2} ${y2}`;
+  const x2 = bpx[w.to], y2 = 168;
+  let d;
+  if (w.bottom) {   // from the bottom row around the board's right end (between board and antenna)
+    // SDA (47, the left pin) runs outside SCL all the way, so the two never cross
+    const sda = w.to === "SDA", x1 = pinX[w.from], y1 = 544;
+    const lane = sda ? 834 : 822, yb = sda ? 616 : 604, yh = sda ? 194 : 206, r = 10;
+    d = `M${x1} ${y1} L${x1} ${yb - r} Q ${x1} ${yb}, ${x1 + r} ${yb} L${lane - r} ${yb} Q ${lane} ${yb}, ${lane} ${yb - r} ` +
+        `L${lane} ${yh + r} Q ${lane} ${yh}, ${lane - r} ${yh} L${x2 + r} ${yh} Q ${x2} ${yh}, ${x2} ${yh - r} L${x2} ${y2}`;
+  } else {
+    const x1 = pinX[w.from], y1 = 348;
+    d = `M${x1} ${y1} C ${x1} ${y1 - 90 - i * 8}, ${x2} ${y2 + 90 + i * 8}, ${x2} ${y2}`;
+  }
   el("path", { d, stroke: "#ffffff", "stroke-width": 10 }, wg);
   el("path", { d, stroke: w.c, "stroke-width": 6 }, wg);
   const y = 26 + i * 28;

@@ -1,5 +1,8 @@
+#include "lsensors.h"
+#include "psram_json.h"
 #include "portal.h"
 #include "portal_pages.h"
+#include "http_server.h"
 #include "system_restart.h"
 #include "wind_window.h"
 #include "globals.h"
@@ -68,7 +71,8 @@ static const char OTA_PAGE_HTML[] PROGMEM =
 // Our own portal pages (/update, /calibrate): a PROGMEM template with
 // @N@ = texts[N] (HTML), @jN@ = texts[N] as a JavaScript string, @L@ = the
 // language code; streamed in chunks.
-static void sendI18nTemplate(WebServer& srv, const char* tpl, const TextId* texts, size_t n)
+template <class Srv>
+static void sendI18nTemplate(Srv& srv, const char* tpl, const TextId* texts, size_t n)
 {
     srv.setContentLength(CONTENT_LENGTH_UNKNOWN);
     srv.send(200, "text/html; charset=utf-8", "");
@@ -104,18 +108,21 @@ static void sendI18nTemplate(WebServer& srv, const char* tpl, const TextId* text
 }
 
 // ---- Shared with the web interface (portal_pages.h) ----
-void portalSendDecoder(WebServer& srv)
+template <class Srv>
+void portalSendDecoder(Srv& srv)
 {
     srv.sendHeader("Content-Disposition", "attachment; filename=\"weather-node-decoder.js\"");
     srv.send_P(200, "application/javascript; charset=utf-8", DECODER_JS);
 }
 
-void portalSendCalibratePage(WebServer& srv)
+template <class Srv>
+void portalSendCalibratePage(Srv& srv)
 {
     sendI18nTemplate(srv, CALIBRATE_PAGE_HTML, CALIBRATE_TEXTS, sizeof(CALIBRATE_TEXTS) / sizeof(CALIBRATE_TEXTS[0]));
 }
 
-void portalSendCalibrateSample(WebServer& srv)
+template <class Srv>
+void portalSendCalibrateSample(Srv& srv)
 {
     // Heltec V4: GPIO2 is the RF front end's enable - never read it as the vane
     int adc = boardPcbAllowed() ? adcAverage(windDirPin()) : 0;
@@ -124,14 +131,15 @@ void portalSendCalibrateSample(WebServer& srv)
     srv.send(200, "application/json", buf);
 }
 
-bool portalHandleCalibrateSave(WebServer& srv)
+template <class Srv>
+bool portalHandleCalibrateSave(Srv& srv)
 {
-    JsonDocument doc;
+    JsonDocument doc(psramJsonAllocator());
     if (deserializeJson(doc, srv.arg("plain"))) {
         srv.send(400, "text/plain", "Invalid JSON");
         return false;
     }
-    // on the heap: Config is ~7 KB, this also runs on the 8 KB web task (web_api.cpp)
+    // on the heap: Config is ~7 KB, this also runs on the web server's 12 KB task (http_server.cpp)
     std::unique_ptr<Config> owner(new (std::nothrow) Config());
     if (!owner) {
         srv.send(503, "text/plain", "low memory, try again");
@@ -163,6 +171,16 @@ bool portalHandleCalibrateSave(WebServer& srv)
     srv.send(200, "text/plain; charset=utf-8", TF(T_cal_saved, String(n)));
     return true;
 }
+
+// both servers: the portal's WebServer, the web interface's HttpServer
+#define PORTAL_PAGES_FOR(S) \
+    template void portalSendDecoder<S>(S&); \
+    template void portalSendCalibratePage<S>(S&); \
+    template void portalSendCalibrateSample<S>(S&); \
+    template bool portalHandleCalibrateSave<S>(S&);
+PORTAL_PAGES_FOR(WebServer)
+PORTAL_PAGES_FOR(HttpServer)
+#undef PORTAL_PAGES_FOR
 
 void runConfigPortal(Config& cfg)
 {
@@ -234,8 +252,12 @@ void runConfigPortal(Config& cfg)
     // above the same settling time, that race is still there; the softAP can
     // end up in a half-initialized state (answers ARP/ping, but the web
     // server never actually starts accepting connections on port 80).
-    WiFi.disconnect();
-    delay(200);
+    // (Wi-Fi not started yet, e.g. the first start: nothing to tear down -
+    // Arduino-ESP32 3.x logs an error for a disconnect without a driver.)
+    if (WiFi.getMode() != WIFI_OFF) {
+        WiFi.disconnect();
+        delay(200);
+    }
 
     setCpuFrequencyMhz(240);
     display.displayOn();
@@ -243,7 +265,7 @@ void runConfigPortal(Config& cfg)
     display.drawString(0, 0, "Starting config portal...");
     display.display();
 
-    char b_dev[17], b_join[17], b_region[8], b_pcb[4], b_alt[8], b_uplink[8], b_sample[4], b_mqttsec[8], b_lorawagg[2], b_mqttwagg[2], b_rfen[2], b_rfproto[3], b_windoff[6], b_windunit[2], b_debug[2], b_cpu[4], b_payfmt[2], b_unitsys[2];
+    char b_dev[17], b_join[17], b_region[8], b_alt[8], b_uplink[8], b_sample[4], b_mqttsec[8], b_lorawagg[2], b_mqttwagg[2], b_rfen[2], b_rfproto[3], b_windoff[6], b_windunit[2], b_debug[2], b_cpu[4], b_payfmt[2], b_unitsys[2];
     char b_rainmmtip[12], b_windmspp[12], b_winddirtyp[2];
     char b_loraen[2], b_lowpower[2], b_vanesave[2];
     itoa(cur.loraEn,          b_loraen,  10);
@@ -252,7 +274,6 @@ void runConfigPortal(Config& cfg)
     uint64ToHex(cur.devEui, b_dev, sizeof(b_dev));
     uint64ToHex(cur.joinEui, b_join, sizeof(b_join));
     strlcpy(b_region, cur.region, sizeof(b_region));
-    itoa(cur.pcbVersion,       b_pcb,     10);
     itoa(cur.altitudeM,        b_alt,     10);
     itoa(cur.uplinkIntervalSec, b_uplink,  10);
     itoa(cur.sampleSec,        b_sample,  10);
@@ -275,7 +296,7 @@ void runConfigPortal(Config& cfg)
     dtostrf(cur.windMsPerPps,  1, 4, b_windmspp);
     itoa(cur.windDirSensorType, b_winddirtyp, 10);
 
-    // PCB v2.0 I/O block fields
+    // V4 Full I/O block fields
     char b_wind2[2], b_wind2off[6];
     itoa(cur.wind2Mode,         b_wind2,    10);
     itoa(cur.wind2DirOffsetDeg, b_wind2off, 10);
@@ -360,12 +381,6 @@ void runConfigPortal(Config& cfg)
     WiFiManagerParameter p_key    ("key",      T(T_pt_appkey_32_hex_chars_leave), "", 33,
                                    "placeholder='(unchanged)' autocomplete='off'");
     WiFiManagerParameter p_region ("region",   T(T_pt_lorawan_region_eu868_us915_au915), b_region, 8);
-    WiFiManagerParameter p_pcb    ("pcbver",   T(T_pt_pcb_revision_12_rev1_2), b_pcb, 3);
-    char b_board[2], l_board[160];
-    itoa(cur.boardSel, b_board, 10);
-    strlcpy(l_board, (TF(T_pt_board, boardName(gBoard.detected), boardName(gBoard.kind)) +
-                      (boardIsR8() ? String(T(T_pt_v4_r8_not_supported)) : String())).c_str(), sizeof(l_board));
-    WiFiManagerParameter p_board  ("board",    l_board, b_board, 2);
     WiFiManagerParameter p_alt    ("altitude", T(T_pt_altitude_above_sea_level_in),       b_alt,     6);
     WiFiManagerParameter p_uplink ("uplinksec",T(T_pt_lorawan_measurement_interval_in_s),  b_uplink, 7);
     WiFiManagerParameter p_sample ("samplesec",T(T_pt_wind_sample_interval_in_s),            b_sample, 4);
@@ -377,8 +392,6 @@ void runConfigPortal(Config& cfg)
     // Free-text fields: shown HTML-escaped (htmlAttr), so the field length is
     // at least the escaped length; Config's own buffer limits the saved text.
     auto shownLen = [](int maxLen, const String& shown) { return max(maxLen, (int)shown.length()); };
-    const String e_rfids = htmlAttr(cur.rfIds);
-    WiFiManagerParameter p_rfids   ("rfids",   T(T_pt_wireless_sensors_mine_hex_ids), e_rfids.c_str(), shownLen(sizeof(cur.rfIds) - 1, e_rfids));
     const String e_rfignore = htmlAttr(cur.rfIgnore);
     WiFiManagerParameter p_rfignore("rfignore", T(T_pt_hidden_wireless_sensors_hex_ids), e_rfignore.c_str(), shownLen(sizeof(cur.rfIgnore) - 1, e_rfignore));
     char b_rfonly[4];
@@ -410,10 +423,10 @@ void runConfigPortal(Config& cfg)
     WiFiManagerParameter p_cpu    ("cpufreq",  T(T_pt_cpu_frequency_in_mhz_80),             b_cpu,     4);
     WiFiManagerParameter p_payfmt ("payfmt",   T(T_pt_lorawan_payload_format_1_compact),
                                    b_payfmt, 2);
-    // PCB v2.0 I/O block, all off by default; ignored on Rev 1.2/1.3.
-    WiFiManagerParameter p_io_section(gIo.hwIdDetected
-        ? T(T_pt_pcb_v2_0_inputs_outputs)
-        : T(T_pt_pcb_v2_0_inputs_outputs2));
+    // V4 Full I/O block, all off by default; ignored on the V4 Light / without PCB.
+    WiFiManagerParameter p_io_section(boardPcbFull()
+        ? T(T_pt_v4_full_inputs_outputs)
+        : T(T_pt_v4_full_inputs_outputs2));
     WiFiManagerParameter p_auxainen  ("auxainen",   T(T_pt_aux_analog_input_gpio4_0),                    b_auxainen,   2);
     WiFiManagerParameter p_auxainscale("auxainscale",T(T_pt_aux_analog_scale_1_direct), b_auxainscale, 11);
     WiFiManagerParameter p_auxpulseen("auxpulseen", T(T_pt_aux_pulse_counter_gpio48_0),                  b_auxpulseen, 2);
@@ -488,8 +501,12 @@ void runConfigPortal(Config& cfg)
     WiFiManagerParameter p_loxsec   ("loxsec",    T(T_pt_loxone_interval_in_s_0), b_loxsec, 7);
 
     WiFiManager wm;
-    const char* menu[] = { "wifi", "info", "custom", "sep", "exit" };
-    wm.setMenu(menu, 5);
+    // The node's parameters on their own page ("Setup", /param): "Configure
+    // WiFi" shows only the network (user 2026-11-28: the long form under the
+    // Wi-Fi was confusing); saving either page ends the portal session.
+    wm.setParamsPage(true);
+    const char* menu[] = { "wifi", "param", "info", "custom", "sep", "exit" };
+    wm.setMenu(menu, 6);
     // kept alive until the portal ends (WiFiManager stores the pointer)
     static String menuHtml;
     menuHtml = String("<div style='margin:0.75rem 0 1rem 0;'><div style='font-size:0.85rem;opacity:0.75;margin:0 0 0.25rem 0;'>") +
@@ -544,6 +561,8 @@ void runConfigPortal(Config& cfg)
                 sendI18nTemplate(*wm.server, OTA_PAGE_HTML, OTA_TEXTS, sizeof(OTA_TEXTS) / sizeof(OTA_TEXTS[0]));
             });
             wm.server->on("/u", HTTP_POST, [&wm]() {
+                // the whole request is in: only now may a checked image become the boot one
+                otaUploadCommit();
                 const OtaOutcome o = otaUploadOutcome();
                 if (o == OTA_OUT_NOT_AUTHORIZED || (o == OTA_OUT_NONE && otaPass[0])) {
                     otaUploadReset();
@@ -603,13 +622,8 @@ void runConfigPortal(Config& cfg)
         if (strlen(p_join.getValue()) == 16) c.joinEui = hexToUint64(p_join.getValue());
         if (strlen(p_key.getValue())  == 32) hexToBytes(p_key.getValue(), c.appKey, 16);
         normalizeRegionInput(p_region.getValue(), c.region, sizeof(c.region));
-        int pcb = atoi(p_pcb.getValue());
-        c.pcbVersion       = (pcb == PCB_REV_1_2 || pcb == PCB_REV_2_0) ? pcb : PCB_REV_1_3;
-        if (gIo.hwIdDetected) c.pcbVersion = PCB_REV_2_0;   // the ID divider wins
-        int board = atoi(p_board.getValue());
-        if (boardSelValid(board)) c.boardSel = board;
 
-        // PCB v2.0 I/O block - out-of-range input keeps the previous value.
+        // V4 Full I/O block - out-of-range input keeps the previous value.
         auto intIn = [](WiFiManagerParameter& p, int lo, int hi, int keep) {
             const char* v = p.getValue();
             if (!v[0]) return keep;
@@ -660,9 +674,9 @@ void runConfigPortal(Config& cfg)
             return keep;
         };
         c.uvEn = uvBool(p_uven, c.uvEn, "UV sensor enable");
-        if (c.uvEn && c.pcbVersion < PCB_REV_2_0) {
+        if (c.uvEn && c.pcbVersion != PCB_REV_V4_FULL) {
             c.uvEn = 0;
-            dbgSerial.println("Config portal: UV sensor rejected on Rev 1.x; PCB v2.0 required.");
+            dbgSerial.println("Config portal: UV sensor rejected; PCB V4 Full required.");
         }
         c.uvAinScale = uvFloat(p_uvscale, c.uvAinScale, 1.0f, 5.0f, "UV divider scale");
         c.uvIndexEn = uvBool(p_uvindexen, c.uvIndexEn, "UV index enable");
@@ -682,7 +696,6 @@ void runConfigPortal(Config& cfg)
         { int v = atoi(p_rfen.getValue()); c.rfEn = v == RF_RADIO_SX1262 ? RF_RADIO_SX1262 : RF_RADIO_OFF; }
         { int v = atoi(p_rfproto.getValue()); if (rfProtoValid(v)) c.rfProto = v; }
         if (paramsSubmitted) {
-            strlcpy(c.rfIds, p_rfids.getValue(), sizeof(c.rfIds));
             strlcpy(c.rfIgnore, p_rfignore.getValue(), sizeof(c.rfIgnore));
             int v = atoi(p_rfonly.getValue());
             if (v == 0 || v == 1) c.rfOnlyMine = v;
@@ -691,7 +704,13 @@ void runConfigPortal(Config& cfg)
             const char* p = p_srcs.getValue();
             for (int i = 0; i < (int)sizeof(c.srcSel) && *p; i++) {
                 int v = atoi(p);
-                if (srcSelValid(v)) c.srcSel[i] = (uint8_t)v;
+                if (srcSelValid(v) && c.srcSel[i] != (uint8_t)v) {
+                    c.srcSel[i] = (uint8_t)v;
+                    // a new number chosen here: bound to the ★ sensor it means now (srcBindSel())
+                    const int slot = srcSelSlot(v);
+                    if (slot >= 0 && slot < gLogicalSensors.count()) strlcpy(c.sourceInternalId[i], gLogicalSensors.s[slot].internalId, sizeof(c.sourceInternalId[i]));
+                    else c.sourceInternalId[i][0] = '\0';
+                }
                 while (*p && *p != ',') p++;
                 if (*p == ',') p++;
             }
@@ -839,13 +858,13 @@ void runConfigPortal(Config& cfg)
     wm.addParameter(&p_basic_section);
     wm.addParameter(&p_uilang);
     wm.addParameter(&p_devname);  wm.addParameter(&p_alt);
-    wm.addParameter(&p_rfen);     wm.addParameter(&p_rfproto); wm.addParameter(&p_rfids); wm.addParameter(&p_rfignore); wm.addParameter(&p_rfonly);
+    wm.addParameter(&p_rfen);     wm.addParameter(&p_rfproto); wm.addParameter(&p_rfignore); wm.addParameter(&p_rfonly);
     wm.addParameter(&p_unitsys);  wm.addParameter(&p_windunit);
 
     wm.addParameter(&p_board_section);
     wm.addParameter(&p_winden);   wm.addParameter(&p_rainen);  wm.addParameter(&p_rainpersist);
     wm.addParameter(&p_srcs);
-    wm.addParameter(&p_pcb);      wm.addParameter(&p_board);      wm.addParameter(&p_uplink);
+    wm.addParameter(&p_uplink);
     wm.addParameter(&p_sample);   wm.addParameter(&p_lipo);    wm.addParameter(&p_debug); wm.addParameter(&p_cpu);
 
     wm.addParameter(&p_cal_section);
@@ -893,6 +912,21 @@ void runConfigPortal(Config& cfg)
     // saved via setSaveParamsCallback survives; only later, unsaved edits
     // in an open-but-not-submitted form are lost.
     wm.setConfigPortalTimeout(180);
+
+    // "Save" on the Wi-Fi page always ends the portal and the node restarts -
+    // also when the network is out of range or the password is wrong (it is
+    // stored and tried again; PRG 3 s opens the portal again). Without this
+    // the portal kept running after a failed connect and the page just stood
+    // there (user 2026-11-28). Both forms get a "Back" button to the start
+    // page, and their submit button says what it does.
+    wm.setBreakAfterConfig(true);
+    static String headHtml;
+    headHtml = String("<script>document.addEventListener('DOMContentLoaded',function(){"
+               "var f=document.querySelector(\"form[action='wifisave'],form[action='paramsave']\");if(!f)return;"
+               "var b=f.querySelector(\"button[type='submit']\");if(b)b.textContent='") + T(T_pt_save_restart) + "';"
+               "var k=document.createElement('form');k.action='/';k.method='get';"
+               "k.innerHTML='<br/><button type=\"submit\">" + T(T_pt_back) + "</button>';f.parentNode.insertBefore(k,f.nextSibling);});</script>";
+    wm.setCustomHeadElement(headHtml.c_str());
 
     // Update display once the AP is up and the IP address is known
     wm.setAPCallback([](WiFiManager*) {

@@ -1,30 +1,52 @@
 #include "series_def.h"
+#include "lsensors.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-//                                 key        unit      step   dec agg      temp   board
+//                                 key        unit      step   dec agg      temp   board  HA device class
 const SeriesFieldInfo SERIES_FIELDS[SF_COUNT] = {
-    /* SF_TEMP     */ { "temp",     "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  false },
-    /* SF_HUM      */ { "hum",      "%",        1.0f,  0, SA_MEAN, false, false },
-    /* SF_MOIST    */ { "moist",    "%",        1.0f,  0, SA_MEAN, false, false },
-    /* SF_LEAF     */ { "leaf",     "%",        1.0f,  0, SA_MEAN, false, false },
-    /* SF_STRIKES  */ { "strikes",  "",         1.0f,  0, SA_SUM,  false, false },
-    /* SF_DIST     */ { "dist",     "km",       1.0f,  0, SA_MIN,  false, false },
-    /* SF_PM25     */ { "pm25",     "\xC2\xB5g/m\xC2\xB3", 1.0f, 0, SA_MEAN, false, false },
-    /* SF_PM10     */ { "pm10",     "\xC2\xB5g/m\xC2\xB3", 1.0f, 0, SA_MEAN, false, false },
-    /* SF_CO2      */ { "co2",      "ppm",      1.0f,  0, SA_MEAN, false, false },
-    /* SF_EC       */ { "ec",       "\xC2\xB5S/cm", 1.0f, 0, SA_MEAN, false, false },
-    /* SF_PRESS    */ { "press",    "hPa",      0.1f,  1, SA_MEAN, false, false },
-    /* SF_LUX      */ { "lux",      "lx",       10.0f, 0, SA_MEAN, false, false },
-    /* SF_UV       */ { "uv",       "",         0.1f,  1, SA_MEAN, false, false },
-    /* SF_BATT     */ { "batt",     "V",        0.01f, 2, SA_MEAN, false, false },
-    /* SF_SUPERCAP */ { "supercap", "V",        0.01f, 2, SA_MEAN, false, false },
-    /* SF_DS1      */ { "ds1",      "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  true  },
-    /* SF_DS2      */ { "ds2",      "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  true  },
-    /* SF_DS3      */ { "ds3",      "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  true  },
+    /* SF_TEMP     */ { "temp",     "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  false, "temperature" },
+    /* SF_HUM      */ { "hum",      "%",        1.0f,  0, SA_MEAN, false, false, "humidity" },
+    /* SF_MOIST    */ { "moist",    "%",        1.0f,  0, SA_MEAN, false, false, "moisture" },
+    /* SF_LEAF     */ { "leaf",     "%",        1.0f,  0, SA_MEAN, false, false, nullptr },
+    /* SF_STRIKES  */ { "strikes",  "",         1.0f,  0, SA_SUM,  false, false, nullptr },
+    /* SF_DIST     */ { "dist",     "km",       1.0f,  0, SA_MIN,  false, false, "distance" },
+    /* SF_PM25     */ { "pm25",     "\xC2\xB5g/m\xC2\xB3", 1.0f, 0, SA_MEAN, false, false, "pm25" },
+    /* SF_PM10     */ { "pm10",     "\xC2\xB5g/m\xC2\xB3", 1.0f, 0, SA_MEAN, false, false, "pm10" },
+    /* SF_CO2      */ { "co2",      "ppm",      1.0f,  0, SA_MEAN, false, false, "carbon_dioxide" },
+    /* SF_EC       */ { "ec",       "\xC2\xB5S/cm", 1.0f, 0, SA_MEAN, false, false, "conductivity" },
+    /* SF_PRESS    */ { "press",    "hPa",      0.1f,  1, SA_MEAN, false, false, "pressure" },
+    /* SF_LUX      */ { "lux",      "lx",       10.0f, 0, SA_MEAN, false, false, "illuminance" },
+    /* SF_UV       */ { "uv",       "",         0.1f,  1, SA_MEAN, false, false, nullptr },
+    /* SF_BATT     */ { "batt",     "V",        0.01f, 2, SA_MEAN, false, false, "voltage" },
+    /* SF_SUPERCAP */ { "supercap", "V",        0.01f, 2, SA_MEAN, false, false, "voltage" },
+    /* SF_DS1      */ { "ds1",      "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  true,  "temperature" },
+    /* SF_DS2      */ { "ds2",      "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  true,  "temperature" },
+    /* SF_DS3      */ { "ds3",      "\xC2\xB0" "C", 0.1f,  1, SA_MEAN, true,  true,  "temperature" },
+    /* SF_LDIST    */ { "distance", "mm",       1.0f,  0, SA_MEAN, false, false, "distance" },
 };
+
+const char* const SERIES_AGG_KEYS[SA_COUNT] = { "mean", "sum", "min", "max" };
+
+int seriesAggByKey(const char* key)
+{
+    for (int i = 0; key && i < SA_COUNT; i++)
+        if (!strcmp(SERIES_AGG_KEYS[i], key)) return i;
+    return -1;
+}
+
+uint8_t seriesAgg(const SeriesDef& d)
+{
+    if (d.field >= SF_COUNT) return SA_MEAN;
+    return d.agg < SA_COUNT ? d.agg : SERIES_FIELDS[d.field].agg;
+}
+
+void seriesSetAgg(SeriesDef& d, uint8_t agg)
+{
+    d.agg = (agg >= SA_COUNT || (d.field < SF_COUNT && agg == SERIES_FIELDS[d.field].agg)) ? (uint8_t)SA_DEFAULT : agg;
+}
 
 int seriesFieldByKey(const char* key)
 {
@@ -63,8 +85,9 @@ size_t seriesPack(const SeriesDef defs[SERIES_MAX], char* out, size_t len)
     out[0] = '\0';
     for (int i = 0; i < SERIES_MAX; i++) {
         const SeriesDef& d = defs[i];
-        int w = d.used() ? snprintf(out + n, len - n, "%s%s|%08lX|%s", i ? "\n" : "", d.name, (unsigned long)d.rfId,
-                                    SERIES_FIELDS[d.field].key)
+        const bool own = d.used() && d.agg < SA_COUNT && d.agg != SERIES_FIELDS[d.field].agg;
+        int w = d.used() ? snprintf(out + n, len - n, "%s%s|%s|%s%s%s", i ? "\n" : "", d.name, d.sensorInternalId[0] ? d.sensorInternalId : "B",
+                                    SERIES_FIELDS[d.field].key, own ? "|" : "", own ? SERIES_AGG_KEYS[d.agg] : "")
                          : snprintf(out + n, len - n, "%s", i ? "\n" : "");
         if (w < 0 || n + (size_t)w >= len) { out[n] = '\0'; return n; }
         n += (size_t)w;
@@ -89,14 +112,16 @@ void seriesUnpack(const char* s, SeriesDef defs[SERIES_MAX])
         if (a && b) {
             *a = '\0';
             *b = '\0';
-            char* e = nullptr;
-            const unsigned long id = strtoul(a + 1, &e, 16);
+            char* c = strchr(b + 1, '|');   // the aggregation, if not the default
+            if (c) *c = '\0';
             const int f = seriesFieldByKey(b + 1);
             SeriesDef d;
             seriesCleanName(line, d.name, sizeof(d.name));
-            d.rfId = (uint32_t)id;
+            if (lsIsInternalId(a + 1)) memcpy(d.sensorInternalId, a + 1, sizeof(d.sensorInternalId));   // anything else: a board probe (or an old radio ID: dropped by used())
             d.field = f < 0 ? SF_COUNT : (uint8_t)f;
-            if (e && *e == '\0' && d.used()) defs[i] = d;
+            const int g = c ? seriesAggByKey(c + 1) : -1;
+            seriesSetAgg(d, g < 0 ? (uint8_t)SA_DEFAULT : (uint8_t)g);   // an unknown one: the default
+            if (d.used()) defs[i] = d;
         }
         p = end ? end + 1 : nullptr;
     }
@@ -111,9 +136,22 @@ uint32_t seriesKey(const SeriesDef& d)
         for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 16777619u; }
     };
     mix(d.name, strlen(d.name));
-    mix(&d.rfId, sizeof(d.rfId));
+    if (d.sensorInternalId[0]) mix(d.sensorInternalId, strlen(d.sensorInternalId));
+    else { const uint32_t board = 0; mix(&board, sizeof(board)); }   // as before A5c: a board series keeps its history
     mix(&d.field, 1);
+    if (d.field < SF_COUNT && d.agg < SA_COUNT && d.agg != SERIES_FIELDS[d.field].agg) mix(&d.agg, 1);   // the default: keys as before
     return h ? h : 1;
+}
+
+void seriesHaEntity(int slot, const SeriesDef& d, bool fahrenheit, SeriesHaEntity& out)
+{
+    const SeriesFieldInfo& fi = SERIES_FIELDS[d.field < SF_COUNT ? d.field : SF_MOIST];
+    snprintf(out.key, sizeof(out.key), "series_%d", slot + 1);
+    snprintf(out.tmpl, sizeof(out.tmpl),
+             "{{ (value_json.series | default([]) | selectattr('slot', 'eq', %d) | map(attribute='value') | first) | default(None) }}",
+             slot + 1);
+    out.unit = fi.isTemp ? (fahrenheit ? "\xC2\xB0" "F" : "\xC2\xB0" "C") : fi.unit;
+    out.deviceClass = fi.haClass;
 }
 
 int16_t seriesEncode(uint8_t field, float v)

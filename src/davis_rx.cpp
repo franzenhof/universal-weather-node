@@ -1,11 +1,14 @@
 #include "davis_rx.h"
+#include "status_led.h"
 #include "rf_trace.h"
 #include "davis_diag.h"
 #include "globals.h"
 #include "rf_sensors.h"
 #include "serial_log.h"
 #include "sources.h"
+#include "system_restart.h"
 #include "radio_board.h"   // the shared SX1262 (Heltec V4 front end handled there)
+#include "vs_run.h"        // virtual sensors: frames in the gap after a packet
 #include <DavisDecoder.h>
 #include <DavisHopper.h>
 #include <DavisRadio.h>
@@ -95,7 +98,7 @@ void IRAM_ATTR packetHook()
 
 void send(const Rec& r)
 {
-    if (xQueueSend(queue, &r, 0) != pdTRUE) queueDrops++;
+    if (xQueueSend(queue, &r, 0) != pdTRUE) queueDrops = queueDrops + 1;
 }
 
 void receiveTask(void*)
@@ -142,6 +145,7 @@ void receiveTask(void*)
             uint8_t b[DAVIS_PACKET_LEN];
             float rssi;
             int64_t t;
+            readOne = true;
             if (dr.read(b, rssi, t)) {
                 rec.kind = REC_PACKET;
                 rec.atUs = t;
@@ -149,8 +153,25 @@ void receiveTask(void*)
                 memcpy(rec.air, b, sizeof(b));
                 rec.r = hop.onPacket(b, t, s.model);
                 send(rec);
+                // Virtual sensors (C5): only after a packet that confirmed the
+                // hop prediction - never after a miss, while searching or in raw
+                // capture. The hopper already points at the next channel.
+                if (rec.r.cls == DAVIS_PKT_ACCEPTED && rec.r.hasTiming && hop.state() == DAVIS_ST_TRACK) {
+                    VsDavisGap g;
+                    g.confirmed = true;
+                    g.packetUs  = t;
+                    g.nextUs    = hop.nextExpectedUs();
+                    g.guardUs   = (uint32_t)s.hop.guardMs * 1000;
+                    const int64_t t0 = esp_timer_get_time();
+                    if (vsDavisSendInGap(g) > 0) {   // the radio left the Davis setup
+                        st = dr.begin(hop.tuneMHz(), s.rxBw / 10.0f);
+                        tuned = st == RADIOLIB_ERR_NONE ? hop.tuneMHz() : NAN;
+                        vsDavisNoteGapUse((uint32_t)(esp_timer_get_time() - t0));
+                        readOne = false;            // receiving again on the next channel
+                        if (st != RADIOLIB_ERR_NONE) continue;   // retried by the radio-error path
+                    }
+                }
             }
-            readOne = true;
         }
         now = esp_timer_get_time();
         for (DavisEvent e = hop.poll(now); e.kind != DAVIS_EV_NONE; e = hop.poll(now)) {
@@ -277,6 +298,7 @@ void storeValues(const DavisPacket& p, float rssi)
     r.rssi      = rssi;
     r.batteryOk = !p.batteryLow;
     r.packets++;
+    statusLedPacket(true);              // Davis mode: the ISS is the station
 
     RfValues v;
     v.ok = RF_VAL_WIND;                    // every packet: speed (integer mph) and direction
@@ -523,14 +545,16 @@ void davisRxLoop()
 void davisRxStop()
 {
     if (!owned) return;
+    // Cooperative stop: the task checks stopRequest at least every 100 ms and
+    // after each radio call; a radio call on a hung chip can take a few
+    // seconds (RadioLib BUSY / SPI timeouts, several per begin()). Deleting it
+    // from here could leave the SPI bus or `lock` taken for good, so a task
+    // that does not end within DAVIS_STOP_WAIT_MS restarts the node instead.
+    constexpr uint32_t DAVIS_STOP_WAIT_MS = 10000;
     stopRequest = true;
     if (task) xTaskNotifyGive(task);
-    for (int i = 0; i < 100 && taskRunning; i++) vTaskDelay(pdMS_TO_TICKS(10));
-    if (taskRunning) {   // stuck in a radio call - should not happen; take it down
-        vTaskDelete(task);
-        taskRunning = false;
-        radio.standby();
-    }
+    for (uint32_t waitedMs = 0; waitedMs < DAVIS_STOP_WAIT_MS && taskRunning; waitedMs += 10) vTaskDelay(pdMS_TO_TICKS(10));
+    if (taskRunning) systemRestart("Davis task did not stop");
     task = nullptr;
     DavisRadio::setPacketHook(nullptr);
     if (queue) xQueueReset(queue);

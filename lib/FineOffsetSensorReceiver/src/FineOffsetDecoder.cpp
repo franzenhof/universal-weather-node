@@ -43,14 +43,15 @@ const Family FAMILIES[] = {
     { FO_FAMILY_WH46,  21, "WH46" },
     { FO_FAMILY_WH55,  10, "WH55" },   // followed by 2 bytes of unknown meaning (not checked)
     { FO_FAMILY_WH52,  24, "WH52" },
-    // LDS01: 19-byte frames (CRC-8 at byte 17, sum at 18) every 80 s, seen in
-    // a forum radio trace (rc.8, 2026-11-21); the field meanings are not
-    // confirmed yet - recognised and listed, no values
+    // LDS01: 19-byte frames (CRC-8 at byte 17, sum at 18) every 80 s, about
+    // every 10 s for a while after a change of distance
     { FO_FAMILY_LDS01, 19, "LDS01" },
     // Radio-clock time of a WH31 with a time receiver (rtl_433 ambientweather_wh31e.c,
     // "RCC", type 0x52; seen there from a WWVB WH31E, the DCF77 version - e.g. DNT -
     // is assumed to send the same): YY II UU YY MM DD HH mm SS CC XX, date and
-    // time in BCD. Sent after a battery change and when the clock syncs.
+    // time in BCD. Sent after a battery change and then only about once a day at
+    // night, after 02:00 local time (forum, SonneKF 2026-11-24: the DCF77 WH31
+    // synced at 02:07) - too infrequent to be a node's sole time source.
     { FO_FAMILY_RCC,   11, "RCC" },
 };
 
@@ -131,11 +132,18 @@ void decodeWh65(const uint8_t* b, size_t len, FoFrame& o, bool wh24Units)
     if (uv != 0xFFFF) { o.hasUv = true; o.uvIndex = uvIndexFromRaw(uv); }
     uint32_t light = be24(b + 12);
     if (light != 0xFFFFFF) { o.hasLight = true; o.lightLux = light * 0.1f; }
-    // WS69: 8 more bytes with a 17-bit pressure value and its own CRC + sum
+    // WS69: 8 more bytes with a 17-bit pressure value (Pa) and its own CRC +
+    // sum. In the fixed-length read the bytes after a WH65 frame are noise
+    // that passes both checks about once in 65536 frames, so the pressure must
+    // also be "none" (0x1FFFF) or a station pressure of 300..1100 hPa (as for
+    // the WH25); the other extension bytes have no known meaning to check.
     if (len >= 25 && checkFrame(b, 25)) {
-        if (!wh24Units) o.model = "WS69";
-        uint32_t p = ((uint32_t)(b[17] & 0x01) << 16) | be16(b + 18);
-        if (p != 0x1FFFF) { o.hasPressure = true; o.pressureHpa = p * 0.01f; }
+        const uint32_t p = ((uint32_t)(b[17] & 0x01) << 16) | be16(b + 18);
+        const bool noPressureModule = p == 0x1FFFF;
+        if (noPressureModule || (p >= 30000 && p <= 110000)) {
+            if (!wh24Units) o.model = "WS69";
+            if (!noPressureModule) { o.hasPressure = true; o.pressureHpa = p * 0.01f; }
+        }
     }
 }
 
@@ -248,9 +256,11 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             o.channel   = (uint8_t)(((b[2] >> 4) & 0x07) + 1);
             o.batteryOk = !(b[2] & 0x04);
             setTemp400(o, (b[2] & 0x03) << 8 | b[3]);
-            // 0 % is outside the WH31's range (1-99 %): treated as "no humidity",
-            // e.g. a temperature-only sensor sending the WH31 frame (WN30)
-            if (b[4]) setHumidity(o, b[4]);
+            // 1-99 % is the WH31's range; 0 % and 0xFF (no reading) both mean
+            // "no humidity", e.g. a temperature-only sensor sending the WH31
+            // frame (WN30). Checking only b[4] != 0 mislabelled a WN30 that
+            // sends 0xFF as a WH31 (forum, Dirk27 2026-11-25).
+            if (b[4] >= 1 && b[4] <= 100) setHumidity(o, b[4]);
             else if (f->code == FO_FAMILY_WH31) o.model = "WN30";   // temperature only: the WN30 sends this frame
             break;
         case FO_FAMILY_RCC: {
@@ -385,8 +395,22 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             // battery: not decoded (the published byte / scaling are not settled)
             break;
         }
-        case FO_FAMILY_LDS01:                         // 54 II II II then 13 bytes not decoded yet, CC SS
-            o.id = be24(b + 1);
+        case FO_FAMILY_LDS01:
+            // 54 II II II ?? ?? Dd dd ?? ?? ?? ?? ?? ?? ?? HH ?? CC SS
+            // Confirmed against a forum radio trace with the console's own
+            // readings (Dirk27, 2026-11-25): distance is the low 12 bits of
+            // b[6..7] in mm; b[15] is the low byte of the console's "heat-on
+            // count" (293..297; where the rest is sent is not known). Bit 0x40
+            // of b[6] is set in extra frames about 10 s apart after a change
+            // of distance and never in the regular 80-s frames: a fast-send
+            // flag (the meaning is inferred from the timing). The remaining
+            // bytes (battery, temperature, signal) are not settled yet.
+            o.id           = be24(b + 1);
+            o.hasDistance  = true;
+            o.distanceMm   = (uint16_t)(((b[6] & 0x0F) << 8) | b[7]);
+            o.fastTx       = b[6] & 0x40;
+            o.hasHeatCount = true;
+            o.heatCount    = b[15];
             o.batteryKnown = false;
             break;
         default:

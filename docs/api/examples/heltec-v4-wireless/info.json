@@ -17,7 +17,40 @@
       "loop": 15000,
       "web": 2800,
       "wxUpload": 6500
+    },
+    "starts": 3,
+    "resets": [
+      {
+        "cause": "taskWatchdog",
+        "uptimeSec": 7260,
+        "time": "2026-12-01T04:40:00Z",
+        "detail": "task watchdog: loopTask (CPU 1)",
+        "crash": true
+      },
+      {
+        "cause": "software",
+        "uptimeSec": 259800,
+        "time": "2026-11-29T08:13:20Z",
+        "detail": "settings saved"
+      },
+      {
+        "cause": "powerOn"
+      }
+    ],
+    "lastCrash": {
+      "time": "2026-12-01T04:40:00Z",
+      "task": "IDLE0",
+      "pc": "0x42013a2c",
+      "backtrace": ["0x42013a2c", "0x42013b5f", "0x4200d7e1"],
+      "reason": "task watchdog: loopTask (CPU 1)",
+      "firmware": "4.0.0",
+      "elfSha": "3f9a2c1be07d4410",
+      "coreDump": true
     }
+  },
+  "ui": {
+    "flashOnChange": false,
+    "showAge": false
   },
   "firmware": {
     "version": "2.0.0"
@@ -25,7 +58,9 @@
   "hardware": {
     "board": "V4",
     "boardFem": "KCT8103L",
-    "pcbRev": 0
+    "pcbRev": 0,
+    "bme280Pins": [47, 48],
+    "bme280OldPins": false
   },
   "units": {
     "system": "metric",
@@ -43,19 +78,51 @@
     "mqttWindAggregation": "interval",
     "altitudeM": 560,
     "clockSynced": false,
-    "timeZone": "CET-1CEST,M3.5.0,M10.5.0/3"
+    "timeZone": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "clockSource": "none"
   },
   "history": {
     "ranges": [
       {
         "range": "24h",
         "bucketSec": 300,
-        "maxPoints": 288
+        "maxPoints": 288,
+        "res": "5m"
       },
       {
         "range": "7d",
         "bucketSec": 3600,
-        "maxPoints": 168
+        "maxPoints": 168,
+        "res": "1h"
+      },
+      {
+        "range": "30d",
+        "bucketSec": 7200,
+        "maxPoints": 360,
+        "res": "1h"
+      },
+      {
+        "range": "1y",
+        "bucketSec": 86400,
+        "maxPoints": 365,
+        "res": "1d"
+      }
+    ],
+    "tiers": [
+      {
+        "res": "5m",
+        "bucketSec": 300,
+        "capacity": 288
+      },
+      {
+        "res": "1h",
+        "bucketSec": 3600,
+        "capacity": 840
+      },
+      {
+        "res": "1d",
+        "bucketSec": 86400,
+        "capacity": 731
       }
     ]
   },
@@ -67,6 +134,10 @@
     "lorawan": false,
     "loxone": false,
     "updateCheck": false,
+    "influxdb": false,
+    "accessPoint": "off",
+    "accessPointActive": false,
+    "https": "off",
     "weatherNetworks": [],
     "status": {}
   },
@@ -94,6 +165,50 @@
     "mine": 0,
     "hidden": 0,
     "hiddenInRange": 0
+  },
+  "virtualSensors": {
+    "txPowerDbm": 10,
+    "frequencyMHz": 868.3,
+    "airtimeLastHourMs": 1200,
+    "airtimeBudgetMs": 36000,
+    "slots": [
+      {
+        "slot": 1,
+        "type": "wn32p",
+        "enabled": true,
+        "id": "250000BB",
+        "fields": {
+          "temp": "temp",
+          "hum": "hum",
+          "press": "press"
+        },
+        "sent": 42,
+        "lastTxSecAgo": 20,
+        "skipped": {
+          "airtime": 0,
+          "radioBusy": 0,
+          "valueMissing": 1,
+          "deferredDavis": 0
+        }
+      },
+      {
+        "slot": 2,
+        "type": "wh31",
+        "enabled": true,
+        "id": "3000023C",
+        "channel": 2,
+        "fields": {
+          "temp": "rf0000002C_temp"
+        },
+        "sent": 0,
+        "skipped": {
+          "airtime": 0,
+          "radioBusy": 0,
+          "valueMissing": 0,
+          "deferredDavis": 0
+        }
+      }
+    ]
   },
   "sources": {
     "tempHum": "board",

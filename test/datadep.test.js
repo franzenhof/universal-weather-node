@@ -22,7 +22,7 @@ test('every data-dep condition references an existing field', () => {
       }
   // the run-time patterns: rule fields, custom-upload body
   assert.match(web, /"a%d_src!=0"/);
-  assert.match(web, /"a%d_src=%d&a%d_rfsel="/);
+  assert.match(web, /"a%d_src=%d", i, AS_RF/);
   assert.match(web, /"cu%dpost=1"/);
   // the shared script and the [hidden] rule; data-dep written by labelStart()
   assert.match(web, /querySelectorAll\('\[data-dep\]'\)/);

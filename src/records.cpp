@@ -1,4 +1,5 @@
 #include "records.h"
+#include "time_source.h"
 #include "units.h"
 #include <math.h>
 #include <stdio.h>
@@ -33,7 +34,7 @@ void isoTime(char* out, size_t len, uint32_t t)
 bool recordsRoll(Records& r, const struct tm& local)
 {
     const uint32_t ymd = ymdOf(local);
-    if (ymd == r.ymd) return false;
+    if (ymd == r.ymd || ymdSteppedBack((int32_t)ymd, (int32_t)r.ymd)) return false;   // stepped back over midnight: stay
     if (r.ymd) {
         // after a gap of several days "yesterday" is the last day the node saw
         for (int q = 0; q < RQ_COUNT; q++) { r.mn[q][RP_YESTERDAY] = r.mn[q][RP_TODAY]; r.mx[q][RP_YESTERDAY] = r.mx[q][RP_TODAY]; }
@@ -93,6 +94,15 @@ bool recordsDecode(const uint8_t* in, size_t len, Records& out)
     if (magic != RECORDS_MAGIC || h != fnv1a(in, 4 + sizeof(Records))) return false;
     memcpy(&out, in + 4, sizeof(Records));
     return true;
+}
+
+bool recordsBlobIsNewer(const uint8_t* in, size_t len)
+{
+    if (!in || len < 4) return false;
+    uint32_t magic;
+    memcpy(&magic, in, 4);
+    // "REC" + the version digit in the lowest byte (little-endian in flash)
+    return (magic & 0xFFFFFF00u) == (RECORDS_MAGIC & 0xFFFFFF00u) && (magic & 0xFFu) > (RECORDS_MAGIC & 0xFFu);
 }
 
 void recordsJson(JsonDocument& doc, const Records& r, const Config& c, bool clockValid)

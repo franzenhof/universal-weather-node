@@ -4,7 +4,6 @@
 #include "serial_log.h"
 #include "sources.h"
 
-#include "driver/pcnt.h"
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
@@ -78,171 +77,90 @@ DallasTemperature* sensorsBus1 = nullptr;
 
 bool windPcntConfigured = false;
 bool rainPcntConfigured = false;
-int16_t pulsesLastCountWindspeed = 0;
-int16_t pulsesLastCountRain      = 0;
-uint32_t wrapsLastWind = 0, wrapsLastRain = 0;
+uint32_t pulsesLastCountWindspeed = 0;
+uint32_t pulsesLastCountRain      = 0;
 unsigned long previousMillis     = 0;
 
 } // namespace
 
-// The hardware counter resets to 0 when it reaches counter_h_lim (32767) and
-// raises the H_LIM event; the ISR counts those wraps, so any number of them
-// between two reads is accounted for (a high-pulse anemometer or a long gap
-// between reads can exceed 32767 pulses).
-constexpr int16_t PCNT_H_LIM = 32767;
-enum { WRAP_WIND = 0, WRAP_RAIN = 1 };
-static volatile uint32_t pcntWraps[2] = { 0, 0 };
-
-static void IRAM_ATTR pcntWrapIsr(void* arg)
+// Pulses since the previous read (the driver accumulates the counter's
+// overflows, pulse_counter.h).
+static int32_t pcntPulses(PulseCounterId id, uint32_t& last)
 {
-    pcntWraps[(intptr_t)arg]++;
-}
-
-static void enableWrapCount(pcnt_unit_t unit, int idx)
-{
-    static bool serviceInstalled = false;
-    if (!serviceInstalled) {
-        pcnt_isr_service_install(0);   // ESP_ERR_INVALID_STATE if already installed: fine
-        serviceInstalled = true;
-    }
-    pcnt_event_enable(unit, PCNT_EVT_H_LIM);   // pcnt_unit_config() disables it
-    pcnt_isr_handler_add(unit, pcntWrapIsr, (void*)(intptr_t)idx);
-}
-
-// Pulses since the previous read: wraps x 32767 + (cur - last).
-static int32_t pcntPulses(pcnt_unit_t unit, int idx, int16_t& last, uint32_t& lastWraps)
-{
-    uint32_t w;
-    int16_t  cur = 0;
-    do {   // a wrap between the two reads: read again
-        w = pcntWraps[idx];
-        pcnt_get_counter_value(unit, &cur);
-    } while (w != pcntWraps[idx]);
-    int32_t d = (int32_t)(w - lastWraps) * PCNT_H_LIM + cur - last;
-    if (d < 0) {
-        // The counter has already wrapped, but its interrupt has not run yet:
-        // count that wrap now and skip it when the ISR catches up.
-        d += PCNT_H_LIM;
-        w++;
-    }
+    const uint32_t cur = pulseCounterRead(id);
+    const uint32_t d = cur - last;
     last = cur;
-    lastWraps = w;
-    return d;
+    return (int32_t)d;
 }
 
-PinSet getPins(int pcbVersion)
+PinSet getPins()
 {
-    // V3: Rev 1.3 / v2.0 wind 6, rain 7, 1-Wire 5 (Rev 1.2: 3 / 4 / 5); V4 on PCB v2.0: 44 / 16 / 43
-    const BoardPins b = boardPins(gBoard.kind, gBoard.pcbOnV4, pcbVersion);
+    // V4 on a PCB (V4 Full / V4 Light): wind 44, rain 16, 1-Wire 43; without PCB none
+    const BoardPins b = boardPins();
     return { .windSpeed = b.windSpeed, .rain = b.rain, .oneWire = b.oneWire };
 }
 
-int windDirPin() { return boardPins(gBoard.kind, gBoard.pcbOnV4, gCfg.pcbVersion).windDir; }
+int windDirPin() { return boardPins().windDir; }
+
+// V4 Full / V4 Light: an inverting Schmitt trigger (74LVC2G14 / 74HC14) sits between the RC
+// filter and the GPIO, so what was the rising edge at the sensor is the
+// falling edge here — count negative edges, one count per physical pulse.
+static bool pulseInputsInverted() { return true; }
 
 void configureWindPcnt()
 {
-    if (!windPcntConfigured) {
-        // Rev 1.3+ only: an inverting Schmitt trigger (74LVC2G14) sits
-        // between the RC filter and this GPIO, so what was the rising edge
-        // at the sensor is now the falling edge here — count negative
-        // instead of positive edges to keep one count per physical pulse.
-        // Rev 1.2 has no such stage (direct, non-inverted wiring) and must
-        // keep counting the rising edge.
-        bool inverted = (gCfg.pcbVersion >= PCB_REV_1_3);
-        pcnt_config_t pcnt_wind = {
-            .pulse_gpio_num = gPins.windSpeed,
-            .ctrl_gpio_num  = PCNT_PIN_NOT_USED,
-            .pos_mode       = inverted ? PCNT_COUNT_DIS : PCNT_COUNT_INC,
-            .neg_mode       = inverted ? PCNT_COUNT_INC : PCNT_COUNT_DIS,
-            .counter_h_lim  = PCNT_H_LIM,
-            .counter_l_lim  = -32768,
-            .unit           = PCNT_UNIT_WINDSPEED,
-            .channel        = PCNT_CHANNEL_WINDSPEED,
-        };
-        pcnt_unit_config(&pcnt_wind);
-        pcnt_set_filter_value(PCNT_UNIT_WINDSPEED, FILTER_VALUE_WINDSPEED);
-        pcnt_filter_enable(PCNT_UNIT_WINDSPEED);
-        enableWrapCount(PCNT_UNIT_WINDSPEED, WRAP_WIND);
-        windPcntConfigured = true;
-    }
-
-    pcnt_counter_pause(PCNT_UNIT_WINDSPEED);
-    pcnt_counter_clear(PCNT_UNIT_WINDSPEED);
+    windPcntConfigured |= pulseCounterStart(PCNT_UNIT_WINDSPEED, gPins.windSpeed, pulseInputsInverted());
     pulsesLastCountWindspeed = 0;
-    wrapsLastWind = pcntWraps[WRAP_WIND];
-    pcnt_counter_resume(PCNT_UNIT_WINDSPEED);
 }
 
 void configureRainPcnt()
 {
-    if (!rainPcntConfigured) {
-        // Rev 1.3+ only: same inverting Schmitt trigger stage as wind speed
-        // (74LVC2G14) — count the falling edge there; Rev 1.2 keeps the
-        // rising edge. See configureWindPcnt() for the full explanation.
-        bool inverted = (gCfg.pcbVersion >= PCB_REV_1_3);
-        pcnt_config_t pcnt_rain = {
-            .pulse_gpio_num = gPins.rain,
-            .ctrl_gpio_num  = PCNT_PIN_NOT_USED,
-            .pos_mode       = inverted ? PCNT_COUNT_DIS : PCNT_COUNT_INC,
-            .neg_mode       = inverted ? PCNT_COUNT_INC : PCNT_COUNT_DIS,
-            .counter_h_lim  = PCNT_H_LIM,
-            .counter_l_lim  = -32768,
-            .unit           = PCNT_UNIT_RAIN,
-            .channel        = PCNT_CHANNEL_RAIN,
-        };
-        pcnt_unit_config(&pcnt_rain);
-        pcnt_set_filter_value(PCNT_UNIT_RAIN, FILTER_VALUE_RAIN);
-        pcnt_filter_enable(PCNT_UNIT_RAIN);
-        enableWrapCount(PCNT_UNIT_RAIN, WRAP_RAIN);
-        rainPcntConfigured = true;
-    }
-
-    pcnt_counter_pause(PCNT_UNIT_RAIN);
-    pcnt_counter_clear(PCNT_UNIT_RAIN);
+    rainPcntConfigured |= pulseCounterStart(PCNT_UNIT_RAIN, gPins.rain, pulseInputsInverted());
     pulsesLastCountRain = 0;
-    wrapsLastRain = pcntWraps[WRAP_RAIN];
-    pcnt_counter_resume(PCNT_UNIT_RAIN);
 }
 
 void stopWindPcnt()
 {
     if (!windPcntConfigured) return;
-    pcnt_counter_pause(PCNT_UNIT_WINDSPEED);
-    pcnt_counter_clear(PCNT_UNIT_WINDSPEED);
+    pulseCounterStop(PCNT_UNIT_WINDSPEED);
     pulsesLastCountWindspeed = 0;
-    wrapsLastWind = pcntWraps[WRAP_WIND];
 }
 
 void stopRainPcnt()
 {
     if (!rainPcntConfigured) return;
-    pcnt_counter_pause(PCNT_UNIT_RAIN);
-    pcnt_counter_clear(PCNT_UNIT_RAIN);
+    pulseCounterStop(PCNT_UNIT_RAIN);
     pulsesLastCountRain = 0;
-    wrapsLastRain = pcntWraps[WRAP_RAIN];
 }
 
 void sensorsEarlyInit()
 {
     restoreRainAccumulator();
     pinMode(PIN_ADC_BATCTRL,       OUTPUT);
-    pinMode(PIN_ADC_VOLTBATTERY,   INPUT);
-    adcAttachPin(PIN_ADC_VOLTBATTERY);
+    pinMode(PIN_ADC_VOLTBATTERY,   INPUT);   // analogRead() attaches the ADC channel
     // GPIO2 is the RF front end's chip enable on a Heltec V4 (heltec_board.h)
     if (boardPcbAllowed()) {
         pinMode(windDirPin(), INPUT);
-        adcAttachPin(windDirPin());
     }
     analogReadResolution(12);
 }
 
-// Probe + configure the BME280. begin() re-reads chip ID and calibration
-// and soft-resets the chip, so this is also the re-init path after the
-// sensor was unplugged/replugged (a power-cycled BME280 comes up with
-// ctrl_hum = skip, which setSampling() restores).
+// Probe + configure the BME280 (0x76, else 0x77; begin() checks chip ID
+// 0x60). begin() re-reads chip ID and calibration and soft-resets the chip,
+// so this is also the re-init path after the sensor was unplugged/replugged
+// (a power-cycled BME280 comes up with ctrl_hum = skip, which setSampling()
+// restores).
+static uint8_t bmeAddr = I2C_ADRESS_BME280;
+static BmePins bmePins = { BME_WIRELESS_SDA, BME_WIRELESS_SCL, false };
+static bool    wireStarted = false;
+
 static bool initBme280()
 {
-    if (!bme.begin(I2C_ADRESS_BME280, &Wire2)) return false;
+    const uint8_t other = bmeAddr == 0x76 ? 0x77 : 0x76;
+    if (!bme.begin(bmeAddr, &Wire2)) {
+        if (!bme.begin(other, &Wire2)) return false;
+        bmeAddr = other;
+    }
     // Forced mode: sensor only measures on request (takeForcedMeasurement) → ~0 µA idle current
     bme.setSampling(Adafruit_BME280::MODE_FORCED,
                     Adafruit_BME280::SAMPLING_X1,   // Temperatur
@@ -253,6 +171,27 @@ static bool initBme280()
     return true;
 }
 
+// The BME280's own I2C bus (the S3's second controller) on a pin pair.
+static void bmeBus(int sda, int scl)
+{
+    if (wireStarted) Wire2.end();
+    Wire2.begin(sda, scl, I2C_FREQUENCY);
+    Wire2.setTimeOut(50);
+    wireStarted = true;
+}
+
+void sensorsBmePins(int& sda, int& scl, bool& oldWiring, uint8_t& addr)
+{
+    if (!wireStarted) {   // before sensorsInit(): where it will be looked for
+        const bool pcb = boardPcbAllowed();
+        bmePins = bmePinSelect(pcb, gnssActiveFor(pcb, gCfg.gnssEn), false, false);
+    }
+    sda = bmePins.sda;
+    scl = bmePins.scl;
+    oldWiring = bmePins.oldWiring;
+    addr = bmeAddr;
+}
+
 void sensorsInit(const PinSet& pins)
 {
     gPins = pins;
@@ -261,18 +200,40 @@ void sensorsInit(const PinSet& pins)
         bus1Temps[i] = DEVICE_DISCONNECTED_C;
 
     // High-side switch for VCC_1WIRE (Rev 1.3+ only)
-    if (boardPcbAllowed() && gCfg.pcbVersion >= PCB_REV_1_3) {
+    if (boardPcbAllowed()) {
         pinMode(PIN_1WIRE_HSS, OUTPUT);
         digitalWrite(PIN_1WIRE_HSS, LOW);   // sensors off at startup
         dbgSerial.println("1-Wire HSS (GPIO47) initialized – sensors off.");
     }
 
-    // BME280
-    Wire2.begin(PIN_I2C_SDA_BME280, PIN_I2C_SCL_BME280, I2C_FREQUENCY);
-    Wire2.setTimeOut(50);
-    bme280Present = initBme280();
-    if (!bme280Present)
-        dbgSerial.println("BME280 not found – check wiring.");
+    // BME280 (heltec_board.h bmePinSelect): PCB 41/42; without PCB 47/48,
+    // the old wiring on 41/42 only while GNSS is off
+    {
+        const bool pcb = boardPcbAllowed();
+        const bool gnssOn = gnssActiveFor(pcb, gCfg.gnssEn);
+        bool found4748 = false, found4142 = false;
+        if (pcb) {
+            bmeBus(BME_PCB_SDA, BME_PCB_SCL);
+            found4142 = initBme280();
+        } else {
+            bmeBus(BME_WIRELESS_SDA, BME_WIRELESS_SCL);
+            found4748 = initBme280();
+            if (bmeProbeOldPins(pcb, gnssOn, found4748)) {
+                bmeBus(BME_PCB_SDA, BME_PCB_SCL);
+                found4142 = initBme280();
+            }
+        }
+        const BmePins sel = bmePinSelect(pcb, gnssOn, found4748, found4142);
+        if (!found4748 && !found4142 && !pcb) bmeBus(sel.sda, sel.scl);   // none: wait for it on 47/48 (hot-plug)
+        bmePins = sel;
+        bme280Present = found4748 || found4142;
+        if (bme280Present)
+            dbgSerial.printf("BME280: found at 0x%02X on GPIO%d/%d (SDA/SCL)\n", bmeAddr, sel.sda, sel.scl);
+        else
+            dbgSerial.printf("BME280 not found on GPIO%d/%d (SDA/SCL) - check wiring.\n", sel.sda, sel.scl);
+        if (sel.oldWiring)
+            dbgSerial.println("BME280 on the old pins 41/42 - works; move it to GPIO47/48 for a GNSS module.");
+    }
 
     // 1-Wire (pin configured at runtime). The bus is searched in
     // startOneWireConversion(), once it is powered.
@@ -379,7 +340,7 @@ PulseSample readPulseCounters()
     out.elapsedMs = (uint16_t)(elapsed > 65535 ? 65535 : elapsed);
 
     if (gCfg.windEn) {
-        int32_t pulsesWind = pcntPulses(PCNT_UNIT_WINDSPEED, WRAP_WIND, pulsesLastCountWindspeed, wrapsLastWind)
+        int32_t pulsesWind = pcntPulses(PCNT_UNIT_WINDSPEED, pulsesLastCountWindspeed)
                            + (int32_t)sleepPulsesWind;
         sleepPulsesWind = 0;
         float pps    = (elapsed > 0) ? (float)pulsesWind / ((float)elapsed / 1000.0f) : 0.0f;
@@ -416,7 +377,7 @@ PulseSample readPulseCounters()
     }
 
     if (gCfg.rainEn) {
-        int32_t pulsesRain = pcntPulses(PCNT_UNIT_RAIN, WRAP_RAIN, pulsesLastCountRain, wrapsLastRain)
+        int32_t pulsesRain = pcntPulses(PCNT_UNIT_RAIN, pulsesLastCountRain)
                            + (int32_t)sleepPulsesRain;
         sleepPulsesRain = 0;
         // gCfg.rainMmPerTip: sensor-specific calibration (Davis default: 0.2mm/tip);
@@ -493,7 +454,7 @@ void startOneWireConversion()
     // Rev 1.3+: power up VCC_1WIRE now; switched back off once the
     // conversion completes, in pollOneWireConversion().
     if (!sensorsBus1) { bus1Count = 0; return; }   // Heltec V4: no 1-Wire bus
-    oneWireHssPowered = (gCfg.pcbVersion >= PCB_REV_1_3);
+    oneWireHssPowered = boardPcbAllowed();   // V4 Full / V4 Light: switched 1-Wire supply
     if (oneWireHssPowered) {
         digitalWrite(PIN_1WIRE_HSS, HIGH);
         delay(5);   // DS18B20 needs ≥1 ms after VDD power-on before first reset

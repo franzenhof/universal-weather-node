@@ -15,11 +15,14 @@ constexpr int API_VERSION = 1;
 
 // /api/info: device, firmware, board, units, enabled outputs, active value
 // groups and sources, cycle length, history ranges. Never secrets
-// (passwords, keys, station IDs, broker address, coordinates).
-void buildInfoJson(JsonDocument& doc);
+// (passwords, keys, station IDs, broker address). The station's position
+// (hardware.gnss.lat / lon of a GNSS module, ~1 m) only with
+// withPosition - the web server sets it for a request with a valid admin
+// login; without one the two fields are left out entirely.
+void buildInfoJson(JsonDocument& doc, bool withPosition = false);
 
 // Stack of a FreeRTOS task never used so far (bytes), -1 = no such task
-// ("loopTask", "webApi", "wxUpload"); /api/info system.stackFree, status page.
+// ("loopTask", "httpd" = the web server's handlers, "wxUpload"); /api/info system.stackFree, status page.
 int hostOrDeviceStackFree(const char* task);
 
 // The node's host name (without ".local"), the same for DHCP/Wi-Fi

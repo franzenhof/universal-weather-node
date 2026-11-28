@@ -1,35 +1,31 @@
-// Heltec V3 / V4 board detection, the V4 FEM TX-power mapping and the
-// "no PCB on a V4" gating (heltec_board.h).
+// Heltec V4 board check (V3 / V4-R8 refused), the FEM TX-power mapping and
+// the PCB gating by the revision ID: V4 Full, V4 Light or none (heltec_board.h).
 #include "heltec_board.h"
 #include "sensors.h"
 #include "globals.h"
 #include "board_io.h"
 #include "params.h"
 #include <cassert>
+#include <string>
 
 extern int hostModes[64];
 
 int main()
 {
-    // ---- detection by flash size ----
+    // ---- supported board: 16 MB flash + 2-MB quad PSRAM (ESP32-S3R2) ----
     const uint32_t MB = 1024UL * 1024UL;
-    assert(boardDetect(8 * MB) == BOARD_V3);     // V3: ESP32-S3FN8
-    assert(boardDetect(16 * MB) == BOARD_V4);    // V4: 16 MB external flash
-    assert(boardDetect(32 * MB) == BOARD_V4);
-    assert(boardDetect(0) == BOARD_V3);          // unknown -> V3 (never drive the FEM pins on a guess)
-    assert(boardDetect(4 * MB) == BOARD_V3);
-    assert(boardResolve(BOARD_SEL_AUTO, BOARD_V4) == BOARD_V4);
-    assert(boardResolve(BOARD_SEL_AUTO, BOARD_V3) == BOARD_V3);
-    assert(boardResolve(BOARD_V3, BOARD_V4) == BOARD_V3);
-    assert(boardResolve(BOARD_V4, BOARD_V3) == BOARD_V4);
-    assert(boardSelValid(0) && boardSelValid(3) && boardSelValid(4));
-    assert(!boardSelValid(1) && !boardSelValid(2) && !boardSelValid(5) && !boardSelValid(-1));
-    gBoard.kind = BOARD_V4; gBoard.psramCap = 2; assert(boardIsV4() && !boardIsR8());
-    gBoard.psramCap = 1; assert(boardIsR8());
-    gBoard.kind = BOARD_V3; assert(!boardIsR8() && boardPcbAllowed());
+    assert(boardSupportedBy(16 * MB, PSRAM_CAP_2MB));    // Heltec V4
+    assert(boardSupportedBy(32 * MB, PSRAM_CAP_2MB));
+    assert(!boardSupportedBy(8 * MB, 0));                 // V3: ESP32-S3FN8 -> firmware 2.x
+    assert(!boardSupportedBy(16 * MB, PSRAM_CAP_8MB));    // V4-R8: octal PSRAM on GPIO33-37
+    assert(!boardSupportedBy(16 * MB, 0) && !boardSupportedBy(0, PSRAM_CAP_2MB) && !boardSupportedBy(16 * MB, -1));
+    gBoard.flashBytes = 16 * MB; gBoard.psramCap = PSRAM_CAP_2MB; assert(boardSupported() && !boardIsR8());
+    gBoard.psramCap = PSRAM_CAP_8MB; assert(boardIsR8() && !boardSupported());
+    gBoard.psramCap = PSRAM_CAP_2MB;
+    gBoard.pcb = false; assert(!boardPcbAllowed());
 
     // ---- TX power: SX1262 setting for a wanted FEM output ----
-    // V3 (no FEM): unchanged, only clamped to the SX1262 range
+    // no FEM: unchanged, only clamped to the SX1262 range
     assert(femChipPowerDbm(16, FEM_NONE) == 16);
     assert(femChipPowerDbm(22, FEM_NONE) == 22);
     assert(femChipPowerDbm(30, FEM_NONE) == 22);
@@ -56,13 +52,13 @@ int main()
     assert(femOutputDbm(5, FEM_GC1109) == 16 && femOutputDbm(3, FEM_KCT8103L) == 16);
     assert(femGainDb(FEM_GC1109, -9) == 11 && femGainDb(FEM_KCT8103L, 40) == 7);
 
-    // ---- V4: wireless build only, the PCB's GPIOs are never configured ----
-    gBoard.kind = BOARD_V4;
-    gCfg.pcbVersion = 20; gCfg.windEn = 0; gCfg.rainEn = 0;
-    assert(!boardPcbAllowed() && !ioV2());
+    // ---- no PCB: wireless station, the PCB's GPIOs are never configured ----
+    gBoard.pcb = false;
+    gCfg.pcbVersion = 0; gCfg.windEn = 0; gCfg.rainEn = 0;
+    assert(!boardPcbAllowed() && !ioFull() && !boardPcbFull());
     for (int i = 0; i < 64; i++) hostModes[i] = -1;
     sensorsEarlyInit();
-    sensorsInit(getPins(gCfg.pcbVersion));
+    sensorsInit(getPins());
     assert(windDirPin() == -1 && hostModes[2] == -1);   // GPIO2 = FEM CSD
     assert(hostModes[PIN_1WIRE_HSS] == -1);
     assert(hostModes[5] == -1 && hostModes[7] == -1); // KCT8103L CTX, VFEM
@@ -74,58 +70,90 @@ int main()
     assert(!applyParam(PARAM_HEATER_MODE, 1) && !applyParam(PARAM_UV_EN, 1));
     ioInit();
     assert(hostModes[38] == -1 && hostModes[39] == -1);   // heater/fan pins = GNSS connector on the V4
-    // V3 with a v2.0 PCB: unchanged
-    gBoard.kind = BOARD_V3;
-    assert(ioV2() && applyParam(PARAM_WIND_EN, 1));
 
-    // ---- pin map: V3 / V4 x PCB revision ----
+    // ---- pin map: V4 Full, V4 Light (no VE.Direct) or nothing ----
     {
-        BoardPins p = boardPins(BOARD_V3, false, 12);
-        assert(p.windSpeed == 3 && p.rain == 4 && p.oneWire == 5 && p.windDir == 2 && p.vaneEn == -1 && p.veTx == -1);
-        p = boardPins(BOARD_V3, false, 13);
-        assert(p.windSpeed == 6 && p.rain == 7 && p.oneWire == 5 && p.windDir == 2 && p.vaneEn == -1);
-        p = boardPins(BOARD_V3, false, 20);
-        assert(p.windSpeed == 6 && p.rain == 7 && p.oneWire == 5 && p.windDir == 2 && p.vaneEn == 19 && p.veRx == 33 && p.veTx == 34);
-        assert(boardPins(BOARD_V3, true, 20).vaneEn == 19);          // pcbOnV4 means nothing on a V3
-        for (int rev : { 12, 13, 20 }) {
-            p = boardPins(BOARD_V4, false, rev);                      // bare V4: nothing
-            assert(p.windSpeed < 0 && p.rain < 0 && p.oneWire < 0 && p.windDir < 0 && p.vaneEn < 0 && p.veRx < 0 && p.veTx < 0);
-            p = boardPins(BOARD_V4, true, rev);                       // V4 sockets of PCB v2.0
-            assert(p.windSpeed == 44 && p.rain == 16 && p.oneWire == 43 && p.windDir == 6 && p.vaneEn == 34 && p.veRx == 33 && p.veTx == 45);
-        }
-        // the V4 map never touches its USB (19/20), FEM (2/5/7/46) or the PCB ID pin 15 as an output
+        BoardPins p = boardPins(false);
+        assert(p.windSpeed < 0 && p.rain < 0 && p.oneWire < 0 && p.windDir < 0 && p.vaneEn < 0 && p.veRx < 0 && p.veTx < 0);
+        p = boardPins(true, true);   // V4 Light
+        assert(p.windSpeed == 44 && p.rain == 16 && p.oneWire == 43 && p.windDir == 6 && p.vaneEn == 34 && p.veRx < 0 && p.veTx < 0);
+        p = boardPins(true);
+        assert(p.windSpeed == 44 && p.rain == 16 && p.oneWire == 43 && p.windDir == 6 && p.vaneEn == 34 && p.veRx == 33 && p.veTx == 45);
+        // never the USB (19/20), the FEM (2/5/7/46) or the PCB ID pin 15 as an output
         for (int8_t pin : { p.windSpeed, p.rain, p.oneWire, p.windDir, p.vaneEn, p.veRx, p.veTx })
             assert(pin != 19 && pin != 20 && pin != 2 && pin != 5 && pin != 7 && pin != 46 && pin != 15);
     }
+    assert(BOARD_HW_ID_PIN == 15);
 
-    // ---- revision ID pin and UART0 decision (by detected hardware) ----
-    assert(boardHwIdPin(BOARD_V3) == 20 && boardHwIdPin(BOARD_V4) == 15);
-    assert(boardUseUart0(BOARD_V3) && !boardUseUart0(BOARD_V4));
-
-    // ---- ID detection paths ----
-    auto detect = [](BoardKind det, int mv) {
+    // ---- ID detection (GPIO15) ----
+    assert(PCB_REV_V4_FULL == 20 && PCB_REV_V4_LIGHT == 21);       // API / MQTT pcbRev, never renumber
+    auto detect = [](int mv) {
         for (int i = 0; i < 64; i++) hostAdc[i] = 0;
-        gBoard.detected = det; gBoard.kind = det; gBoard.pcbOnV4 = false;
-        hostAdc[boardHwIdPin(det)] = mv;
-        return detectPcbV2();
+        gBoard.pcb = gBoard.pcbLight = false;
+        hostAdc[BOARD_HW_ID_PIN] = mv;
+        return detectPcb();
     };
-    assert(detect(BOARD_V4, 1650) && gBoard.pcbOnV4 && gIo.hwIdDetected && boardPcbAllowed());
+    assert(detect(1650) == PCB_REV_V4_FULL && gBoard.pcb && !gBoard.pcbLight && gIo.hwIdDetected);
+    assert(boardPcbAllowed() && boardPcbFull() && ioFull() && std::string(boardPcbName()) == "V4 Full");
     assert(hostModes[15] == INPUT && hostModes[20] != OUTPUT);       // discharged, released; USB D+ untouched
-    assert(!detect(BOARD_V4, 0) && !gBoard.pcbOnV4 && !boardPcbAllowed());   // bare V4 ~0 V
-    assert(!detect(BOARD_V4, 3300) && !gBoard.pcbOnV4);
-    assert(!detect(BOARD_V4, 1299) && detect(BOARD_V4, 1300) && detect(BOARD_V4, 2000) && !detect(BOARD_V4, 2001));
-    hostAdc[20] = 1650; gBoard.detected = BOARD_V4; gBoard.pcbOnV4 = false;
-    assert(!detectPcbV2() && !gBoard.pcbOnV4);                       // a V4 never reads GPIO20
-    assert(detect(BOARD_V3, 1650) && gIo.hwIdDetected && !gBoard.pcbOnV4 && boardPcbAllowed());
-    assert(!detect(BOARD_V3, 0) && boardPcbAllowed());                // Rev 1.x
-    hostAdc[15] = 1650; gBoard.detected = BOARD_V3;
-    assert(!detectPcbV2());                                           // a V3 never reads GPIO15
+    assert(detect(0) == 0 && !gBoard.pcb && !boardPcbAllowed());      // bare V4 ~0 V
+    assert(std::string(boardPcbName()) == "none");
+    assert(detect(3300) == 0 && !gBoard.pcb);
+    assert(detect(1299) == 0 && detect(1300) == PCB_REV_V4_FULL && detect(2000) == PCB_REV_V4_FULL && detect(2001) == 0);
+    // V4 Light: 1M / 470k -> ~1.06 V, window 850..1250 mV
+    assert(detect(1060) == PCB_REV_V4_LIGHT && gBoard.pcb && gBoard.pcbLight && gIo.hwIdDetected);
+    assert(boardPcbAllowed() && !boardPcbFull() && !ioFull() && std::string(boardPcbName()) == "V4 Light");
+    assert(detect(840) == 0 && !gBoard.pcb && !gBoard.pcbLight);
+    assert(detect(849) == 0 && detect(850) == PCB_REV_V4_LIGHT);
+    assert(detect(900) == PCB_REV_V4_LIGHT && detect(1200) == PCB_REV_V4_LIGHT && detect(1250) == PCB_REV_V4_LIGHT);
+    assert(detect(1251) == 0 && detect(1290) == 0 && !gBoard.pcb);  // gap between the windows
+    assert(detect(1650) == PCB_REV_V4_FULL && !gBoard.pcbLight);   // Full after Light: flag cleared
+    for (uint32_t mv = 0; mv <= 3300; mv += 10) {
+        int r = pcbRevFromHwIdMv(mv);
+        assert(r == (mv >= 1300 && mv <= 2000 ? PCB_REV_V4_FULL : mv >= 850 && mv <= 1250 ? PCB_REV_V4_LIGHT : 0));
+    }
+    hostAdc[15] = 0; hostAdc[20] = 1650; gBoard.pcb = false;
+    assert(detectPcb() == 0 && !gBoard.pcb);                          // GPIO20 (the V3's ID pin) is never read
 
-    // ---- V4 on PCB v2.0: sensors and I/O on the V4 pins ----
-    gBoard.kind = gBoard.detected = BOARD_V4; gBoard.pcbOnV4 = true;
-    gCfg.pcbVersion = 20; gCfg.windEn = 1; gCfg.rainEn = 1;
-    assert(boardPcbAllowed() && ioV2() && windDirPin() == 6);
-    assert(getPins(20).windSpeed == 44 && getPins(20).rain == 16 && getPins(20).oneWire == 43);
+    // ---- V4 Light: wind, rain, vane switch, 1-Wire; no I/O block ----
+    gBoard.pcb = true; gBoard.pcbLight = true;
+    gCfg = Config{};
+    gCfg.pcbVersion = PCB_REV_V4_LIGHT; gCfg.windEn = 1; gCfg.rainEn = 1;
+    // settings of a V4 Full left on (moved module, restored backup): ignored
+    gCfg.heaterMode = 2; gCfg.fanMode = 1; gCfg.tachoEn = 1; gCfg.veDirectEn = 0;
+    gCfg.auxAinEn = 1; gCfg.auxPulseEn = 1; gCfg.uvEn = 1;
+    assert(boardPcbAllowed() && !ioFull() && windDirPin() == 6);
+    assert(getPins().windSpeed == 44 && getPins().rain == 16 && getPins().oneWire == 43);
+    assert(!ioAnyEnabled() && !auxPulseInputUsed());
+    assert(applyParam(PARAM_WIND_EN, 1) && applyParam(PARAM_RAIN_EN, 1));
+    assert(!applyParam(PARAM_HEATER_MODE, 1) && !applyParam(PARAM_FAN_MODE, 1) && !applyParam(PARAM_UV_EN, 1));
+    assert(!applyParam(PARAM_VEDIRECT_EN, 1) && !applyParam(PARAM_WIND2_MODE, 1) && !applyParam(PARAM_AUX_PULSE_EN, 1));
+    assert(!applyParam(PARAM_AUX_AIN_EN, 1) && !applyParam(PARAM_TACHO_EN, 1));
+    assert(applyParam(PARAM_HEATER_MODE, 0) && applyParam(PARAM_VEDIRECT_EN, 0));   // switching off is fine
+    for (int i = 0; i < 64; i++) { hostModes[i] = -1; hostPins[i] = -1; }
+    sensorsEarlyInit();
+    sensorsInit(getPins());
+    assert(hostModes[PIN_1WIRE_HSS] == OUTPUT && hostPins[PIN_1WIRE_HSS] == LOW);   // 1-Wire supply (GPIO47) present
+    assert(hostModes[6] == INPUT);                                                 // vane ADC
+    ioInit();
+    assert(hostModes[34] == OUTPUT && hostPins[34] == LOW);           // vane supply on (LOW = on)
+    windVaneSupply(false);
+    assert(hostPins[34] == HIGH);
+    windVaneSupply(true);
+    ioPoll(); ioSample(); ioFinishCycle(1000); ioSuspendOutputs();
+    for (int pin : { 3, 4, 33, 38, 39, 40, 45, 48 })                  // UV, AUX, VE.Direct, heater, fan, tacho
+        assert(hostModes[pin] == -1);
+    assert(!gIo.heaterOn && !gIo.fanOn && ioStatusByte() == 0);
+    startOneWireConversion();                                         // bus searched (no probe: supply off again)
+    assert(hostModes[PIN_1WIRE_HSS] == OUTPUT && hostPins[PIN_1WIRE_HSS] == LOW && hostModes[43] == INPUT);
+    gBoard.pcbLight = false;
+
+    // ---- V4 on the V4 Full: sensors and I/O on the V4 pins ----
+    gBoard.pcb = true;
+    gCfg = Config{};
+    gCfg.pcbVersion = PCB_REV_V4_FULL; gCfg.windEn = 1; gCfg.rainEn = 1;
+    assert(boardPcbAllowed() && ioFull() && windDirPin() == 6);
+    assert(getPins().windSpeed == 44 && getPins().rain == 16 && getPins().oneWire == 43);
     assert(applyParam(PARAM_WIND_EN, 1) && applyParam(PARAM_HEATER_MODE, 1));
     for (int i = 0; i < 64; i++) { hostModes[i] = -1; hostPins[i] = -1; }
     gCfg.veDirectEn = 0;
@@ -133,9 +161,9 @@ int main()
     ioInit();                                                         // end of setup(), after the ID read
     assert(hostModes[45] == OUTPUT && hostPins[45] == HIGH);          // VE TX idle high, VE.Direct off
     assert(hostModes[34] == OUTPUT && hostPins[34] == LOW);           // vane supply on (LOW = on)
-    assert(hostModes[19] == -1 && hostModes[20] == -1);               // V3 vane/ID pins = V4 USB: untouched
+    assert(hostModes[19] == -1 && hostModes[20] == -1);               // USB: untouched
     // bare V4: VE TX never driven
-    gBoard.pcbOnV4 = false;
+    gBoard.pcb = false;
     for (int i = 0; i < 64; i++) { hostModes[i] = -1; hostPins[i] = -1; }
     ioPoll();
     assert(hostModes[45] == -1 && hostModes[34] == -1);

@@ -21,6 +21,7 @@
 // packet, aggregated per send path like the board's anemometer (interval or
 // 10-min window). Rain: the shared running total rainMMSinceStart only takes
 // increments from the selected source, so switching sources never jumps.
+#include <stddef.h>
 #include <stdint.h>
 #include "wind_window.h"
 
@@ -52,9 +53,33 @@ inline bool srcIsRadio(SrcGroup g) { return srcResolve(g) >= 0; }
 // gRfSensors[idx] was last received more than SRC_RF_FRESH_MS ago (stale).
 bool srcRfValueFresh(int idx, const char* value);
 
+// A wireless value source is bound to the chosen logical sensor (★, lsensors.h)
+// by its internal ID (gCfg.sourceInternalId[g]): it stays on that sensor when the ★ order
+// changes or its radio ID is re-bound, and delivers nothing (not another
+// sensor's value) while that sensor is silent or no longer in the table.
+// Only ★ sensors can be bound; "Wireless n" past them (a received-only sensor,
+// set by number through a parameter) goes by its number.
+// srcBindSel():   bind by number, after srcSel[g] was set (parameters)
+// srcBoundInternalId():  the bound internal ID, "" = not a wireless source / by number
+// srcFormValue(): the settings form's / backup's value - the internal ID
+//                 ("L3F9A2C") for a bound source, else the srcSel number
+// srcSetFormId(): takes such an internal ID; false = not one (a plain number
+//                 goes through the parameter). An "r<radio ID>" value of a
+//                 version-1 backup is swallowed and ignored (no conversion).
+void        srcBindSel(SrcGroup g);
+const char* srcBoundInternalId(SrcGroup g);
+void        srcFormValue(SrcGroup g, char* out, size_t len);
+bool        srcSetFormId(SrcGroup g, const char* v);
+
 // gRfSensors[] index of wireless sensor slot 0..RF_MAX_SENSORS-1 (0-based:
 // slot 0 = "Wireless 1", see above), -1 = none
 int rfSensorIndexForSlot(int slot);
+// Sensor of a placeholder name: "@L3F9A2C_temp" (stored form) or "<custom ID>_temp"
+// of a logical sensor (lsensors.h), or the old "rf<N>_..." (number 1-32) /
+// "rf<ID>_..." (exactly 8 hex digits, e.g. "rf300007DD_temp"): gRfSensors[]
+// index, -1 = none (not received now); *field = the part after the '_'
+// (nullptr = not a wireless sensor's placeholder).
+int rfIndexOfPlaceholder(const char* name, const char** field);
 // The other way round: 0-based slot of gRfSensors[idx] (its position in the
 // ID list, else idx), -1 = unused entry / not in the list.
 int rfSlotOfIndex(int idx);
@@ -94,7 +119,19 @@ struct SrcValues {
     bool  rfBatteryLow = false;     // a wireless sensor in use reports a low battery
 };
 extern SrcValues gSrc;
+
+// The per-cycle snapshot: compute the selected source values into gSrc, called
+// once per base cycle (after the board averages are final). gSrc feeds uploads,
+// alarms, history, LoRaWAN / MQTT / networks and the API.
 void srcUpdateCycle();
+extern volatile uint32_t gSrcCycleCount;   // counts srcUpdateCycle() (the web task pushes new values on a change)
+
+// The same selection, computed on demand and side-effect-free, from the current
+// (latest) board and wireless readings. Guaranteed to pick the same source as
+// srcUpdateCycle() because they share srcCompute(); use it where the display
+// should show the newest value per packet (live), not the cycle snapshot.
+void srcCompute(SrcValues& v);   // the shared, pure selection
+SrcValues srcLive();             // convenience: srcCompute() into a fresh SrcValues
 
 // Board rain gauge increments (sensors.cpp).
 void srcBoardRain(float mm);

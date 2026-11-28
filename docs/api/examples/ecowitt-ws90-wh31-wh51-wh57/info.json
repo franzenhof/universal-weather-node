@@ -17,14 +17,22 @@
       "loop": 15000,
       "web": 2800,
       "wxUpload": 6500
-    }
+    },
+    "starts": 0,
+    "resets": []
+  },
+  "ui": {
+    "flashOnChange": false,
+    "showAge": false
   },
   "firmware": {
     "version": "2.0.0"
   },
   "hardware": {
-    "board": "V3",
-    "pcbRev": 13
+    "board": "V4",
+    "pcbRev": 0,
+    "bme280Pins": [47, 48],
+    "bme280OldPins": false
   },
   "units": {
     "system": "metric",
@@ -42,19 +50,53 @@
     "mqttWindAggregation": "interval",
     "altitudeM": 560,
     "clockSynced": true,
-    "timeZone": "CET-1CEST,M3.5.0,M10.5.0/3"
+    "timeZone": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "clockSource": "ntp",
+    "clockSourceAgeSec": 1200,
+    "clockSourceFresh": true
   },
   "history": {
     "ranges": [
       {
         "range": "24h",
         "bucketSec": 300,
-        "maxPoints": 288
+        "maxPoints": 288,
+        "res": "5m"
       },
       {
         "range": "7d",
         "bucketSec": 3600,
-        "maxPoints": 168
+        "maxPoints": 168,
+        "res": "1h"
+      },
+      {
+        "range": "30d",
+        "bucketSec": 7200,
+        "maxPoints": 360,
+        "res": "1h"
+      },
+      {
+        "range": "1y",
+        "bucketSec": 86400,
+        "maxPoints": 365,
+        "res": "1d"
+      }
+    ],
+    "tiers": [
+      {
+        "res": "5m",
+        "bucketSec": 300,
+        "capacity": 288
+      },
+      {
+        "res": "1h",
+        "bucketSec": 3600,
+        "capacity": 840
+      },
+      {
+        "res": "1d",
+        "bucketSec": 86400,
+        "capacity": 731
       }
     ]
   },
@@ -66,11 +108,26 @@
     "lorawan": false,
     "loxone": true,
     "updateCheck": false,
+    "influxdb": true,
+    "accessPoint": "off",
+    "accessPointActive": false,
+    "https": "off",
     "weatherNetworks": [],
     "status": {
       "loxone": {
         "lastOkSecAgo": 63,
         "failsInRow": 0
+      },
+      "influxdb": {
+        "lastOkSecAgo": 63,
+        "failsInRow": 0,
+        "backlog": {
+          "pushes": 42,
+          "bytes": 39000,
+          "capacity": 524288,
+          "droppedFull": 3,
+          "droppedRejected": 1
+        }
       }
     }
   },

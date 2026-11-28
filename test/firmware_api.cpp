@@ -12,6 +12,7 @@
 #define historyRainSum     hostStubRainSum
 #define wxUpdateAvailable  hostStubUpdateAvailable
 #include "host/runtime.cpp"
+#include "ls_host.h"
 #undef historyPressureAgo
 #undef historyTempAgo
 #undef historyRainSum
@@ -27,6 +28,7 @@
 #include "../src/history.cpp"
 
 #include "api_info.h"
+#include "time_sync.h"
 #include "records.h"
 #include "out_status.h"
 #include "astro.h"
@@ -38,6 +40,10 @@
 #include "davis_diag.h"
 #include "sources.h"
 #include "sensors.h"
+#include "influx_queue.h"
+#include "series.h"
+#include "vs_store.h"
+#include "reset_history.h"
 #include <DallasTemperature.h>
 #include <cassert>
 #include <cmath>
@@ -45,10 +51,33 @@
 #include <cstring>
 #include <functional>
 #include <string>
+#include "gnss.h"
+
+// Reset history (reset_history.h): the device part is not built here
+ResetHistory hostResetHistory;
+const ResetHistory& resetHistory() { return hostResetHistory; }
+
+
+// InfluxDB backfill queue (wx_upload.cpp on the device): a backlog after an outage
+void influxBacklogStatus(InfluxBacklogStatus& out)
+{
+    out = InfluxBacklogStatus();
+    out.active = true; out.pushes = 42; out.bytes = 39000; out.capacity = INFLUX_BACKLOG_BYTES;
+    out.oldestEpoch = 0; out.droppedFull = 3; out.droppedRejected = 1;
+}
 
 // ---- host stubs for modules not built here ----
 static bool hostClockSynced = true;
 bool timeIsValid() { return hostClockSynced; }
+// The fixtures: synced = NTP, 20 min since its last answer; unsynced = no source
+void timeSyncStatus(TimeSyncStatus& out)
+{
+    out = TimeSyncStatus();
+    if (!hostClockSynced) return;
+    out.source = TSRC_NTP;
+    out.fresh = true;
+    out.ageSec = 1200;
+}
 // Wall clock for history.cpp's bucket alignment: set by run() so that the
 // run ends at NOW_EPOCH (see there).
 static int64_t hostEpochAtZero = 0;
@@ -79,6 +108,8 @@ bool localTimeNow(struct tm& out)
     localtime_r(&t, &out);
     return true;
 }
+void wxUploadLock() {}     // astroLocation() (astro_store.cpp): one task here
+void wxUploadUnlock() {}
 static const char* hostUpdate = "";
 void wxUpdateAvailable(char* out, size_t len) { if (len) snprintf(out, len, "%s", hostUpdate); }
 
@@ -163,7 +194,7 @@ void run(float hours, float rainLastHours, const std::function<void(const Wx&)>&
         rainRateMmH = w.rainMm * 3600000.0f / CYCLE_MS;
         rainMM = w.rainMm;
         srcUpdateCycle();
-        pushHistorySample();
+        pushHistorySample(seriesNowValues(), seriesNowOk());   // custom series: set(w) gives their values (seriesSetNow)
         int64_t e;
         if (epochNow(e)) {
             time_t tt = (time_t)e;
@@ -233,6 +264,9 @@ void syncedDay(float earlierWeekMm, float earlierMonthMm, float earlierYearMm, f
 void common(const char* name)
 {
     gCfg = Config{};   // a new node's defaults (wireless sensors on, Wi-Fi + web API on)
+    vsSettingsWrite(VsSettings{});   // virtual sensors off (own store, vs_store.h)
+    hostResetHistory = ResetHistory();
+    gBoard = BoardInfo{};   // Heltec V4 without PCB unless a fixture sets gBoard.pcb
     rfStatsClear();
     snprintf(gCfg.deviceName, sizeof(gCfg.deviceName), "%s", name);
     gResetReason = "power-on";
@@ -271,17 +305,25 @@ void fixtureEcowitt()
     gCfg.rfProto = RF_PROTO_FINEOFFSET;
     gCfg.windUnitMs = 0;   // km/h
     gCfg.loxEn = 1;
+    gCfg.influxEn = 1;   // InfluxDB push with a backlog (status + backlog object, no URL / token in the API)
+    snprintf(gCfg.influxUrl, sizeof(gCfg.influxUrl), "http://secret-host:8086/write?db=secret");
+    snprintf(gCfg.influxToken, sizeof(gCfg.influxToken), "secret-token");
     gCfg.altitudeM = 560;
     // ID list: the order numbers the sensors (wireless 1-12); the WN32P indoor
     // sensor is wireless 3 - the pressure source (no BME280), but never the
     // temperature source (Auto skips indoor sensors for temperature / humidity)
-    snprintf(gCfg.rfIds, sizeof(gCfg.rfIds), "900C3A7F, 300002B2, 25000050, 5700E21A, 5100D0C7, 3400A1B2, 300003C4, "
+    hostSetMine("900C3A7F, 300002B2, 25000050, 5700E21A, 5100D0C7, 3400A1B2, 300003C4, "
              "460027F1, 5530CF55, A2005D8D, 3500305E, 410000C7");
     bme280Present = false;
     RfSensorReading& ws = rfAdd(0, 0x900C3A7F, 1, RF_PROTO_FINEOFFSET, "WS90");
     ws.hasSupercap = true;
     RfSensorReading& wh31 = rfAdd(1, 0x300002B2, 2, RF_PROTO_FINEOFFSET, "WH31");
-    snprintf(gCfg.rfNames, sizeof(gCfg.rfNames), "300002B2:Greenhouse|5100D0C7:Raised bed");   // rf_names.h
+    // names of ★ sensors live in their logical sensor entries (lsensors.h)
+    snprintf(gLogicalSensors.s[lsFindByRadioId(gLogicalSensors, 0x300002B2)].displayName, LS_DISPLAY_NAME_MAX + 1, "Greenhouse");
+    snprintf(gLogicalSensors.s[lsFindByRadioId(gLogicalSensors, 0x5100D0C7)].displayName, LS_DISPLAY_NAME_MAX + 1, "Raised bed");
+    // keys (what MQTT, InfluxDB, /metrics, Loxone and the REST API call them); the others keep the proposed radio ID
+    lsSetCustomId(gLogicalSensors, lsFindByRadioId(gLogicalSensors, 0x300002B2), "greenhouse");
+    lsSetCustomId(gLogicalSensors, lsFindByRadioId(gLogicalSensors, 0x5100D0C7), "raised_bed");
     wh31.channel = 2; wh31.hasTemp = wh31.hasHumidity = true;
     RfSensorReading& wh51 = rfAdd(2, 0x5100D0C7, 4, RF_PROTO_FINEOFFSET, "WH51");
     wh51.hasMoisture = true;
@@ -295,6 +337,20 @@ void fixtureEcowitt()
     RfSensorReading& wn32p = rfAdd(8, 0x25000050, 2, RF_PROTO_FINEOFFSET, "WN32P");
     wn32p.hasTemp = wn32p.hasHumidity = wn32p.hasPressure = true;
     wn32p.tempC = 22.6f; wn32p.humidity = 40;
+    {   // custom series (series.h): soil moisture, lightning strikes and the storm distance (own aggregation: max)
+        SeriesDef* d = seriesDefs();
+        auto def = [&](int slot, const char* name, uint32_t radioId, uint8_t field) {
+            snprintf(d[slot].name, sizeof(d[slot].name), "%s", name);
+            snprintf(d[slot].sensorInternalId, sizeof(d[slot].sensorInternalId), "%s",
+                     gLogicalSensors.s[lsFindByRadioId(gLogicalSensors, radioId)].internalId);
+            d[slot].field = field;
+        };
+        def(0, "Raised bed", 0x5100D0C7, SF_MOIST);
+        def(1, "Lightning", 0x5700E21A, SF_STRIKES);
+        def(3, "Storm distance", 0x5700E21A, SF_DIST);
+        seriesSetAgg(d[3], SA_MAX);
+        historySeriesConfigure(d, SERIES_MAX);
+    }
     run(30, 0.5f, [&](const Wx& w) {
         wn32p.pressureHpa = roundf((w.qnh - 66.2f) * 10.0f) / 10.0f; rfHeard(wn32p, 30000);   // station pressure at 560 m
         radioWeather(ws, w, true); boardWind(w);
@@ -304,6 +360,14 @@ void fixtureEcowitt()
         // the WH57's counter: a strike now and then in the last hours (wraps at 255)
         if (w.rainMm > 0.0f) wh57.lightningCount = (uint8_t)(wh57.lightningCount + 3);
         wh57.lightningKm = 8; rfHeard(wh57, 30000);
+        {
+            float sv[SERIES_MAX] = {};
+            bool sok[SERIES_MAX] = {};
+            sv[0] = 41; sok[0] = true;
+            sv[1] = w.rainMm > 0.0f ? 3 : 0; sok[1] = true;
+            sv[3] = w.rainMm > 0.0f ? 8 : 0; sok[3] = w.rainMm > 0.0f;   // a distance only while it storms
+            seriesSetNow(sv, sok);
+        }
         {
             uint32_t t, ymd;
             rfStatsClock(t, ymd);
@@ -335,13 +399,13 @@ void fixtureEcowitt()
     syncedDay(3.4f, 31.5f, 466.1f, 170, 264);
 }
 
-// PCB v2.0 fully equipped: Davis wind + rain, BME280, 3 DS18B20 (one gone),
+// V4 Full fully equipped: Davis wind + rain, BME280, 3 DS18B20 (one gone),
 // LiPo, calibrated UV, wind 2 (speed + direction), heater/fan auto with
 // tacho, Victron MPPT; LoRaWAN + MQTT with commands.
 void fixturePcbFull()
 {
     common("Weather Mast");
-    gCfg.pcbVersion = PCB_REV_2_0;
+    gCfg.pcbVersion = PCB_REV_V4_FULL; gBoard.pcb = true;
     gCfg.rfEn = RF_RADIO_OFF;
     gCfg.windEn = gCfg.rainEn = 1;
     gCfg.loraEn = 1; gCfg.mqttEn = 1; gCfg.mqttCtrlEn = 1;
@@ -358,7 +422,7 @@ void fixturePcbFull()
         bus1Temps[0] = round1(w.tC - 0.4f); bus1Temps[1] = round1(9.5f + 0.5f * noise()); bus1Temps[2] = round1(w.tC + 1.2f);
         batteryVolt = 3.98f + 0.05f * noise();
         gIo.uvSensorVolts = w.uv / 4.0f; gIo.uvIndexCalibrated = true; gIo.uvIndex = w.uv;
-        gIo.wind2SpeedMs = w.windMs * 0.8f; gIo.wind2GustMs = w.gustMs * 0.8f; gIo.wind2DirDeg = (uint16_t)((w.dir + 10) % 360);
+        gIo.wind2Valid = true; gIo.wind2SpeedMs = w.windMs * 0.8f; gIo.wind2GustMs = w.gustMs * 0.8f; gIo.wind2DirDeg = (uint16_t)((w.dir + 10) % 360);
     });
     bus1Temps[1] = DEVICE_DISCONNECTED_C;   // probe 2 unplugged
     batteryVolt = 4.07f;
@@ -370,13 +434,37 @@ void fixturePcbFull()
     syncedDay(5.2f, 28.8f, 530.4f, 0, 0);
 }
 
-// Imperial units, PCB v2.0 with Davis, BME280, LiPo, AUX analog + pulse
+// V4 Light (pcbRev 21): Davis wind + rain, BME280, one DS18B20 - with the I/O
+// settings of a V4 Full left switched on (moved module / restored backup).
+// Not a docs example: test/api_contract.test.js checks that none of the
+// I/O block (UV, AUX, wind 2, heater, fan, VE.Direct) reaches the API.
+void fixtureV4Light()
+{
+    common("Light");
+    gCfg.pcbVersion = PCB_REV_V4_LIGHT; gBoard.pcb = true; gBoard.pcbLight = true;
+    gCfg.rfEn = RF_RADIO_OFF;
+    gCfg.windEn = gCfg.rainEn = 1;
+    gCfg.uvEn = gCfg.uvIndexEn = gCfg.uvCalibrated = 1;
+    gCfg.auxAinEn = 1; gCfg.auxPulseEn = 1; gCfg.wind2Mode = 2;
+    gCfg.heaterMode = 2; gCfg.fanMode = 1; gCfg.tachoEn = 1; gCfg.veDirectEn = 1;
+    bme280Present = true;
+    bus1Count = 1;
+    run(10, 0.2f, [&](const Wx& w) {
+        boardAir(w); boardWind(w);
+        rainMMSinceStart += w.rainMm;
+        bus1Temps[0] = round1(w.tC - 0.4f);
+    });
+    srcUpdateCycle();
+    syncedDay(1.0f, 20.0f, 400.0f, 0, 0);
+}
+
+// Imperial units, V4 Full with Davis, BME280, LiPo, AUX analog + pulse
 // counter, heater held off by the battery lockout, debug mode, update check.
 void fixtureImperial()
 {
     common("");   // unnamed: host name from the MAC
     gCfg.unitSystem = 1;
-    gCfg.pcbVersion = PCB_REV_2_0;
+    gCfg.pcbVersion = PCB_REV_V4_FULL; gBoard.pcb = true;
     gCfg.rfEn = RF_RADIO_OFF;
     gCfg.windEn = gCfg.rainEn = 1;
     gCfg.lipoEn = 1;
@@ -384,6 +472,7 @@ void fixtureImperial()
     gCfg.heaterMode = 1;
     gCfg.debugMode = 1;
     gCfg.updateCheckEn = 1;
+    gCfg.uiFlashEn = 1;   // Web UI: flash on, age off in this example
     snprintf(gCfg.timeZone, sizeof(gCfg.timeZone), "EST5EDT,M3.2.0,M11.1.0");
     hostUpdate = "2.0.1";
     loopCount = 17;
@@ -399,13 +488,13 @@ void fixtureImperial()
     syncedDay(0.0f, 12.7f, 301.7f, 0, 0);
 }
 
-// Heltec V4 (16 MB, KCT8103L front end) 40 min after power-on: BME280,
+// Heltec V4 (16 MB, KCT8103L front end) 40 min after a task watchdog reset
+// (the reset history example: power-on, settings restart, the crash): BME280,
 // Bresser 5-in-1 and a TFA IT+ thermo-hygro sensor; clock not synced yet,
 // so no daily totals, no trends - fields are absent, not zero.
 void fixtureV4()
 {
     common("Balcony V4");
-    gBoard.kind = gBoard.detected = BOARD_V4;
     gBoard.flashBytes = 16UL * 1024 * 1024; gBoard.psramCap = 2; gBoard.fem = FEM_KCT8103L;
     gCfg.rfProto = RF_PROTO_BRESSER | RF_PROTO_ITPLUS17;
     gCfg.windUnitMs = 0;
@@ -421,6 +510,38 @@ void fixtureV4()
     });
     tfa.batteryOk = false; tfa.rssi = -90.0f;
     srcUpdateCycle();
+    // virtual sensors (vsensor.h): the BME280 as a WN32P, a WH31 on channel 2 from the TFA sensor
+    VsSettings vs;
+    vs.enabled = 1;
+    vs.slot[0].type = VS_WN32P; vs.slot[0].enabled = 1;
+    snprintf(vs.slot[0].src[VF_TEMP], VS_SRC_LEN, "temp"); snprintf(vs.slot[0].src[VF_HUM], VS_SRC_LEN, "hum");
+    snprintf(vs.slot[0].src[VF_PRESS], VS_SRC_LEN, "press");
+    vs.slot[1].type = VS_WH31; vs.slot[1].enabled = 1; vs.slot[1].channel = 2;
+    snprintf(vs.slot[1].src[VF_TEMP], VS_SRC_LEN, "rf0000002C_temp");
+    vsSettingsWrite(vs);
+    {   // reset history: a power-on, a settings restart, then a task watchdog with its core dump summary
+        ResetHeartbeat hb;
+        heartbeatStart(hb);
+        resetHistoryPush(hostResetHistory, resetRecordMake(RC_POWER_ON, nullptr, nullptr), nullptr);
+        heartbeatUpdate(hb, 86400 * 3 + 600, 1795940000u);
+        heartbeatNoteRestart(hb, "settings saved");
+        resetHistoryPush(hostResetHistory, resetRecordMake(RC_SOFTWARE, &hb, nullptr), nullptr);
+        heartbeatStart(hb);
+        heartbeatUpdate(hb, 7260, 1796100000u);
+        CrashSummary c;
+        c.valid = 1; c.depth = 3; c.pc = 0x42013a2cu;
+        c.backtrace[0] = 0x42013a2cu; c.backtrace[1] = 0x42013b5fu; c.backtrace[2] = 0x4200d7e1u;
+        snprintf(c.task, sizeof(c.task), "IDLE0");
+        crashReasonCompact("Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:\n - loopTask (CPU 1)",
+                           c.reason, sizeof(c.reason));
+        snprintf(c.firmware, sizeof(c.firmware), "4.0.0");
+        snprintf(c.elfSha, sizeof(c.elfSha), "3f9a2c1be07d4410");
+        const ResetRecord r = resetRecordMake(RC_TASK_WATCHDOG, &hb, &c);
+        c.epoch = r.epoch;
+        resetHistoryPush(hostResetHistory, r, &c);
+    }
+    gVsStatus[0].sent = 42; gVsStatus[0].lastTxMs = millis() - 20000; gVsStatus[0].skipMissing = 1;
+    gVsBandLastHourMs = 1200;
 }
 
 // Davis Vantage Pro2 ISS (exclusive mode, transmitter ID 1) tracked for 6 h,
@@ -508,23 +629,56 @@ void checkHostname()
     assert(std::string(small) == "ab");
 }
 
+// GNSS module (gnss.cpp; overrides api_info.cpp's weak defaults): off in
+// every fixture, on only for checkGnssPositionPrivate()
+static bool hostGnssOn = false;
+bool gnssActive() { return hostGnssOn; }
+void gnssStatus(GnssStatus& out)
+{
+    out = GnssStatus();
+    out.active = out.seen = out.fix = out.posOk = out.altOk = hostGnssOn;
+    out.lat = 47.123456; out.lon = 11.654321; out.altM = 560.4f; out.sats = 9;
+}
+
+// /api/info: the station's position only with withPosition (an admin
+// login), the other GNSS fields for everyone
+void checkGnssPositionPrivate()
+{
+    hostGnssOn = true;
+    JsonDocument doc;
+    buildInfoJson(doc);
+    JsonObjectConst pub = doc["hardware"]["gnss"];
+    assert(!pub.isNull() && pub["fix"] == true && pub["satellites"] == 9 && pub["altitudeM"].is<float>());
+    assert(!pub["lat"].is<JsonVariantConst>() && !pub["lon"].is<JsonVariantConst>());
+    buildInfoJson(doc, true);
+    JsonObjectConst admin = doc["hardware"]["gnss"];
+    assert(admin["lat"] == 47.12346 && admin["lon"] == 11.65432);
+    hostGnssOn = false;
+}
+
 int main(int argc, char** argv)
 {
     assert(argc == 2);
     std::string f = argv[1];
     if (f == "hostname") { checkHostname(); return 0; }
+    if (f == "gnssprivacy") { checkGnssPositionPrivate(); return 0; }
     if      (f == "bresser-7in1-bme280")            fixtureBresser();
     else if (f == "ecowitt-ws90-wh31-wh51-wh57")    fixtureEcowitt();
     else if (f == "pcb-v2-full")                    fixturePcbFull();
     else if (f == "pcb-v2-imperial")                fixtureImperial();
     else if (f == "heltec-v4-wireless")             fixtureV4();
     else if (f == "davis-vantage-pro2")             fixtureDavis();
+    else if (f == "v4-light")                       fixtureV4Light();   // gating check, no docs example
     else { fprintf(stderr, "unknown fixture %s\n", f.c_str()); return 2; }
 
     JsonDocument doc;
     buildJsonPayload(doc);   assert(!doc.overflowed()); print("data", doc);
-    buildHistoryJson(doc, false); assert(!doc.overflowed()); print("history-24h", doc);
-    buildHistoryJson(doc, true);  assert(!doc.overflowed()); print("history-7d", doc);
+    for (const HistoryRangeDef& r : HISTORY_RANGES) {
+        HistoryQuery q;
+        assert(historyParseQuery(r.name, nullptr, nullptr, q));
+        buildHistoryJson(doc, q); assert(!doc.overflowed());
+        print((std::string("history-") + r.name).c_str(), doc);
+    }
     buildInfoJson(doc);      assert(!doc.overflowed()); print("info", doc);
     recordsJson(doc, hostRecords, gCfg, hostClockSynced); assert(!doc.overflowed()); print("records", doc);
     {   // alarms (alarms.h): two ready-made rules and a wireless-sensor leak rule, frost active for 20 min
@@ -533,7 +687,7 @@ int main(int argc, char** argv)
         alarmTemplate(0, rules[0]);
         rules[0].channels = (1 << AC_NTFY) | (1 << AC_MQTT);
         alarmTemplate(3, rules[1]);
-        rules[2].src = AS_RF; rules[2].enabled = 1; rules[2].rfId = 0x39582376; rules[2].rfField = AF_LEAK;
+        rules[2].src = AS_RF; rules[2].enabled = 1; snprintf(rules[2].sensorInternalId, sizeof(rules[2].sensorInternalId), "L39A582"); rules[2].rfField = AF_LEAK;
         rules[2].raise = rules[2].clear = 0.5f; rules[2].priority = 5; rules[2].repeatMin = 30;
         rules[2].channels = 1 << AC_PUSHOVER;
         snprintf(rules[2].name, sizeof(rules[2].name), "Cellar leak");
@@ -543,7 +697,7 @@ int main(int argc, char** argv)
         snprintf(ch.ntfyTopic, sizeof(ch.ntfyTopic), "secret-topic");
         snprintf(ch.poToken, sizeof(ch.poToken), "secret-token");
         snprintf(ch.poUser, sizeof(ch.poUser), "secret-user");
-        alarmsJson(doc, rules, st, ch, gCfg, 2200);
+        alarmsJson(doc, rules, st, ch, gCfg, 2200, [](const char*, char* customId) -> uint32_t { strcpy(customId, "wetter"); return 0x39582376; });
         assert(!doc.overflowed()); print("alarms", doc);
     }
     return 0;

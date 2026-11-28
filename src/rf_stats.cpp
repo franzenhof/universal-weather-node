@@ -1,15 +1,20 @@
 #include "rf_stats.h"
+#include "time_source.h"
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
 #include <math.h>
 #include <string.h>
 
 void rfStatRoll(RfStat& s, uint32_t t, uint32_t ymd)
 {
-    if (ymd && ymd != s.ymd) {   // new local day (or the clock just became known)
+    // new local day (or the clock just became known); a step back over
+    // midnight stays on the day
+    if (ymd && ymd != s.ymd && !ymdSteppedBack((int32_t)ymd, (int32_t)s.ymd)) {
         if (s.ymd) { s.rainTodayMm = 0.0f; s.strikesToday = 0; }
         s.ymd = ymd;
     }
-    const uint32_t b = t / 600;
+    uint32_t b = t / 600;
+    if (b < s.bucket && s.bucket - b < 6) b = s.bucket;   // clock stepped back by < 1 h: stay in the bucket
     if (b != s.bucket) {
         const uint32_t steps = b > s.bucket ? b - s.bucket : 6;   // time went back (clock set): start over
         for (uint32_t k = 1; k <= steps && k <= 6; k++) {
@@ -69,7 +74,13 @@ int rfStatStrikes1h(RfStat& s, uint32_t t)
     return sum;
 }
 
-namespace { RfStat stats[RF_STATS_MAX]; }
+namespace {
+RfStat       stats[RF_STATS_MAX];
+portMUX_TYPE statsMux = portMUX_INITIALIZER_UNLOCKED;
+}
+
+void rfStatsLock()   { portENTER_CRITICAL(&statsMux); }
+void rfStatsUnlock() { portEXIT_CRITICAL(&statsMux); }
 
 RfStat* rfStatFor(uint32_t id, bool create)
 {
@@ -80,7 +91,25 @@ RfStat* rfStatFor(uint32_t id, bool create)
     return nullptr;   // full: no statistics for this sensor
 }
 
-void rfStatsClear() { for (RfStat& s : stats) s = RfStat(); }
+void rfStatsClear()
+{
+    rfStatsLock();
+    for (RfStat& s : stats) s = RfStat();
+    rfStatsUnlock();
+}
+
+bool rfStatSnapshot(uint32_t id, RfStat& out, uint32_t& t)
+{
+    if (!id) return false;
+    uint32_t ymd;
+    rfStatsClock(t, ymd);
+    bool found = false;
+    rfStatsLock();
+    for (const RfStat& s : stats) if (s.id == id) { out = s; found = true; break; }
+    rfStatsUnlock();
+    if (found) rfStatRoll(out, t, ymd);
+    return found;
+}
 
 void rfStatsPrune(bool (*used)(uint32_t id))
 {

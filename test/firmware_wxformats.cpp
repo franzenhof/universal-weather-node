@@ -7,7 +7,7 @@
 int main()
 {
     WxObs o;
-    o.hasTemp = o.hasHum = o.hasPress = o.hasWind = o.hasRain = true;
+    o.hasTemp = o.hasHum = o.hasPress = o.hasWind = o.hasDir = o.hasRain = true;
     o.tempC = 20.0f; o.humidity = 50.0f; o.qnhHpa = 1013.2f;
     o.windMs = 2.0f; o.gustMs = 4.5f; o.dirDeg = 220;
     o.rain1hMm = 0.0f; o.rain24hMm = 1.27f; o.rainDayMm = 0.254f;
@@ -18,11 +18,14 @@ int main()
                              "&dateutc=2026-11-20%2010%3A32%3A55&softwaretype=uwn-2.0&tempf=68.0&humidity=50&dewptf=48.7"
                              "&baromin=29.92&windspeedmph=4.5&windgustmph=10.1&winddir=220&dailyrainin=0.01");
     assert(!wowUrl(o, "123456", "654321", "2026-11-20 10:32:55", "uwn-2.0", b, 40));   // no room
+    o.hasDir = false;                                       // direction not known (calm): left out, never "0" = north
+    assert(wowUrl(o, "123456", "654321", "2026-11-20 10:32:55", "uwn-2.0", b, sizeof(b)));
+    assert(std::string(b).find("&windspeedmph=4.5&windgustmph=10.1&dailyrainin") != std::string::npos);
 
     // APRS 1.01 complete weather report (the spec's example layout):
     // @092345z4903.50N/07201.75W_220/004g005t077r000p000P000h50b09900
     WxObs a;
-    a.hasTemp = a.hasHum = a.hasPress = a.hasWind = a.hasRain = true;
+    a.hasTemp = a.hasHum = a.hasPress = a.hasWind = a.hasDir = a.hasRain = true;
     a.tempC = 25.0f; a.humidity = 50.0f; a.qnhHpa = 990.0f;
     a.windMs = 4.0f / 2.236936f; a.gustMs = 5.0f / 2.236936f; a.dirDeg = 220;
     assert(cwopPacket(a, "CW1234", 49.0583333, -72.0291667, 9, 23, 45, "", b, sizeof(b)));
@@ -31,6 +34,10 @@ int main()
     a.tempC = -20.6f; a.humidity = 100.0f; a.rain1hMm = 2.54f; a.rain24hMm = 25.4f; a.rainDayMm = 12.7f;
     assert(cwopPacket(a, "CW1234", -33.8688, 151.2093, 1, 0, 5, "UWN", b, sizeof(b)));
     assert(std::string(b) == "CW1234>APRS,TCPIP*:@010005z3352.13S/15112.56E_220/004g005t-05r010p100P050h00b09900UWN");
+    // direction not known: dots (APRS), speed and gust stay
+    a.hasDir = false;
+    assert(cwopPacket(a, "CW1234", -33.8688, 151.2093, 1, 0, 5, "UWN", b, sizeof(b)));
+    assert(std::string(b) == "CW1234>APRS,TCPIP*:@010005z3352.13S/15112.56E_.../004g005t-05r010p100P050h00b09900UWN");
     // missing wind / temperature as dots; other groups left out
     WxObs m;
     m.hasPress = true; m.qnhHpa = 1013.25f;

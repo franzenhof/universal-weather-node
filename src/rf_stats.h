@@ -35,9 +35,20 @@ float rfStatRecentRate(RfStat& s, uint32_t t);
 void  rfStatRoll(RfStat& s, uint32_t t, uint32_t ymd);
 
 // ---- table (rf_sensors_data.cpp feeds it, the outputs read it) ----
-RfStat* rfStatFor(uint32_t id, bool create);
-void    rfStatsClear();
-// frees the entries of sensors no longer in the table (used(id) false)
+// Written by the receiving (loop) task only, between rfStatsLock() and
+// rfStatsUnlock() (a short critical section: no I/O, no allocation in between).
+// Every other reader - JSON payload, web pages, also on the loop task - takes
+// a copy with rfStatSnapshot(), so a reader never rolls the shared entry over
+// (a day / bucket roll-over from the web task while the loop task adds rain
+// would lose or double-count it).
+void    rfStatsLock();
+void    rfStatsUnlock();
+RfStat* rfStatFor(uint32_t id, bool create);   // under the lock
+void    rfStatsClear();                        // takes the lock itself
+// frees the entries of sensors no longer in the table (used(id) false); under the lock
 void    rfStatsPrune(bool (*used)(uint32_t id));
+// A copy of the sensor's entry, rolled over to now (t: the statistics clock,
+// for rfStatRain1h() / rfStatStrikes1h() on the copy). false = no entry.
+bool    rfStatSnapshot(uint32_t id, RfStat& out, uint32_t& t);
 // clock for the statistics (device: time_sync; weak default: unknown)
 bool    rfStatsClock(uint32_t& t, uint32_t& ymd);

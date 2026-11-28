@@ -3,38 +3,34 @@
 #include "serial_log.h"
 #include "LoRaWAN_ESP32.h"
 #include "heltec_board.h"
-BoardInfo gBoard;   // V3 unless a test sets it
+BoardInfo gBoard;   // no PCB unless a test sets gBoard.pcb
 
 unsigned long hostNow=100;
 int hostPins[64]={},hostModes[64]={},hostAdc[64]={},hostPwm[8]={},hostAttached[64]={};
-int16_t hostCounts[4]={};
-void (*hostPcntIsr[4])(void*)={};
-void* hostPcntArg[4]={};
+// Pulse counters (src/pulse_counter.h): the test sets the accumulated count.
+#include "pulse_counter.h"
+uint32_t hostCounts[PULSE_COUNTER_COUNT]={};
+bool     pulseCounterStart(PulseCounterId id, int, bool) { hostCounts[id]=0; return true; }
+void     pulseCounterStop(PulseCounterId id) { hostCounts[id]=0; }
+uint32_t pulseCounterRead(PulseCounterId id) { return hostCounts[id]; }
 bool  hostBmeOk=false;
 float hostBmeT=20.0f,hostBmeP=101325.0f,hostBmeH=50.0f;
+int   hostBmeSda=-1,hostBmeAddr=-1;
 int hostProbeCount=0;
 bool hostConversionComplete=false;
 float hostProbeTemps[3]={10.5f,12.5f,14.5f};
 HostESP ESP;
-// PSRAM / internal RAM (src/psram.h): the host has no PSRAM, big buffers come from malloc
-#include "psram.h"
-#include <stdlib.h>
-bool   psramActive()     { return false; }
-size_t psramTotal()      { return 0; }
-size_t psramFree()       { return 0; }
-size_t psramLargest()    { return 0; }
-size_t internalFree()    { return 150000; }
-size_t internalMinFree() { return 120000; }
-size_t internalLargest() { return 90000; }
-void*  bigAlloc(size_t n) { return malloc(n); }
-size_t bigAllocLargest() { return 90000; }
-void   psramLogStatus(int) {}
+#include "psram_host.cpp"   // PSRAM / internal RAM figures (src/psram.h)
 #include "system_restart.h"   // the real one (rain flush) is in wx_upload.cpp, not built here
+#include "settings_reset.h"
+bool storageResetRequest(StorageResetKind) { return true; }   // the device part (settings_reset_esp.cpp) is not built here
 void systemRestart(const char*) { ESP.restart(); }
 HostSerial Serial1;
 SerialLog dbgSerial;
 size_t SerialLog::write(uint8_t) { return 1; }
 size_t SerialLog::write(const uint8_t*,size_t n) { return n; }
+size_t SerialLog::println(const char* s) { return strlen(s) + 2; }
+size_t SerialLog::println(const String&) { return 0; }
 // The regression tests were written for a node with the PCB (Davis wind and
 // rain on, LoRaWAN on, no wireless sensors) - the defaults of a config stored
 // by an older firmware (ConfigLegacyDefaults). New-node defaults are checked
@@ -50,6 +46,15 @@ static Config hostLegacyConfig()
 Config gCfg = hostLegacyConfig();
 Config hostSavedConfig;
 void saveConfig(const Config& c) { hostSavedConfig=c; }
+// Random source of new logical sensor IDs (lsensors.h): a deterministic sequence
+#include "lsensors.h"
+uint32_t hostLsRandom=0x3F9A2C;
+uint32_t lsRandom() { return hostLsRandom += 0x10101; }
+// The table's lock (lsensors.h): single-threaded here - a depth counter, so a
+// test can check that every section was left (hostLsLockDepth == 0).
+int hostLsLockDepth = 0;
+void lsLock()   { hostLsLockDepth++; }
+void lsUnlock() { if (--hostLsLockDepth < 0) abort(); }
 bool portalRequestedViaDownlink=false;
 uint8_t loopCount=42;
 int sendFailCount=1;

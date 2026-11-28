@@ -16,10 +16,47 @@
 #include "alarms.h"
 #include "rf_stats.h"
 #include "rf_names.h"
+#include "series.h"
 #include <esp_timer.h>
 #include <time.h>
+#include <memory>
+#include <new>
 
 const char* gResetReason = "unknown";
+
+// Custom series (series.h): "series": [{"slot", "name", "sensor", "field",
+// "agg", "unit", "decimals", "value"}] - every defined slot (the same keys as
+// /api/history's series[]), value = the last cycle's (null without one),
+// temperatures in the device units.
+static void addSeriesJson(JsonDocument& doc)
+{
+    JsonArray sa;
+    for (int i = 0; i < SERIES_MAX; i++) {
+        SeriesDef d = seriesDefAt(i);
+        if (!d.used()) continue;
+        if (sa.isNull()) sa = doc["series"].to<JsonArray>();
+        JsonObject e = sa.add<JsonObject>();
+        e["slot"] = i + 1;
+        const SeriesFieldInfo& fi = SERIES_FIELDS[d.field];
+        e["name"] = d.name;
+        if (d.sensorInternalId[0]) e["sensor"] = d.sensorInternalId;
+        e["field"] = fi.key;
+        e["agg"] = SERIES_AGG_KEYS[seriesAgg(d)];
+        char tu[8];
+        snprintf(tu, sizeof(tu), "\xC2\xB0%s", temperatureUnitLabel(gCfg));
+        if (fi.isTemp) e["unit"] = tu;
+        else if (fi.unit[0]) e["unit"] = fi.unit;
+        e["decimals"] = fi.decimals;
+        float v;
+        if (seriesNow(i, v)) {
+            if (fi.isTemp) v = temperatureForOutput(v, gCfg);
+            const float m = powf(10.0f, fi.decimals);
+            e["value"] = roundf(v * m) / m;
+        } else {
+            e["value"] = nullptr;
+        }
+    }
+}
 unsigned long gBaseCycleMs = 0;   // base cycle length, set by loop() (0 = not yet known)
 
 // Unit-neutral field names (temp, pressureAbs, ...) — the actual unit used
@@ -82,21 +119,23 @@ static void addDerivedJson(JsonDocument& doc, float windMs, int dirDeg)
     if (upd[0]) doc["firmwareUpdate"] = upd;
 }
 
-// One wireless sensor (rfSensors[] item, also the MQTT topic <prefix>/rf/<ID>).
+// One wireless sensor (rfSensors[] item, also the MQTT topic <prefix>/rf/<custom ID or rf+radio ID>).
 void addRfSensorJson(JsonObject o, int i)
 {
     const RfSensorReading& r = gRfSensors[i];
-    char id[11];
-    snprintf(id, sizeof(id), "%08lX", (unsigned long)r.id);
-    o["id"]        = id;
+    const RfLabel l = rfLabelOf(r.id);   // copied under the logical sensor table's lock
+    o["id"]        = (const char*)l.radio;            // the radio ID (compatibility; changes with a battery change)
+    if (l.mine()) {                      // a logical sensor (lsensors.h)
+        o["customId"] = (const char*)l.customId;
+        o["internalId"] = (const char*)l.internalId;
+    }
     uint32_t eco;
     if (r.proto == RF_PROTO_FINEOFFSET && rfEcowittId(r.id, eco)) {   // as the Ecowitt app / console shows it
         char e[8];
         snprintf(e, sizeof(e), "%lX", (unsigned long)eco);
         o["ecowittId"] = e;
     }
-    const char* nm = rfNameOf(r.id);
-    if (nm[0]) o["name"] = nm;   // user-defined (Settings → wireless sensor table)
+    if (l.displayName[0]) o["displayName"] = (const char*)l.displayName;   // user-defined (Settings → wireless sensor table)
     // wireless sensor number 1-32 (ID list order, else reception order); 1-4
     // are the value-source slots. Missing = not in the ID list (not possible
     // while the list filters the reception).
@@ -112,7 +151,16 @@ void addRfSensorJson(JsonObject o, int i)
     unsigned long age = (millis() - r.lastMs) / 1000;
     if ((r.staleMask & RF_VAL_ANY) && age < rfFreshMs(r) / 1000) age = rfFreshMs(r) / 1000;
     o["ageSec"]    = age;
+    const int twin = rfTwinIndex(r.id);   // IT+: another sensor with the same IT+ ID is received too
+    if (twin >= 0) { char tw[9]; snprintf(tw, sizeof tw, "%08lX", (unsigned long)gRfSensors[twin].id); o["idTwin"] = tw; }
     o["batteryOk"] = r.batteryOk;
+    if (l.mine() && !rfIsNetProto(r.proto)) {   // reception watchdog (reception_window.h): packets received / expected, last hour
+        const ReceptionVerdict rx = rfReceptionOf(r);
+        if (rx.known) o["reception"] = rx.percent;
+        else          o["reception"] = nullptr;
+        o["receptionPoor"] = rx.poor;
+        o["idCollision"] = rx.idCollision;   // two transmitters suspected on this radio ID (reception unknown then)
+    }
     if (r.batteryMv) o["batteryV"] = roundf(r.batteryMv / 10.0f) / 100.0f;   // the voltage the sensor reports (diagnostic)
     if (r.hasTemp)     o["temp"]     = temperatureForOutput(r.tempC, gCfg);
     if (r.hasHumidity) o["humidityPct"] = r.humidity;
@@ -122,11 +170,10 @@ void addRfSensorJson(JsonObject o, int i)
         o["windDirDeg"] = (int)lroundf(r.windDirDeg);
     }
     if (r.hasRain)  o["rainTotal"] = rainForOutput(r.rainTotalMm, gCfg);   // the sensor's own counter (since battery change)
-    RfStat* st = (r.hasRain || r.hasLightning) ? rfStatFor(r.id, false) : nullptr;
-    uint32_t t = 0, ymd = 0;
-    if (st) rfStatsClock(t, ymd);
+    RfStat stat;   // a rolled copy (rf_stats.h: readers never roll the shared entry)
+    uint32_t t = 0;
+    RfStat* st = (r.hasRain || r.hasLightning) && rfStatSnapshot(r.id, stat, t) ? &stat : nullptr;
     if (st && r.hasRain) {   // from the counter's increments since the node started (rf_stats.h)
-        rfStatRoll(*st, t, ymd);
         const int dec = gCfg.unitSystem == 1 ? 2 : 1;
         const float k = dec == 2 ? 100.0f : 10.0f;
         if (st->ymd) o["rainToday"] = roundf(rainForOutput(st->rainTodayMm, gCfg) * k) / k;
@@ -142,7 +189,6 @@ void addRfSensorJson(JsonObject o, int i)
         o["lightningCount"] = r.lightningCount;   // the sensor's 8-bit counter (wraps): diagnostic
         if (r.lightningKm) o["lightningDistKm"] = r.lightningKm;
         if (st) {
-            rfStatRoll(*st, t, ymd);
             if (st->ymd) o["lightningToday"] = st->strikesToday;
             o["lightning1h"] = rfStatStrikes1h(*st, t);
             if (st->lastStrike) {
@@ -174,6 +220,8 @@ void addRfSensorJson(JsonObject o, int i)
     }
     if (r.hasLeafWetness) o["leafWetnessPct"] = r.leafWetnessPct;
     if (r.hasConductivity) o["conductivityUsCm"] = (long)lroundf(r.conductivityUsCm);
+    if (r.hasDistance) o["distanceMm"] = r.distanceMm;  // LDS01 laser distance (air gap)
+    if (r.hasHeatCount) o["heatCount"] = r.heatCount;   // LDS01 heater-on count (low byte)
     // values not received for more than 5 min (the sensor still sends others)
     const bool has[7] = { r.hasTemp, r.hasHumidity, r.hasWind, r.hasRain, r.hasUv, r.hasLight, r.hasPressure };
     static const char* const keys[7] = { "temp", "humidity", "wind", "rain", "uv", "light", "pressure" };
@@ -229,8 +277,10 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
         if (!astroJson(a)) doc.remove("astro");
     }
     {   // today's extremes (records.h) - the complete set: GET /api/records
-        static Records today;   // static: ~430 bytes, not on the loop task's stack
-        if (recordsToday(today)) {
+        // per call (~430 bytes, not on the stack): the loop task and the web task both build payloads
+        std::unique_ptr<Records> todayBuf(new (std::nothrow) Records());
+        if (todayBuf && recordsToday(*todayBuf)) {
+            const Records& today = *todayBuf;
             const RecVal& tn = today.mn[RQ_TEMP][RP_TODAY];
             const RecVal& tx = today.mx[RQ_TEMP][RP_TODAY];
             const RecVal& gx = today.mx[RQ_GUST][RP_TODAY];
@@ -259,12 +309,13 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
                 ds18b20.add(nullptr);
         doc["ds18b20Unit"] = temperatureUnitLabel(gCfg);
     }
+    addSeriesJson(doc);
     if (gCfg.lipoEn) {
         doc["batteryVolt"] = batteryVolt;
     }
 
-    // PCB v2.0 I/O block - each object only while its function is enabled.
-    if (ioV2()) {
+    // V4 Full I/O block - each object only while its function is enabled.
+    if (ioFull()) {
         if (gSrc.uvBoard) {
             doc["uvEnabled"] = true;
             doc["uvIndexCalibrated"] = gIo.uvIndexCalibrated;
@@ -278,7 +329,7 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
             }
         }
         if (ioAuxAinActive()) doc["auxAnalogV"] = gIo.auxAinV;
-        if (gCfg.wind2Mode) {
+        if (gCfg.wind2Mode && gIo.wind2Valid) {   // no accepted sample this cycle: left out
             JsonObject w2 = doc["wind2"].to<JsonObject>();
             w2["speed"] = windSpeedForOutput(gIo.wind2SpeedMs, gCfg);
             w2["gust"]  = windSpeedForOutput(gIo.wind2GustMs,  gCfg);
@@ -327,7 +378,7 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
         doc["uvIndexUnit"] = "index";
     }
     if (gSrc.lightValid) doc["lightLux"] = gSrc.lightLux;
-    if (gCfg.rfEn) {
+    if (rfTableOn()) {
         JsonObject src = doc["sources"].to<JsonObject>();
         char d[24];
         for (int g = 0; g < SG_COUNT; g++) { srcDescribe((SrcGroup)g, d, sizeof(d)); src[srcGroupKey((SrcGroup)g)] = d; }
@@ -340,11 +391,11 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
     status["bme280Present"] = bme280Present;
     status["bus1Present"]   = bus1Count > 0;
     status["sendFailCount"] = sendFailCount;
-    status["pcbRev"]        = boardPcbAllowed() ? gCfg.pcbVersion : 0;   // 0 = no PCB (Heltec V4)
-    status["board"]         = boardIsR8() ? "V4-R8" : boardName(gBoard.kind);
+    status["pcbRev"]        = boardPcbAllowed() ? gCfg.pcbVersion : 0;   // 0 = no PCB (wireless station)
+    status["board"]         = "V4";
     if (gBoard.fem != FEM_NONE) status["boardFem"] = femName(gBoard.fem);
-    status["uvEnabled"]     = ioV2() && ioUvActive();
-    status["uvIndexCalibrated"] = ioV2() && ioUvActive() && gIo.uvIndexCalibrated;
+    status["uvEnabled"]     = ioFull() && ioUvActive();
+    status["uvIndexCalibrated"] = ioFull() && ioUvActive() && gIo.uvIndexCalibrated;
     if (gIo.battLockout) status["batteryLowLockout"] = true;
 
     // Time left until the current measurement cycle completes and the next
@@ -361,7 +412,7 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
     doc["resetReason"] = gResetReason;
 
     // Wireless sensors (rf_sensors.cpp): latest values per sensor, units as configured.
-    if (gCfg.rfEn) {
+    if (rfTableOn()) {
         JsonArray rf = doc["rfSensors"].to<JsonArray>();
         for (int i = 0; i < RF_MAX_SENSORS; i++)
             if (gRfSensors[i].used) addRfSensorJson(rf.add<JsonObject>(), i);

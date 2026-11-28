@@ -80,6 +80,74 @@ paths:
       responses:
         "204": { $ref: "#/components/responses/Preflight" }
 
+  /metrics:
+    get:
+      tags: [data]
+      operationId: getMetrics
+      summary: Prometheus metrics
+      description: |
+        The same public data as `/api/data`, in Prometheus text exposition
+        format and fixed SI base units (Celsius, m/s, hPa, mm, lux, seconds,
+        bytes), regardless of the configured display units: the selected
+        weather values, every wireless sensor (labels `sensor` = the custom ID of a
+        ★ sensor, else `rf<radio ID>`; `radio_id`, `model`, `name`, `channel`)
+        and system values (uptime, heap, Wi-Fi RSSI). A wireless
+        sensor that has gone silent keeps `uwn_rf_up 0`, `uwn_rf_age_seconds`,
+        RSSI and packet count, but no measured values. Rain totals are running
+        totals: `uwn_rain_total_mm` = the selected rain source since the start
+        (0 after a rain reset), `uwn_rf_rain_total_mm` = the sensor's own
+        counter (0 after a battery change) - use `increase()`. No login —
+        scrape it with Prometheus, VictoriaMetrics, Grafana Alloy or Telegraf.
+      responses:
+        "200":
+          description: Metrics in Prometheus text format (version=0.0.4).
+          headers:
+            Access-Control-Allow-Origin: { $ref: "#/components/headers/AllowOrigin" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            text/plain:
+              schema: { type: string }
+    options:
+      tags: [data]
+      operationId: preflightMetrics
+      summary: CORS preflight
+      responses:
+        "204": { $ref: "#/components/responses/Preflight" }
+
+  /api/events:
+    get:
+      tags: [data]
+      operationId: getEvents
+      summary: Live values as Server-Sent Events
+      description: |
+        A `text/event-stream` that sends the `/api/data` JSON as one `data:`
+        line whenever something changed (a received wireless packet or the end
+        of a measurement cycle), at most every 2 s, and an `event: ping` (data `1`)
+        after 20 s without data. Use it with `EventSource`; the stream starts
+        with `retry: 5000` (reconnect after 5 s). No login. At most 3
+        subscribers at a time; another one gets 503 with `Retry-After`. A
+        subscriber that can't take an event at once is disconnected.
+      responses:
+        "200":
+          description: Event stream.
+          headers:
+            Access-Control-Allow-Origin: { $ref: "#/components/headers/AllowOrigin" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "503":
+          description: Too many subscribers; retry later.
+          content:
+            text/plain:
+              schema: { type: string }
+    options:
+      tags: [data]
+      operationId: preflightEvents
+      summary: CORS preflight
+      responses:
+        "204": { $ref: "#/components/responses/Preflight" }
+
   /api/records:
     get:
       tags: [data]
@@ -109,6 +177,51 @@ paths:
       summary: CORS preflight
       responses:
         "204": { $ref: "#/components/responses/Preflight" }
+
+  /api/time:
+    post:
+      tags: [pages]
+      operationId: postTime
+      summary: The browser's time for a node without internet
+      description: |
+        The dashboard sends the device's clock once per page load (form field
+        `ms` = Unix time in milliseconds). The node takes it as the time
+        source `phone` (`/api/info` measurement.clockSource) when the request
+        came over its own access point, or when it has no fresh time at all;
+        a fresh better source (GNSS, NTP, DCF77 sensor) still wins. No login
+        (docs/airfield.md). `result`: `set` (clock stepped), `confirmed`
+        (within 2 s), `blocked` (a better source is fresh), `refused` (station
+        LAN while the node has a fresh time), `invalid` (not a time between
+        2024 and 2099, answered with 400).
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [ms]
+              properties:
+                ms: { type: string, pattern: "^[0-9]+$" }
+      responses:
+        "200":
+          description: What the node did with it, and the source its clock follows now.
+          headers:
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result: { type: string, enum: [set, confirmed, blocked, refused] }
+                  clockSource: { type: string, enum: [none, gnss, ntp, dcf77, phone, lorawan] }
+        "400":
+          description: No valid time.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result: { type: string, enum: [invalid] }
+                  clockSource: { type: string }
 
   /api/alarms:
     get:
@@ -147,8 +260,9 @@ paths:
         node publishes on the MQTT topic `<prefix>/data` (MQTT may use a
         different wind window, see `/api/info` measurement.mqttWindAggregation).
         Each `rfSensors[]` item (up to 32 wireless sensors) is also published
-        on its own MQTT topic `<prefix>/rf/<id>` (the object alone, same
-        schema `#/$defs/rfSensor` in data.schema.json). Fine Offset air
+        on its own MQTT topic `<prefix>/rf/<custom ID>` (★ sensors: the custom ID,
+        `customId`; others: `rf` + the radio ID `id`) - the object plus `radioId`,
+        same schema `#/$defs/rfSensor` in data.schema.json. Fine Offset air
         quality, leak, leaf wetness, soil EC and indoor sensors add
         per-sensor values there (`pm25`, `co2Ppm`, `leak`, `pressure`, …).
         Does not trigger a measurement. New values exist every
@@ -181,23 +295,51 @@ paths:
     get:
       tags: [data]
       operationId: getHistory
-      summary: Bucketed history (in RAM, cleared by a restart)
+      summary: Bucketed history (24 h of 5-min, 35 days of hourly, 2 years of daily values)
       description: |
-        Parallel arrays, oldest first; `ageSec[i]` is the age of bucket i's end
-        at the time of the response, the last element (ageSec 0) is the
-        still-open bucket. `null` = no data in that bucket.
+        Parallel arrays, oldest first; `ageSec[i]` is the age of point i's end
+        at the time of the response, the last element (ageSec 0, only at
+        end = now) is the still-open bucket. `null` = no data in that bucket.
+        Temperature, humidity and pressure also carry the lowest / highest
+        cycle value per point (`tempMin` / `tempMax`, `humMin` / `humMax`,
+        `pressMin` / `pressMax`, in the units of their means).
+        Ranges with more than 400 buckets are downsampled on the node
+        (`bucketSec` in the response). Period compare: request the same
+        range twice, once with `end` = now − range (e.g. `range=7d` and
+        `range=7d&end=<now − 7 days>`), and the same `res` for both.
       parameters:
         - name: range
           in: query
           required: false
           description: |
-            `24h` (default): fine tier, nominal 5-min buckets, up to 288.
-            `7d`: coarse tier, nominal 1-h buckets, up to 168.
+            Window length. `24h` (default): 5-min buckets, up to 288.
+            `7d`: hourly buckets, up to 168. `30d`: hourly buckets merged
+            into 2-h points, up to 360. `1y`: local days, up to 365.
             Any other value is treated as `24h`.
           schema:
             type: string
-            enum: ["24h", "7d"]
+            enum: ["24h", "7d", "30d", "1y"]
             default: "24h"
+        - name: end
+          in: query
+          required: false
+          description: |
+            End of the window, unix seconds (default and any later value:
+            now). Points whose bucket ends in (end − range, end]. Ignored
+            while the node's clock is not synced. Without `res`, the finest
+            tier that reaches back to end − range serves it (5 min: 24 h,
+            hourly: 35 days, daily: 2 years - /api/info `history.tiers`).
+          schema: { type: integer, minimum: 1 }
+        - name: res
+          in: query
+          required: false
+          description: |
+            Force the tier: `5m`, `1h` or `1d` (e.g. the same resolution for
+            both halves of a compare). Buckets older than the tier keeps are
+            simply absent.
+          schema:
+            type: string
+            enum: ["5m", "1h", "1d"]
       responses:
         "200":
           description: History of the requested range.
@@ -210,6 +352,13 @@ paths:
               examples:
                 24h: { externalValue: "./examples/pcb-v2-full/history-24h.json" }
                 7d: { externalValue: "./examples/pcb-v2-full/history-7d.json" }
+                30d: { externalValue: "./examples/pcb-v2-full/history-30d.json" }
+                1y: { externalValue: "./examples/pcb-v2-full/history-1y.json" }
+        "400":
+          description: Malformed `end` or unknown `res`.
+          content:
+            text/plain:
+              schema: { type: string }
         "500": { $ref: "#/components/responses/AllocationFailed" }
     options:
       tags: [data]
@@ -534,7 +683,7 @@ paths:
         ranges (24 h and 7 days) in RAM and flash, `rain` sets the rain
         statistics (today ... year, last rain, rain since start) to 0,
         `sunshine` the sunshine duration (today, yesterday), `aux` the AUX
-        pulse total (PCB v2.0, like the downlink command). Done within one
+        pulse total (V4 Full, like the downlink command). Done within one
         measurement cycle; redirects back to the settings page.
       security: [{ digest: [] }]
       requestBody:
@@ -551,6 +700,125 @@ paths:
         "400": { description: Unknown `what`. }
         "401": { $ref: "#/components/responses/DigestChallenge" }
         "403": { $ref: "#/components/responses/NoAdminPassword" }
+  /api/diag/crash:
+    post:
+      tags: [admin]
+      operationId: postCrashTest
+      summary: Deliberate crash, to test the crash report
+      description: |
+        Settings -> System -> *Diagnostics* -> *Test crash*. `kind=panic`
+        writes to address 0 in the main loop (a CPU exception), `watchdog`
+        stops the main loop so the task watchdog resets the node after
+        120 s. Starts about 1 s after the answer. Afterwards the status page
+        and `/api/info` (`system.resets`, `system.lastCrash`) show it.
+        Needs the typed word `confirm=CRASH` and a same-origin request
+        besides the login - never triggered by a stray click.
+      security: [{ digest: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                kind: { type: string, enum: [panic, watchdog], default: panic }
+                confirm: { type: string, enum: [CRASH] }
+      responses:
+        "200": { description: Started; the node restarts in a moment. }
+        "400": { description: "`confirm` is not CRASH: nothing happens." }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+  /api/system/reset:
+    post:
+      tags: [admin]
+      operationId: postSystemReset
+      summary: Reset settings, or erase everything
+      description: |
+        Settings -> System -> *Reset* ([settings.md](../settings.md#reset)).
+        `what=settings` (typed word `confirm=RESET`): every setting back to
+        its default except network access (Wi-Fi, static IP, device name,
+        own access point), admin password, language and LoRaWAN keys; the
+        measurement data, the reset history and the core dump stay - the
+        node stays reachable. `what=everything` (`confirm=ERASE`): erases all
+        settings incl. Wi-Fi credentials and every token, the measurement
+        data, the chart history, the reset history, the core dump and the
+        LoRaWAN session; the node then starts like a new one with the setup
+        portal. Done about 1 s after the answer, ends in a restart.
+        Same-origin request and login required.
+      security: [{ digest: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [what, confirm]
+              properties:
+                what: { type: string, enum: [settings, everything] }
+                confirm: { type: string, enum: [RESET, ERASE], description: "RESET for settings, ERASE for everything" }
+      responses:
+        "200": { description: Started; the node restarts in a moment. }
+        "400": { description: "`confirm` does not match `what`: nothing happens." }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+  /api/diag/coredump:
+    get:
+      tags: [admin]
+      operationId: getCoreDump
+      summary: Core dump of the last crash (raw flash image)
+      description: |
+        The ESP-IDF core dump the last crash left in the `coredump`
+        partition, as stored (header + ELF + checksum). It holds the RAM
+        contents at the crash - credentials too: admin only, do not share
+        publicly. Decode with the `firmware.elf` of exactly that build
+        (`system.lastCrash.elfSha`):
+        `esp-coredump info_corefile --core-format raw -c uwn-coredump-....bin firmware.elf`.
+      security: [{ digest: [] }]
+      responses:
+        "200":
+          description: The dump.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+        "404": { description: No (valid) core dump in flash. }
+  /api/https/certificate:
+    get:
+      tags: [pages]
+      operationId: getHttpsCertificate
+      summary: The generated HTTPS certificate (PEM)
+      description: |
+        The self-signed certificate HTTPS runs with when the node generated
+        it (docs/settings.md#https) - to trust it once on a PC or phone.
+        Public like the TLS handshake that sends it anyway; never the
+        private key. `404` while HTTPS is off or runs with the admin's
+        uploaded certificate.
+      responses:
+        "200":
+          description: The certificate (`<hostname>.crt`).
+          content:
+            application/x-x509-ca-cert:
+              schema: { type: string }
+        "404": { description: HTTPS does not run with a generated certificate. }
+  /api/https/regenerate:
+    post:
+      tags: [admin]
+      operationId: regenerateHttpsCertificate
+      summary: Generate a new self-signed HTTPS certificate
+      description: |
+        Deletes the generated certificate and restarts the web server about
+        1 s after the answer; the start generates a new one for the current
+        device name and station address (needed after a change of either).
+        The uploaded certificate, if usable, is still preferred. Same-origin
+        request and login required.
+      security: [{ digest: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Html" }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403": { $ref: "#/components/responses/NoAdminPassword" }
+        "409": { description: HTTPS is not enabled. }
   /api/settings/rfsensors:
     get:
       tags: [admin]
@@ -642,6 +910,46 @@ paths:
             text/plain:
               schema: { type: string }
 
+  /api/display/saver:
+    post:
+      tags: [admin]
+      operationId: postDisplaySaver
+      summary: Preview a frame of the OLED screensaver
+      description: |
+        One frame of a screensaver takeover (docs/settings.md, Display) with the
+        current values, off-screen - the preview button on the settings page.
+        Form fields: `m` mode (1 blank, 2 dot, 3 walking figure, 4 weather icons),
+        `seed` (same seed = same scene), `dur` duration in s (3-30), `t` ms into
+        the takeover. Answer as for /api/display/preview. Same-origin.
+      security: [{ digest: [] }]
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                m: { type: string, enum: ["1", "2", "3", "4"] }
+                seed: { type: string }
+                dur: { type: string }
+                t: { type: string }
+      responses:
+        "200":
+          description: The display buffer as 2048 lowercase hex digits.
+          content:
+            text/plain:
+              schema: { type: string, pattern: "^[0-9a-f]{2048}$" }
+        "401": { $ref: "#/components/responses/DigestChallenge" }
+        "403":
+          description: No admin password configured, or a cross-site request.
+          content:
+            text/plain:
+              schema: { type: string }
+        "503":
+          description: Not enough memory right now.
+          content:
+            text/plain:
+              schema: { type: string }
+
   /api/placeholders:
     get:
       tags: [admin]
@@ -652,7 +960,7 @@ paths:
         as on a custom OLED screen (device units, plus `clock`, `date`, `ip`
         and the unit labels `u_*`); `upload` / `alarm`: as in the custom
         uploads and alarm texts (metric). Only names with a value right now;
-        wireless sensors as `rf<N>_<field>` with `s` = the sensor's name, or
+        wireless sensors as `rf<ID>_<field>` (8-digit ID) with `s` = the sensor's name, or
         model and ID. `alarm` adds `event`: the names filled in at the time
         of an alarm.
       security: [{ digest: [] }]

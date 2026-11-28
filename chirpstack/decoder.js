@@ -31,7 +31,10 @@
  *   Ch 2–4 Temperature     → DS18B20 sensor 0–2 (°C)
  *   Ch 201 Temperature     → CPU temperature (°C, debug mode)
  *
- * PCB v2.0 I/O block (each only while the function is enabled):
+ * V4 Full I/O block (each only while the function is enabled). Board types
+ * (pcbRev of /api/data, /api/info and MQTT; not part of this payload): 20 =
+ * V4 Full (formerly "PCB v2.0"), 21 = V4 Light (no I/O block - never sends
+ * these channels), 0 = Heltec V4 without PCB.
  *   Ch 3  Digital Input    → io status (bitmask, see decodeIoStatus)
  *   Ch 5  Analog Input     → AUX analog input (V, resolution 0.01)
  *   Ch 10 Generic Sensor   → AUX pulses this cycle
@@ -131,7 +134,7 @@ function decodeStatus(byte) {
     };
 }
 
-// io status (PCB v2.0, LPP Ch 3 / binary IO_STATUS)
+// io status (V4 Full, LPP Ch 3 / binary IO_STATUS)
 function decodeIoStatus(byte) {
     return {
         heater_on:           (byte & 0x01) !== 0,
@@ -354,7 +357,7 @@ var BIN_FIELD = {
     BME_HUMIDITY: 8, BME_PRESS_QNH: 9, BME_PRESS_ABS: 10, BME_TEMP: 11,
     DS18B20_0: 12, DS18B20_1: 13, DS18B20_2: 14,
     DBG_CYCLE: 15, DBG_CPU_TEMP: 16, DBG_FAIL_COUNT: 17, DBG_FREE_HEAP: 18, DBG_UPTIME: 19,
-    // PCB v2.0 I/O block
+    // V4 Full I/O block
     IO_STATUS: 20, AUX_AIN: 21, AUX_PULSES: 22, AUX_TOTAL: 23, OUTPUT_DUTY: 24, FAN_RPM: 25, VE_DIRECT: 26, VE_LOAD: 27,
     WIND2_DIR: 28, WIND2_SPEED: 29, WIND2_GUST: 30, UV: 31,
     // version 4

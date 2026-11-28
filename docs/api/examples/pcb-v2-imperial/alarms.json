@@ -43,6 +43,7 @@
       "enabled": true,
       "value": "sensor",
       "sensorId": "39582376",
+      "customId": "wetter",
       "sensorValue": "leak",
       "compare": ">",
       "raise": 0.5,

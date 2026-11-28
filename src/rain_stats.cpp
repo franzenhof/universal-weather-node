@@ -1,4 +1,5 @@
 #include "rain_stats.h"
+#include "time_source.h"
 #include <math.h>
 #include <string.h>
 
@@ -74,17 +75,7 @@ bool rainPeriodsValid(const RainPeriods& p)
 
 int32_t rainYmd(const struct tm& lt) { return (lt.tm_year + 1900) * 10000 + (lt.tm_mon + 1) * 100 + lt.tm_mday; }
 
-int32_t rainYmdDayNumber(int32_t ymd)
-{
-    // days_from_civil (H. Hinnant)
-    int32_t y = ymd / 10000, m = ymd / 100 % 100, d = ymd % 100;
-    y -= m <= 2;
-    const int32_t era = (y >= 0 ? y : y - 399) / 400;
-    const int32_t yoe = y - era * 400;
-    const int32_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-    const int32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + doe - 719468;
-}
+int32_t rainYmdDayNumber(int32_t ymd) { return ymdDayNumber(ymd); }
 
 bool rainDailyRoll(RainDaily& d, int32_t ymd)
 {
@@ -108,6 +99,7 @@ bool rainDailyRoll(RainDaily& d, int32_t ymd)
 
 bool rainRecordRoll(RainRecord& r, const struct tm& lt)
 {
+    if (ymdSteppedBack(rainYmd(lt), r.d.ymd)) return false;   // clock stepped back over midnight: stay on today
     bool changed = rainPeriodsRoll(r.p, lt);
     changed |= rainDailyRoll(r.d, rainYmd(lt));
     if (r.pendingMm != 0.0f || r.pendingSunSec != 0.0f) {

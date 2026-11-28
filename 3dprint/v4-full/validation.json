@@ -1,0 +1,206 @@
+{
+  "pcb_mm": [
+    100,
+    100,
+    1.6
+  ],
+  "pcb_bottom_z_mm": 8.4,
+  "coordinates": "Opening/mount data: PCB-local Y down; STEP assembly: X=PCB X, Y=-PCB Y, Z up",
+  "mounts_mm": [
+    [
+      96.0,
+      96.0
+    ],
+    [
+      4.0,
+      4.0
+    ],
+    [
+      96.0,
+      4.0
+    ],
+    [
+      4.0,
+      96.0
+    ]
+  ],
+  "openings": [
+    [
+      "J6",
+      "right",
+      7.850000000000002,
+      22.450000000000003,
+      9.6,
+      23.4
+    ],
+    [
+      "J4",
+      "right",
+      30.850000000000005,
+      45.45,
+      9.6,
+      23.4
+    ],
+    [
+      "J7",
+      "right",
+      22.2,
+      30.8,
+      9.5,
+      21.4
+    ],
+    [
+      "J5",
+      "right",
+      45.2,
+      60.8,
+      9.5,
+      21.4
+    ],
+    [
+      "J17",
+      "right",
+      67.95,
+      83.55,
+      9.5,
+      21.4
+    ],
+    [
+      "J14",
+      "left",
+      36.55,
+      52.55,
+      9.5,
+      21.4
+    ],
+    [
+      "J18 knock-out",
+      "left",
+      74.0,
+      84.0,
+      11.5,
+      21.5
+    ],
+    [
+      "USB",
+      "left",
+      16.97,
+      29.97,
+      20.4,
+      27.4
+    ],
+    [
+      "J3",
+      "bottom",
+      7.45,
+      19.55,
+      9.5,
+      21.4
+    ],
+    [
+      "J12",
+      "bottom",
+      20.45,
+      29.05,
+      9.5,
+      21.4
+    ],
+    [
+      "J13",
+      "bottom",
+      29.95,
+      42.05,
+      9.5,
+      21.4
+    ],
+    [
+      "J11",
+      "bottom",
+      42.95,
+      58.55,
+      9.5,
+      21.4
+    ],
+    [
+      "J10",
+      "bottom",
+      59.45,
+      71.55,
+      9.5,
+      21.4
+    ],
+    [
+      "J9",
+      "bottom",
+      72.45,
+      88.05,
+      9.5,
+      21.4
+    ],
+    [
+      "WiFi R-SMA knock-out",
+      "left",
+      68.8,
+      75.2,
+      26.8,
+      33.2
+    ]
+  ],
+  "parts": {
+    "case-body": {
+      "size_mm": [
+        121.99301528930664,
+        158.0,
+        40.0
+      ],
+      "volume_mm3": 85645.22675364716,
+      "watertight": true,
+      "single_solid": true
+    },
+    "case-lid": {
+      "size_mm": [
+        121.99301528930664,
+        147.99301528930664,
+        5.400000095367446
+      ],
+      "volume_mm3": 34917.85941694629,
+      "watertight": true,
+      "single_solid": true
+    },
+    "button-pin": {
+      "size_mm": [
+        5.599999904632568,
+        5.599999904632568,
+        14.0
+      ],
+      "volume_mm3": 142.6597223995125,
+      "watertight": true,
+      "single_solid": true
+    },
+    "gland-blank": {
+      "size_mm": [
+        16.0,
+        16.0,
+        4.400000095367432
+      ],
+      "volume_mm3": 643.6714940160521,
+      "watertight": true,
+      "single_solid": true
+    }
+  },
+  "heltec": "v4",
+  "button_xy_mm": [
+    4.2,
+    15.56
+  ],
+  "display_window_mm": [
+    15.0,
+    48.0,
+    14.469999999999999,
+    32.47
+  ],
+  "usb_y_mm": 23.47,
+  "button_estimated_top_mm": 29.4,
+  "button_length_mm": 14.0,
+  "qualification": "CAD checks only; physical fit and IP rating unverified"
+}

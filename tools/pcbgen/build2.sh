@@ -1,11 +1,11 @@
 #!/bin/bash
 # build.sh <outdir> : schematic -> ERC -> netlist -> board (placed) -> DRC
 set -e
-G=$(cd "$(dirname "$0")" && pwd); D=$1; S=$G/out; mkdir -p $S
+G=$(cd "$(dirname "$0")" && pwd); D=$1; S=${OUT:-$G/out}; mkdir -p $S
 export LAYOUT=${LAYOUT:-layout_w1} SCHEM=${SCHEM:-schem_w} NOPLANE=${NOPLANE:-1} JITTER=${JITTER:-1}
 K=/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli
 PY=/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
-N=universal-weather-node
+N=${N:-universal-weather-node}
 SCHEM=${SCHEM:-schem_w} python3 -I $G/gen_sch2.py $D/$N.kicad_sch
 $K sch erc --severity-all --format json -o $S/erc.json $D/$N.kicad_sch 2>/dev/null | tail -1
 $K sch export netlist --format kicadsexpr -o $S/net.net $D/$N.kicad_sch 2>/dev/null | tail -1

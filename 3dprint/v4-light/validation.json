@@ -1,0 +1,141 @@
+{
+  "pcb_mm": [
+    100.0,
+    80.0,
+    1.6
+  ],
+  "pcb_bottom_z_mm": 8.4,
+  "coordinates": "Opening/mount data: PCB-local Y down; STEP assembly: X=PCB X, Y=-PCB Y, Z up",
+  "mounts_mm": [
+    [
+      96.0,
+      4.0
+    ],
+    [
+      30.0,
+      4.0
+    ],
+    [
+      30.0,
+      76.0
+    ],
+    [
+      96.0,
+      76.0
+    ]
+  ],
+  "openings": [
+    [
+      "J6",
+      "right",
+      7.850000000000002,
+      22.450000000000003,
+      9.6,
+      23.4
+    ],
+    [
+      "J4",
+      "right",
+      33.85000000000001,
+      48.45,
+      9.6,
+      23.4
+    ],
+    [
+      "J7",
+      "right",
+      24.2,
+      32.8,
+      9.5,
+      21.4
+    ],
+    [
+      "J5",
+      "right",
+      52.2,
+      67.8,
+      9.5,
+      21.4
+    ],
+    [
+      "USB",
+      "top",
+      6.5,
+      19.5,
+      20.4,
+      27.4
+    ],
+    [
+      "LoRa SMA",
+      "left",
+      56.75,
+      63.25,
+      18.75,
+      25.25
+    ],
+    [
+      "WiFi R-SMA knock-out",
+      "left",
+      70.8,
+      77.2,
+      18.8,
+      25.2
+    ]
+  ],
+  "parts": {
+    "case-body": {
+      "size_mm": [
+        121.99301528930664,
+        126.4000015258789,
+        36.0
+      ],
+      "volume_mm3": 70111.73977759031,
+      "watertight": true,
+      "single_solid": true
+    },
+    "case-lid": {
+      "size_mm": [
+        121.99301528930664,
+        116.39301681518555,
+        5.400000095367446
+      ],
+      "volume_mm3": 26848.908800805995,
+      "watertight": true,
+      "single_solid": true
+    },
+    "button-pin": {
+      "size_mm": [
+        5.599999904632568,
+        5.599999904632568,
+        10.0
+      ],
+      "volume_mm3": 106.3429113240145,
+      "watertight": true,
+      "single_solid": true
+    },
+    "gland-blank": {
+      "size_mm": [
+        16.0,
+        16.0,
+        4.400000095367432
+      ],
+      "volume_mm3": 643.6714940160521,
+      "watertight": true,
+      "single_solid": true
+    }
+  },
+  "button_xy_mm": [
+    20.91,
+    4.4
+  ],
+  "display_window_mm": [
+    4.0,
+    22.0,
+    15.200000000000001,
+    48.199999999999996
+  ],
+  "usb_x_mm": 13.0,
+  "button_estimated_top_mm": 29.4,
+  "button_length_mm": 10.0,
+  "qualification": "CAD checks only; physical fit and IP rating unverified"
+}

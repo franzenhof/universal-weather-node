@@ -59,7 +59,7 @@ static const char CALIBRATE_PAGE_HTML[] PROGMEM = R"CALPAGE(
 <div id="step" style="display:none">
   <p id="stepLabel"></p>
   <p>@4@ <strong id="liveAdc">-</strong></p>
-  <button onclick="capture()">@5@</button>
+  <button id="capBtn" onclick="capture()">@5@</button>
 </div>
 
 <div id="done" style="display:none">
@@ -95,7 +95,11 @@ function showStep() {
 }
 
 function capture() {
+  var btn = document.getElementById('capBtn');
+  if (btn.disabled) return;
+  btn.disabled = true;   // a double tap must not record two positions from one vane position
   fetch('/calibrate/sample').then(function(r) { return r.json(); }).then(function(j) {
+    if (typeof j.adc !== 'number') throw new Error('no ADC value');
     var deg = Math.round(idx * 360 / count);
     positions.push({ deg: deg, adc: j.adc });
     idx++;
@@ -108,7 +112,7 @@ function capture() {
     }
   }).catch(function(e) {
     document.getElementById('msg').textContent = L.capFail + ' ' + e;
-  });
+  }).then(function() { btn.disabled = false; });
 }
 
 function renderTable() {

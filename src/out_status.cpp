@@ -39,7 +39,7 @@ const char* outStatusKey(uint8_t id)
 {
     static const char* const keys[OUT_COUNT] = { "lorawan", "mqtt", "haDiscovery", "loxone",
         "awekas", "wunderground", "weathercloud", "wetternetzwerk", "windy", "opensensemap", "wow", "cwop",
-        "ntfy", "pushover", "telegram", "webhook", "custom1", "custom2" };
+        "ntfy", "pushover", "telegram", "webhook", "custom1", "custom2", "influxdb" };
     return id < OUT_COUNT ? keys[id] : "";
 }
 
@@ -63,4 +63,11 @@ void outSnapshot(OutStatus out[OUT_COUNT])
     portENTER_CRITICAL(&outMux);
     memcpy(out, gOut, sizeof(gOut));
     portEXIT_CRITICAL(&outMux);
+}
+
+const OutStatus* outSnapshotForWebTask()
+{
+    static OutStatus webTaskSnapshot[OUT_COUNT];
+    outSnapshot(webTaskSnapshot);
+    return webTaskSnapshot;
 }

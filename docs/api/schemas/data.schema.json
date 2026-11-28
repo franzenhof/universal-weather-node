@@ -155,6 +155,24 @@
       "type": "string", "enum": ["C", "F"],
       "description": "Unit of the ds18b20 values.", "x-present": "like ds18b20"
     },
+    "series": {
+      "type": "array", "maxItems": 32,
+      "description": "Custom series (Settings -> Sensors -> Custom series), one object per defined series in slot order, with the last measurement cycle's value. Same keys as /api/history series[] (value instead of values). Also in the MQTT data topic (Home Assistant: one sensor per series, object id series_<slot>).",
+      "x-present": "at least one custom series is defined",
+      "items": {
+        "type": "object", "required": ["slot", "name", "field", "agg", "decimals", "value"], "additionalProperties": true,
+        "properties": {
+          "slot": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Slot number on the settings page; the placeholder is {series_<slot>}.", "x-present": "always in an item" },
+          "name": { "type": "string", "description": "Free-text name (chart title, Home Assistant entity name).", "x-present": "always in an item" },
+          "sensor": { "type": "string", "description": "Internal ID of the logical (★) wireless sensor the series follows.", "x-present": "not for a board probe" },
+          "field": { "type": "string", "enum": ["temp", "hum", "moist", "leaf", "strikes", "dist", "pm25", "pm10", "co2", "ec", "press", "lux", "uv", "batt", "supercap", "ds1", "ds2", "ds3", "distance"], "description": "Which value of the source.", "x-present": "always in an item" },
+          "agg": { "type": "string", "enum": ["mean", "sum", "min", "max"], "description": "Aggregation of the history buckets (see /api/history).", "x-present": "always in an item" },
+          "unit": { "type": "string", "description": "Unit of value; temperatures in the device units (°C / °F).", "x-present": "values with a unit (not lightning strikes, UV index)" },
+          "decimals": { "type": "integer", "minimum": 0, "description": "Decimals of value.", "x-present": "always in an item" },
+          "value": { "type": ["number", "null"], "description": "The last cycle's value (lightning strikes: the increase since the cycle before); null = none (sensor not received, value not sent).", "x-present": "always in an item" }
+        }
+      }
+    },
 
     "batteryVolt": {
       "type": ["number", "null"], "minimum": 0,
@@ -164,8 +182,8 @@
 
     "uvEnabled": {
       "type": "boolean",
-      "description": "PCB v2.0 UV input in use as the UV source (always true when present).",
-      "x-present": "PCB v2.0 and the board UV input is the selected UV source"
+      "description": "V4 Full UV input in use as the UV source (always true when present).",
+      "x-present": "V4 Full and the board UV input is the selected UV source"
     },
     "uvIndexCalibrated": {
       "type": "boolean",
@@ -174,7 +192,7 @@
     },
     "uvSensorVolts": {
       "type": "number", "minimum": 0,
-      "description": "Raw UV sensor terminal voltage, cycle average (PCB v2.0 UV input).",
+      "description": "Raw UV sensor terminal voltage, cycle average (V4 Full UV input).",
       "x-unit-field": "uvSensorVoltsUnit", "x-present": "like uvEnabled, and a valid reading"
     },
     "uvSensorVoltsUnit": {
@@ -193,13 +211,13 @@
 
     "auxAnalogV": {
       "type": "number",
-      "description": "PCB v2.0 AUX analog input, cycle average, scaled to the terminal voltage.",
-      "x-unit": "V", "x-present": "PCB v2.0, AUX analog enabled and not used by wind 2 direction"
+      "description": "V4 Full AUX analog input, cycle average, scaled to the terminal voltage.",
+      "x-unit": "V", "x-present": "V4 Full, AUX analog enabled and not used by wind 2 direction"
     },
     "wind2": {
       "type": "object",
-      "description": "Second anemometer on the PCB v2.0 AUX inputs.",
-      "x-present": "PCB v2.0 and wind 2 enabled (setting wind2Mode 1 or 2)",
+      "description": "Second anemometer on the V4 Full AUX inputs.",
+      "x-present": "V4 Full and wind 2 enabled (setting wind2Mode 1 or 2)",
       "required": ["speed", "gust"],
       "additionalProperties": true,
       "properties": {
@@ -210,8 +228,8 @@
     },
     "auxPulses": {
       "type": "integer", "minimum": 0,
-      "description": "PCB v2.0 AUX pulse counter: pulses in this cycle.",
-      "x-unit": "pulses", "x-present": "PCB v2.0, AUX pulse counter enabled and wind 2 off"
+      "description": "V4 Full AUX pulse counter: pulses in this cycle.",
+      "x-unit": "pulses", "x-present": "V4 Full, AUX pulse counter enabled and wind 2 off"
     },
     "auxPulsesTotal": {
       "type": "integer", "minimum": 0,
@@ -220,8 +238,8 @@
     },
     "heater": {
       "type": "object",
-      "description": "PCB v2.0 heater output state.",
-      "x-present": "PCB v2.0 and heater mode on or auto",
+      "description": "V4 Full heater output state.",
+      "x-present": "V4 Full and heater mode on or auto",
       "required": ["mode", "on", "dutyPct"],
       "additionalProperties": true,
       "properties": {
@@ -232,8 +250,8 @@
     },
     "fan": {
       "type": "object",
-      "description": "PCB v2.0 fan output state and tacho.",
-      "x-present": "PCB v2.0 and fan mode on/auto or the tacho enabled",
+      "description": "V4 Full fan output state and tacho.",
+      "x-present": "V4 Full and fan mode on/auto or the tacho enabled",
       "required": ["mode", "on", "dutyPct"],
       "additionalProperties": true,
       "properties": {
@@ -246,8 +264,8 @@
     },
     "victron": {
       "type": "object",
-      "description": "Victron VE.Direct charger/battery monitor (PCB v2.0). Each value only if the device sends it.",
-      "x-present": "PCB v2.0 and VE.Direct enabled",
+      "description": "Victron VE.Direct charger/battery monitor (V4 Full). Each value only if the device sends it.",
+      "x-present": "V4 Full and VE.Direct enabled",
       "required": ["valid"],
       "additionalProperties": true,
       "properties": {
@@ -422,11 +440,11 @@
         "bme280Present": { "type": "boolean", "description": "A BME280 was detected.", "x-present": "always" },
         "bus1Present": { "type": "boolean", "description": "At least one DS18B20 probe was found.", "x-present": "always" },
         "sendFailCount": { "type": "integer", "minimum": 0, "description": "Consecutive failed LoRaWAN uplinks (0 without LoRaWAN).", "x-present": "always" },
-        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20], "description": "PCB revision: 12 = Rev 1.2, 13 = Rev 1.3 (also the default of a board without PCB), 20 = v2.0 (also a Heltec V4 on PCB v2.0), 0 = Heltec V4 without PCB.", "x-present": "always" },
+        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20, 21], "description": "Board type: 20 = V4 Full (formerly \"V4 Full\"), 21 = V4 Light (no I/O block: heater, fan, tacho, AUX, UV, VE.Direct), 0 = Heltec V4 without PCB; 12 = Rev 1.2, 13 = Rev 1.3 (V3 boards, firmware 2.x only).", "x-present": "always" },
         "board": { "type": "string", "enum": ["V3", "V4", "V4-R8"], "description": "Heltec WiFi LoRa 32 board in effect (V4-R8 = unsupported PSRAM variant).", "x-present": "always" },
         "boardFem": { "type": "string", "enum": ["GC1109", "KCT8103L"], "description": "RF front-end module detected on a V4.", "x-present": "Heltec V4 with a detected front end" },
-        "uvEnabled": { "type": "boolean", "description": "PCB v2.0 UV input enabled.", "x-present": "always" },
-        "uvIndexCalibrated": { "type": "boolean", "description": "PCB v2.0 UV input enabled with a valid calibration.", "x-present": "always" },
+        "uvEnabled": { "type": "boolean", "description": "V4 Full UV input enabled.", "x-present": "always" },
+        "uvIndexCalibrated": { "type": "boolean", "description": "V4 Full UV input enabled with a valid calibration.", "x-present": "always" },
         "batteryLowLockout": { "type": "boolean", "const": true, "description": "Heater/fan held off because of a low battery.", "x-present": "only while the lockout holds" }
       }
     },
@@ -453,7 +471,7 @@
     "rfSensors": {
       "type": "array",
       "maxItems": 32,
-      "description": "Every wireless sensor received since the start (at most 32; never hidden sensors; with Only my sensors only the \"Mine\" IDs), in table (reception) order — slot gives its number. Values in the configured units: temperatures in /api/info units.temp, wind in windUnit/units.wind, rain in rainUnit/units.rain. The same object is published per sensor on the MQTT topic <prefix>/rf/<id>.",
+      "description": "Every wireless sensor received since the start (at most 32; never hidden sensors; with Only my sensors only the \"Mine\" IDs), in table (reception) order — slot gives its number. Values in the configured units: temperatures in /api/info units.temp, wind in windUnit/units.wind, rain in rainUnit/units.rain. The same object (plus radioId) is published per sensor on the MQTT topic <prefix>/rf/<key> (sensor; a sensor without one: its id).",
       "x-present": "wireless sensors enabled (setting rfEn); may be empty",
       "items": { "$ref": "#/$defs/rfSensor" }
     },
@@ -536,19 +554,24 @@
       "required": ["id", "type", "protocol", "rssi", "ageSec", "batteryOk", "mine"],
       "additionalProperties": true,
       "properties": {
-        "id": { "type": "string", "pattern": "^[0-9A-F]{8}$", "description": "Sensor ID, 8 upper-case hex digits (Bresser IDs change with a battery change).", "x-present": "always" },
+        "id": { "type": "string", "pattern": "^[0-9A-F]{8}$", "description": "Radio ID, 8 upper-case hex digits; changes with a battery change for most sensors (IT+, Bresser, most Ecowitt) - use `customId` to follow a ★ sensor.", "x-present": "always" },
+        "customId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,16}$", "description": "Custom ID of the logical sensor (★ sensors): stays across a battery change; the MQTT topic, InfluxDB tag, /metrics label and Loxone names use it.", "x-present": "★ sensors" },
+        "internalId": { "type": "string", "pattern": "^L[0-9A-F]{6}$", "description": "Internal ID of the logical sensor (★ sensors): never changes, not editable (Home Assistant unique_id).", "x-present": "★ sensors" },
         "batteryV": { "type": "number", "minimum": 0, "description": "Battery voltage as the sensor reports it (diagnostic; batteryOk applies the model's threshold).", "x-unit": "V", "x-present": "Fine Offset sensors that send a voltage (WH51, WN34 / WN38, WH40, WN20, WS80 / WS90 ...)" },
         "ecowittId": { "type": "string", "pattern": "^[0-9A-F]{1,6}$", "description": "The ID as the Ecowitt app / console shows it (Fine Offset sensors: the low 24 bits, WH31 / WH25 / WH32 the 8-bit ID); accepted in the Mine / Hidden lists.", "x-present": "Fine Offset sensors" },
-        "name": { "type": "string", "maxLength": 24, "description": "User-defined name (Settings → wireless sensor table).", "x-present": "a name is set" },
-        "slot": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Wireless sensor number 1–32: the \"Mine\" sensors first in list order, then the other received sensors in reception order (table position). Slots 1–4 are the Wireless 1–4 choices of the value-source settings; Loxone names rf<slot>_….", "x-present": "always, except beyond number 32 (many listed but not received IDs plus many others)" },
+        "displayName": { "type": "string", "maxLength": 24, "description": "User-defined name (Settings → wireless sensor table): the logical sensor's for a ★ sensor.", "x-present": "a name is set" },
+        "slot": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Wireless sensor number 1–32: the \"Mine\" sensors first in list order, then the other received sensors in reception order (table position). Slots 1–4 are the Wireless 1–4 choices of the value-source settings.", "x-present": "always, except beyond number 32 (many listed but not received IDs plus many others)" },
         "mine": { "type": "boolean", "description": "The sensor is in the \"Mine\" list (settings star): numbered first, gets a Home Assistant device. Hidden sensors never appear here.", "x-present": "always" },
         "type": { "type": "integer", "minimum": 0, "maximum": 15, "description": "Bresser sensor type number: 0/1/12/13 weather station, 2 thermo-hygro, 3 pool thermometer, 4 soil, 5 leakage, 8 air quality PM, 9 rain gauge or lightning, 10 CO2, 11 HCHO/VOC. Fine Offset and IT+ sensors are mapped to the same numbers; the Fine Offset temperature probes WN34 and WN38 (black globe) also use 3, the WN35 leaf wetness sensor 4 (like the WH51/WH52 soil sensors) — tell them apart by model.", "x-present": "always" },
-        "protocol": { "type": "string", "enum": ["Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset", "Davis"], "description": "Radio protocol it was received with.", "x-present": "always" },
+        "protocol": { "type": "string", "enum": ["Bresser", "IT+ 17.241 kbit/s", "IT+ 9.579 kbit/s", "Fine Offset", "Davis", "MQTT", "REST"], "description": "Radio protocol it was received with; MQTT / REST = a network sensor (IDs E1000001-E1000004, docs/network-sensors.md).", "x-present": "always" },
         "model": { "type": "string", "description": "Fine Offset model, e.g. WS90, WS85, WS80, WS69, WH65, WH24, WH31, WH31B, WH40, WN20, WN34, WN38, WH51, WH57, WS68, WN32 (WH32 outdoor family), WN32P (WH25 / WH32B indoor family), WN35, WH41, WH0290, WH43, WH45, WH46, WH52, WH55; Davis: \"Vantage Pro2\" or \"Vantage Vue\" (the station setting, not detected).", "x-present": "Fine Offset and Davis sensors" },
         "channel": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Channel switch of a WH31 (1–8) or WH55 (1–4); Davis: transmitter ID 1–8.", "x-present": "WH31, WH55, Davis" },
-        "rssi": { "type": "integer", "maximum": 0, "description": "Signal strength of the last packet.", "x-unit": "dBm", "x-present": "always" },
+        "rssi": { "type": "integer", "maximum": 0, "description": "Signal strength of the last packet (0 for a network sensor).", "x-unit": "dBm", "x-present": "always" },
         "ageSec": { "type": "integer", "minimum": 0, "description": "Seconds since the last packet of this sensor.", "x-unit": "s", "x-present": "always" },
         "batteryOk": { "type": "boolean", "description": "Battery state reported by the sensor (false = low).", "x-present": "always" },
+        "reception": { "type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "Reception watchdog: packets received in the last hour as a percentage of those expected from the learned send interval (capped at 100). null = not known yet (no learned interval, less than 10 min of data since the node started, the sensor was starred / re-bound, or after an hour of silence).", "x-unit": "%", "x-present": "★ radio sensors (not network sensors)" },
+        "receptionPoor": { "type": "boolean", "description": "Reception below 30 % over a full hour while the sensor still sends (a reception problem: antenna, position, obstacle). A sensor that sends nothing is silent (ageSec, stale), not poor.", "x-present": "★ radio sensors (not network sensors)" },
+        "idCollision": { "type": "boolean", "description": "Two transmitters are suspected on this radio ID (typical for IT+ with only 64 IDs): packets arrive closer together than one sensor of this type ever sends, often over the last hour. The values alternate between both sensors and reception is null. Fix: re-insert the battery of your sensor (it gets a new radio ID) and re-bind it. Only for types with a fixed send interval (IT+, most Fine Offset sensors); always false otherwise. Not the same as idTwin (an IT+ sensor with the same ID but the other humidity variant, kept apart).", "x-present": "★ radio sensors (not network sensors)" },
         "temp": { "type": "number", "description": "Temperature.", "x-unit-field": "/api/info units.temp (= tempUnit when present)", "x-present": "the sensor sends temperature" },
         "humidityPct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Relative humidity.", "x-unit": "%", "x-present": "the sensor sends humidity" },
         "windSpeed": { "type": "number", "minimum": 0, "description": "Wind mean speed of the last packet.", "x-unit-field": "windUnit / /api/info units.wind", "x-present": "the sensor sends wind" },

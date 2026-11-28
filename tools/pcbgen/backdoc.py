@@ -3,7 +3,7 @@ import sys
 
 import pcbnew
 
-TITLE = "UNIVERSAL WEATHER NODE v2.0 / franzenhof.com / CERN-OHL-P v2"
+TITLE = "UNIVERSAL WEATHER NODE V4 FULL REV 1.0 / franzenhof.com / CERN-OHL-P v2"
 BLOCKS = (
     ("PINOUTS", "PINOUTS: actual connector pin numbers,\n"
      "NOT left-to-right order in this view.\n"
@@ -14,7 +14,7 @@ BLOCKS = (
      "JP8 fitted: VIN buck -> 5V rail\n"
      "JP8: REMOVE BEFORE USB\n"
      "USB only: remove shunt; disconnect VIN\n"
-     "V4: 5V pin = USB VBUS; ideal diodes U8/U9\n"
+     "5V pin = USB VBUS; ideal diodes U8/U9\n"
      "No auto-mux / no reverse-current isolation.\n"
      "Power OFF + discharge before rewiring.\n"
      "USB does not power VIN / heater loads."),
@@ -50,7 +50,7 @@ BLOCKS = (
      "JP1 SDA / JP11 SCL: fit for extra 4k7\n"
      "pull-ups; check total bus pull-up load.\n"
      "J10 1-Wire: 1 GND | 2 3V3 | 3 DQ\n"
-     "DQ V3 GPIO5 / V4 GPIO43; 3-wire bus.\n"
+     "DQ GPIO43; 3-wire bus.\n"
      "3V3 sensors: own LDO U7, F3 PTC 0.25A;\n"
      "1-Wire branch F4 PTC 0.10A nominal."),
     ("DAVIS", "DAVIS WIND / RAIN\n"
@@ -61,11 +61,10 @@ BLOCKS = (
      "RJ11 + screw terminal are parallel.\n"
      "JP2 OPEN: Davis potentiometer vane.\n"
      "JP2 FITTED: extra 4k7 vane pull-up.\n"
-     "V3 GPIO: speed 6 / rain 7 / dir 2\n"
-     "V4 GPIO: speed 44 / rain 16 / dir 6"),
+     "GPIO: speed 44 / rain 16 / dir 6 (ADC1)"),
     ("VIC", "ISOLATED VE.DIRECT / J14 + J15\n"
      "Both: 1 ISO GND | 2 TX | 3 RX | 4 V+\n"
-     "TX = node -> Victron RX (V3 34/V4 45)\n"
+     "TX = node -> Victron RX (GPIO45)\n"
      "RX = Victron TX -> node (GPIO33)\n"
      "V+ from Victron powers isolated side.\n"
      "Do NOT bridge ISO GND to board GND.\n"
@@ -73,19 +72,19 @@ BLOCKS = (
     ("EXP", "EXPANSION / TEST POINTS\n"
      "J16 DNP: 1 GND | 2 3V3 | 3 SDA\n"
      "4 SCL | 5 VANE | 6 5V\n"
-     "VANE = V3 GPIO19 / V4 GPIO34; vane\n"
+     "VANE = GPIO34; vane\n"
      "supply LOW = ON; not a free output.\n"
      "J16 signals: 3.3V, not field protected.\n"
      "TP1/TP5 GND | TP2 protected VIN\n"
      "TP3 5V | TP4 3V3 | TP6 3V3H | TP7 OW\n"
      "ADC probe pads: C17 AUX / C27 UV."),
     ("START", "FIRST POWER-UP / HARDWARE\n"
-     "Heltec V3: J1/J2 OR V4: J19/J20/J21;\n"
-     "fit ONE socket set; USB-C end = pin 1.\n"
+     "Heltec V4 only: J19/J20 + P4 J21;\n"
+     "USB-C end = pin 1.\n"
      "Remove module; current-limit supply.\n"
      "Select JP8; verify TP3=5V, no shorts.\n"
      "Power OFF; fit module; check TP4=3.3V.\n"
-     "ID ~1.65V (V3 GPIO20/V4 GPIO15) = v2.0\n"
+     "ID ~1.65V on GPIO15 = V4 Full\n"
      "No powered sensor signals with MCU OFF."),
     ("LIMITS", "PROTECTION / MECHANICAL LIMITS\n"
      "VIN: Q7 MOSFET reverse protection.\n"
@@ -125,7 +124,7 @@ def apply(board):
     mm = pcbnew.FromMM
     retained = []
     replaced_texts = {text for _, text in documentation_blocks()} | {text for _, text in BLOCKS} | {
-        TITLE, "Universal Weather Node v2.0", "franzenhof.com", "CERN-OHL-P v2",
+        TITLE, "UNIVERSAL WEATHER NODE v2.0 / franzenhof.com / CERN-OHL-P v2", "Universal Weather Node v2.0", "Universal Weather Node V4 Full", "franzenhof.com", "CERN-OHL-P v2",
         "FAN SUPPLY\n1-2: 5V (default)\n2-3: VIN",
         "R25 15k:\nAIN 0-5V x1.667",
         "I2C PULL-UP 4k7\nJP1 SDA / JP11 SCL\nfit for long cables",

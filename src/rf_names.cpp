@@ -1,5 +1,6 @@
 #include "rf_names.h"
 #include "globals.h"
+#include "lsensors.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,9 +80,32 @@ bool rfNameSet(char* list, size_t len, uint32_t id, const char* name)
     return ok;
 }
 
-const char* rfNameOf(uint32_t id)
+RfNameBuf rfNameOf(uint32_t id)
 {
-    static char buf[RF_NAME_MAX + 1];
-    rfNameLookup(gCfg.rfNames, id, buf, sizeof(buf));
-    return buf;
+    RfNameBuf b;
+    {
+        LsGuard g;
+        const int i = lsFindByRadioId(gLogicalSensors, id);   // a ★ sensor: the name of its logical sensor
+        if (i >= 0) { snprintf(b.s, sizeof b.s, "%s", gLogicalSensors.s[i].displayName); return b; }
+    }
+    rfNameLookup(gCfg.rfNames, id, b.s, sizeof(b.s));
+    return b;
+}
+
+RfLabel rfLabelOf(uint32_t id)
+{
+    static_assert(sizeof(RfLabel::customId) == LS_CUSTOM_ID_MAX + 1 && sizeof(RfLabel::internalId) == LS_INTERNAL_ID_LEN + 1, "RfLabel fits a logical sensor");
+    RfLabel l;
+    snprintf(l.radio, sizeof l.radio, "%08lX", (unsigned long)id);
+    LogicalSensor e;
+    if (lsCopyByRadioId(id, e)) {
+        memcpy(l.customId, e.customId, sizeof l.customId);
+        memcpy(l.displayName, e.displayName, sizeof l.displayName);
+        memcpy(l.internalId, e.internalId, sizeof l.internalId);
+    } else {
+        snprintf(l.customId, sizeof l.customId, "rf%s", l.radio);   // never equal to a custom ID (lsCustomIdProblem refuses rf + hex)
+        l.internalId[0] = '\0';
+        rfNameLookup(gCfg.rfNames, id, l.displayName, sizeof l.displayName);
+    }
+    return l;
 }

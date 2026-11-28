@@ -1,13 +1,15 @@
-// PCB v2.0 I/O block: revision ID, UV ADC, AUX analog/pulse inputs, heater
-// and fan outputs, fan tacho and isolated VE.Direct. Functions are off by
-// default and ignored on Rev 1.2/1.3 boards.
+// Revision ID (V4 Full / V4 Light) and the V4 Full I/O block: UV ADC, AUX
+// analog/pulse inputs, heater and fan outputs, fan tacho and isolated
+// VE.Direct. Functions are off by default and ignored on the V4 Light and
+// without a PCB.
 #pragma once
+#include "pulse_counter.h"
 
 #include <Arduino.h>
 #include "vedirect.h"
 
-// revision ID divider (ADC2 - read before WiFi starts): V3 GPIO20, V4 GPIO15 (heltec_board.h boardHwIdPin())
-#define PIN_UV_AIN        3   // PCB v2.0 UV input (ADC1), input-only even when disabled
+// revision ID divider (ADC2 - read before WiFi starts): GPIO15 (BOARD_HW_ID_PIN, heltec_board.h)
+#define PIN_UV_AIN        3   // V4 Full UV input (ADC1), input-only even when disabled
 #define PIN_AUX_AIN       4   // AUX analog input (ADC1), 10k series, optional 15k divider
 #define PIN_AUX_PULSE    48   // AUX pulse input via inverting Schmitt trigger
 #define PIN_HEATER       38   // heater output J12, low side, HIGH = on
@@ -16,8 +18,7 @@
 // VE.Direct RX 33 (both), TX V3 34 / V4 45 (strap pin: R65 holds it low at reset,
 // driven HIGH = idle only after boot) - heltec_board.h boardPins()
 
-#define PCNT_UNIT_AUX_PULSE  PCNT_UNIT_2
-#define PCNT_UNIT_TACHO      PCNT_UNIT_3
+// Counters PCNT_UNIT_AUX_PULSE / PCNT_UNIT_TACHO: pulse_counter.h
 
 // io status bits (payload: CayenneLPP Ch3 Digital Input, binary BIN_IO_STATUS)
 constexpr uint8_t IO_HEATER_ON    = 0x01;
@@ -30,14 +31,15 @@ constexpr uint8_t IO_VE_NO_DATA   = 0x10;   // VE.Direct enabled, no valid block
 // Finished values of the last measurement cycle (and the live output/
 // VE.Direct state), read by the payload encoders, MQTT and the web pages.
 struct IoState {
-    bool     hwIdDetected = false;   // revision ID divider read as v2.0
+    bool     hwIdDetected = false;   // revision ID divider read (V4 Full or V4 Light)
     float    uvSensorVolts = NAN;    // terminal voltage, cycle average
     float    uvIndex = NAN;          // only present with explicitly enabled, valid calibration
     bool     uvIndexCalibrated = false;
     float    auxAinV = 0.0f;         // cycle average, already scaled
     uint32_t auxPulsesCycle = 0;
     uint32_t auxPulsesTotal = 0;     // since power-on (kept across restarts)
-    float    wind2SpeedMs = 0.0f;    // 2nd anemometer (wind2Mode): cycle average (pulse-weighted)
+    bool     wind2Valid = false;     // 2nd anemometer (wind2Mode): an accepted sample this cycle
+    float    wind2SpeedMs = 0.0f;    // cycle average (pulse-weighted); 0 while !wind2Valid
     float    wind2GustMs = 0.0f;     // highest 3-s gust of the cycle
     uint16_t wind2DirDeg = 0;        // vector average incl. wind2DirOffsetDeg (wind2Mode 2)
     bool     heaterOn = false;
@@ -59,12 +61,16 @@ extern volatile uint32_t sleepPulsesAux;
 // True when the AUX pulse input is in use (counter or 2nd anemometer).
 bool    auxPulseInputUsed();
 
-// Reads the revision ID divider on GPIO20 and returns true for PCB v2.0.
-// Must run before WiFi is started (ADC2).
-bool detectPcbV2();
+// Board type for a revision ID voltage: PCB_REV_V4_FULL (1300..2000 mV),
+// PCB_REV_V4_LIGHT (850..1250 mV), else 0 (no PCB).
+int pcbRevFromHwIdMv(uint32_t mv);
+// Reads the revision ID divider on GPIO15, sets gBoard.pcb / pcbLight and
+// returns the board type (pcbRevFromHwIdMv()). Must run before WiFi is
+// started (ADC2).
+int detectPcb();
 
-// True when the board is v2.0 (detected or set manually).
-bool ioV2();
+// True on the V4 Full: the I/O block (heater, fan, tacho, AUX, UV, VE.Direct).
+bool ioFull();
 // Measurements that really run (one place for the conditions, used by the
 // status page, JSON, LoRaWAN, Home Assistant and history).
 bool ioUvActive();
@@ -72,9 +78,10 @@ bool ioAuxAinActive();       // also false while the 2nd vane (wind2Mode 2) uses
 bool ioWind2DirActive();
 
 // Puts the outputs into a safe state (off) and starts whatever is enabled.
-// Call once after sensorsInit(); no-op on Rev 1.2/1.3.
+// Call once after sensorsInit(); no-op unless on the V4 Full.
 void ioInit();
-// Latches heater/fan off until restart, including during config/OTA.
+// Latches heater/fan off until restart (config portal; a web OTA leaves them
+// under normal control).
 void ioSuspendOutputs();
 // Every loop() iteration: VE.Direct reception and picking up enable changes
 // made by applyParam() (downlink, MQTT, web settings).
@@ -85,9 +92,9 @@ void ioSample();
 void ioFinishCycle(unsigned long elapsedMs);
 
 uint8_t ioStatusByte();
-bool    ioAnyEnabled();        // any v2.0 function enabled (status byte is sent)
+bool    ioAnyEnabled();        // any V4 Full I/O function enabled (status byte is sent)
 void    ioResetAuxPulseTotal();
-// Wind-vane supply (PCB v2.0: Q6 on GPIO19, LOW = on). On permanently in
-// normal operation, only around each reading in low-power mode. No-op on
-// Rev 1.2/1.3 (GPIO3 is the wind-speed input on Rev 1.2).
+// Wind-vane supply (V4 Full / V4 Light: GPIO34, LOW = on). On permanently in
+// normal operation, only around each reading in low-power mode. No-op
+// without a PCB.
 void    windVaneSupply(bool on);

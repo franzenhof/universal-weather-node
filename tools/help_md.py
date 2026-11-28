@@ -33,6 +33,7 @@ HELP_FILES = [
     "docs/installation.md",
     "docs/wireless-sensors.md",
     "docs/minimal-build.md",
+    "docs/example-setups.md",
     "docs/web-dashboard.md",
     "docs/api.md",
     "docs/mqtt-home-assistant.md",

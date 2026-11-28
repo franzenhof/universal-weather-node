@@ -1,11 +1,20 @@
 #include "config.h"
+#include "ha_groups.h"
+#include "series.h"
 #include "oled_screens.h"
 #include "sources.h"
 #include "ha_rf.h"
 #include "loxone.h"
 #include "wind_window.h"
 #include "serial_log.h"
+#include "lsensors.h"
+#include "gnss_logic.h"
+#include <atomic>
+#include "storage_layout.h"
+#include "vs_store.h"
+#include "storage_write.h"
 #include <Preferences.h>
+#include <esp_random.h>
 #include <memory>
 
 uint64_t hexToUint64(const char* s) { return strtoull(s, nullptr, 16); }
@@ -83,134 +92,6 @@ bool checkWriteStr(const char* key, size_t written, const char* value)
     return checkWrite(key, written, strlen(value));
 }
 
-// Loaded values outside what applyParam() (params.cpp) and the portal accept
-// - a corrupted NVS entry, or one written by an older firmware - must not
-// reach the code that relies on those limits (e.g. windDirCalCount indexes
-// a 16-entry table). Choices fall back to the default, ranges are clamped.
-void choice(volatile int& v, int def, int a, int b, int c = -1)
-{
-    if (v != a && v != b && v != c) v = def;
-}
-void choice(int& v, int def, int a, int b, int c = -1)
-{
-    if (v != a && v != b && v != c) v = def;
-}
-void range(volatile int& v, int lo, int hi) { v = v < lo ? lo : (v > hi ? hi : v); }
-void range(int& v, int lo, int hi)          { v = v < lo ? lo : (v > hi ? hi : v); }
-void rangeF(volatile float& v, float def, float lo, float hi)
-{
-    if (!isfinite(v)) v = def;
-    else v = v < lo ? lo : (v > hi ? hi : v);
-}
-
-void sanitizeConfig(Config& c)
-{
-    // The defaults from config.h; on the heap, Config is ~7 KB.
-    std::unique_ptr<const Config> defaults(new Config());
-    const Config& d = *defaults;
-    choice(c.pcbVersion, d.pcbVersion, PCB_REV_1_2, PCB_REV_1_3, PCB_REV_2_0);
-    choice(c.boardSel, d.boardSel, 0, 3, 4);   // BOARD_SEL_AUTO, BOARD_V3, BOARD_V4
-    range (c.uplinkIntervalSec, 5, 3600);
-    if (c.mqttIntervalSec != 0) range(c.mqttIntervalSec, 2, 3600);
-    choice(c.loraWindAgg, d.loraWindAgg, 0, 1);
-    choice(c.mqttWindAgg, d.mqttWindAgg, 0, 1);
-    choice(c.rfEn, d.rfEn, RF_RADIO_OFF, RF_RADIO_SX1262);
-    if (!rfProtoValid(c.rfProto)) c.rfProto = d.rfProto;   // bit mask RF_PROTO_*, RF_PROTO_AUTO or RF_PROTO_DAVIS
-    range (c.davisTxId, 0, 8);
-    range (c.davisOffsetHz, -100000, 100000);
-    range (c.davisWindowMs, 5, 500);
-    range (c.davisGuardMs, 5, 500);
-    choice(c.davisRainFilter, d.davisRainFilter, 0, 1);
-    range (c.davisRainMaxPkt, 1, 127);
-    range (c.davisRainMaxMin, 1, 127);
-    choice(c.davisBucket, d.davisBucket, 0, 1);
-    choice(c.davisModel, d.davisModel, 0, 1);
-    choice(c.davisSniffer, d.davisSniffer, 0, 1);
-    choice(c.davisRaw, d.davisRaw, 0, 1);
-    range (c.davisRawCh, 0, 4);
-    range (c.davisScanKhz, 0, 60);
-    choice(c.davisAfc, d.davisAfc, 0, 1);
-    choice(c.davisTable, d.davisTable, 0, 1);
-    if (!davisRxBwValid(c.davisRxBw)) c.davisRxBw = d.davisRxBw;
-    range (c.windDirOffsetDeg, -180, 180);
-    choice(c.windUnitMs, d.windUnitMs, 0, 1);
-    choice(c.windEn, d.windEn, 0, 1);
-    choice(c.rainEn, d.rainEn, 0, 1);
-    choice(c.rainPersist, d.rainPersist, 0, 1);
-    choice(c.lipoEn, d.lipoEn, 0, 1);
-    choice(c.debugMode, d.debugMode, 0, 1);
-    choice(c.cpuFreqMhz, d.cpuFreqMhz, 80, 240);
-    choice(c.payloadFormat, d.payloadFormat, 0, 1);
-    choice(c.unitSystem, d.unitSystem, 0, 1);
-    rangeF(c.rainMmPerTip, d.rainMmPerTip, 0.001f, 5.0f);
-    rangeF(c.windMsPerPps, d.windMsPerPps, 0.001f, 10.0f);
-    range (c.wowIntervalSec, 300, 3600);
-    range (c.cwopIntervalSec, 300, 3600);
-    range (c.cwopPasscode, -1, 32767);
-    range (c.calTempDc, -100, 100);
-    range (c.calHumDpct, -200, 200);
-    range (c.calPressDhpa, -200, 200);
-    range (c.calRainPermil, 500, 2000);
-    range (c.calWindPermil, 500, 2000);
-    choice(c.sunMethod, d.sunMethod, 0, 1);
-    range (c.dispMode, 0, 2);
-    range (c.dispMinutes, 1, 120);
-    range (c.dispScreens, 0, (1 << OS_COUNT) - 1);
-    if (!c.dispScreens) c.dispScreens = 1;
-    range (c.dispRotateSec, 2, 60);
-    range (c.dispContrast, 1, 255);
-    range (c.dispNightFrom, 0, 23);
-    range (c.dispFlip, 0, 1);
-    range (c.measureSec, 10, 600);
-    range (c.dispBattery, 0, 1);
-    range (c.dispLed, 0, 1);
-    range (c.dispNightTo, 0, 23);
-    choice(c.windDirSensorType, d.windDirSensorType, 0, 1);
-    range (c.windDirCalCount, 0, 16);
-    choice(c.loraEn, d.loraEn, 0, 1);
-    choice(c.lowPowerEn, d.lowPowerEn, 0, 1);
-    choice(c.vanePowerSave, d.vanePowerSave, 0, 1);
-    choice(c.wifiEn, d.wifiEn, 0, 1);
-    choice(c.mqttEn, d.mqttEn, 0, 1);
-    choice(c.webApiEn, d.webApiEn, 0, 1);
-    choice(c.mqttCtrlEn, d.mqttCtrlEn, 0, 1);
-    choice(c.staticIpEn, d.staticIpEn, 0, 1);
-    if (c.mqttPort < 1 || c.mqttPort > 65535) c.mqttPort = d.mqttPort;
-    choice(c.mqttTlsMode, d.mqttTlsMode, MQTT_TLS_NONE, MQTT_TLS_INSECURE, MQTT_TLS_VERIFY);
-    choice(c.loxEn, d.loxEn, 0, 1);
-    if (!loxPortValid(c.loxPort)) c.loxPort = d.loxPort;
-    if (!loxIntervalValid(c.loxSec)) c.loxSec = d.loxSec;
-    loxSanitizePrefix(c.loxPrefix);
-
-    choice(c.auxAinEn, d.auxAinEn, 0, 1);
-    rangeF(c.auxAinScale, d.auxAinScale, 0.001f, 20.0f);
-    choice(c.auxPulseEn, d.auxPulseEn, 0, 1);
-    choice(c.wind2Mode, d.wind2Mode, 0, 1, 2);
-    if (c.wind2Mode >= 1) c.auxPulseEn = 0;   // the 2nd wind sensor owns the AUX inputs it uses
-    if (c.wind2Mode == 2) c.auxAinEn = 0;
-    range (c.wind2DirOffsetDeg, -180, 180);
-    choice(c.heaterMode, d.heaterMode, 0, 1, 2);
-    range (c.heaterDutyPct, 1, 100);
-    range (c.heaterOnBelowDc, -400, 400);
-    range (c.heaterMinDutyPct, 1, 100);
-    range (c.heaterFullBelowDc, -400, 400);
-    if (c.heaterFullBelowDc > c.heaterOnBelowDc) c.heaterFullBelowDc = c.heaterOnBelowDc;
-    choice(c.fanMode, d.fanMode, 0, 1, 2);
-    range (c.fanDutyPct, 1, 100);
-    range (c.fanOnAboveDc, -400, 600);
-    range (c.fanMinPvW, 0, 5000);
-    choice(c.tachoEn, d.tachoEn, 0, 1);
-    range (c.tachoPpr, 1, 8);
-    choice(c.veDirectEn, d.veDirectEn, 0, 1);
-    range (c.outMinBattDv, 0, 600);
-    choice(c.uvEn, d.uvEn, 0, 1);
-    rangeF(c.uvAinScale, d.uvAinScale, 1.0f, 5.0f);
-    choice(c.uvIndexEn, d.uvIndexEn, 0, 1);
-    choice(c.uvCalibrated, d.uvCalibrated, 0, 1);
-    rangeF(c.uvIndexSlope, d.uvIndexSlope, 0.001f, 30.0f);
-    rangeF(c.uvIndexOffset, d.uvIndexOffset, -10.0f, 10.0f);
-}
-
 } // namespace
 
 void loadConfigInto(Config& c)
@@ -227,6 +108,21 @@ void loadConfigInto(Config& c)
     if (!prefs.begin("config", true, "cfgdata")) {
         return;
     }
+    // Key set version (storage_layout.h): an older one is converted first by
+    // the migration hook; a newer one (downgrade) is read as far as the keys
+    // are known - saving writes this firmware's key set and version.
+    if (prefs.isKey("cfgver")) {
+        const int stored = prefs.getUChar("cfgver", STORED_CONFIG_VERSION);
+        const StoredVersionAction a = storedVersionAction((uint8_t)stored, STORED_CONFIG_VERSION);
+        if (a == STORED_MIGRATE) {
+            prefs.end();
+            storageMigrateConfig((uint8_t)stored);
+            if (!prefs.begin("config", true, "cfgdata")) return;
+        } else if (a == STORED_NEWER) {
+            dbgSerial.printf("Config: stored by a newer firmware (key set %d, this one %d) - unknown keys are ignored.\n",
+                             stored, (int)STORED_CONFIG_VERSION);
+        }
+    }
     // A config stored by any earlier firmware always has "deveui" (saveConfig()
     // writes every key; a factory reset clears them all). For such a node, a
     // key added later falls back to the pre-2.0.0-rc.2 default, not to the
@@ -238,8 +134,6 @@ void loadConfigInto(Config& c)
         c.windEn = l.windEn;  c.rainEn = l.rainEn;
     }
     c.provisioned      = prefs.getInt    ("provisioned", c.provisioned);
-    c.pcbVersion       = prefs.getInt    ("pcbver",   c.pcbVersion);
-    c.boardSel         = prefs.getInt    ("board",    c.boardSel);
     c.altitudeM        = prefs.getInt    ("altitude", c.altitudeM);
     c.uplinkIntervalSec = prefs.getInt   ("uplinksec", prefs.getInt("delay", c.uplinkIntervalSec));
     c.sampleSec        = windSampleSecNormalized(prefs.getInt("samplesec", c.sampleSec));
@@ -248,12 +142,11 @@ void loadConfigInto(Config& c)
     c.mqttWindAgg      = prefs.getInt    ("mqttwagg",  c.mqttWindAgg);
     c.rfEn             = prefs.getInt    ("rfen",      c.rfEn);
     c.rfProto          = prefs.getInt    ("rfproto",   c.rfProto);
-    prefs.getString("rfids", c.rfIds, sizeof(c.rfIds));
     prefs.getString("rfignore", c.rfIgnore, sizeof(c.rfIgnore));
     c.uiLang           = prefs.getInt    ("uilang",    c.uiLang);
     c.setupDone        = prefs.isKey("setupdone") ? prefs.getInt("setupdone", 0) : (prefs.isKey("deveui") ? 1 : 0);
     if (c.uiLang < 0 || c.uiLang > 5) c.uiLang = 0;
-    c.rfOnlyMine       = prefs.isKey("rfonly") ? prefs.getInt("rfonly", 0) : rfOnlyMineDefault(c.rfIds);
+    c.rfOnlyMine       = prefs.getInt    ("rfonly",    c.rfOnlyMine);
     c.davisTxId        = prefs.getInt    ("dvid",      c.davisTxId);
     c.davisOffsetHz    = prefs.getInt    ("dvoff",     c.davisOffsetHz);
     c.davisWindowMs    = prefs.getInt    ("dvwin",     c.davisWindowMs);
@@ -274,6 +167,9 @@ void loadConfigInto(Config& c)
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
         int v = prefs.getInt(key, c.srcSel[i]);
         c.srcSel[i] = (uint8_t)(srcSelValid(v) ? v : 0);
+        char kid[10]; snprintf(kid, sizeof(kid), "srciid%d", i);
+        if (prefs.isKey(kid)) prefs.getString(kid, c.sourceInternalId[i], sizeof(c.sourceInternalId[i]));
+        if (!lsIsInternalId(c.sourceInternalId[i])) c.sourceInternalId[i][0] = '\0';
     }
     c.windDirOffsetDeg = prefs.getInt    ("windoff",  c.windDirOffsetDeg);
     c.windUnitMs       = prefs.getInt    ("windunit", c.windUnitMs);
@@ -303,13 +199,23 @@ void loadConfigInto(Config& c)
     c.measureSec       = prefs.getInt    ("measec",    c.measureSec);
     c.dispBattery      = prefs.getInt    ("dispbat",   c.dispBattery);
     c.dispLed          = prefs.getInt    ("displed",   c.dispLed);
-    {   // custom series (series_def.h)
-        char s[480] = "";
-        if (prefs.isKey("series")) prefs.getString("series", s, sizeof(s));
-        seriesUnpack(s, c.series);
+    c.saverMode        = prefs.getInt    ("svmode",    c.saverMode);
+    c.saverMin         = prefs.getInt    ("svmin",     c.saverMin);
+    c.saverSec         = prefs.getInt    ("svsec",     c.saverSec);
+    {   // network sensors (net_sensor.h): [version][the slots] (storage_layout.h)
+        static_assert(1 + sizeof(c.net) <= STORED_BLOB_READ_MAX, "netsens beyond the loaders' read ceiling");
+        const size_t n = prefs.isKey("netsens") ? prefs.getBytesLength("netsens") : 0;
+        if (storedBlobLengthReadable(n)) {   // also longer than today's slots: an older layout for the hook
+            std::unique_ptr<uint8_t[]> b(new (std::nothrow) uint8_t[n]), scratch(new (std::nothrow) uint8_t[1 + sizeof(c.net)]);
+            const uint8_t* p = b && scratch && prefs.getBytes("netsens", b.get(), n) == n
+                ? storedBlobLoad(SF_NETWORK_SENSORS, b.get(), n, STORED_NETWORK_SENSORS_VERSION, sizeof(c.net), scratch.get(), 1 + sizeof(c.net))
+                : nullptr;
+            if (p) memcpy(c.net, p, sizeof(c.net));
+        }
     }
+    for (NetSlotCfg& n : c.net) netSanitize(n);
     for (int i = 0; i < OLED_CUSTOM_COUNT; i++) {   // "dcus0", "dcus1", oled_custom.h
-        char key[8], s[300] = "";
+        char key[8], s[400] = "";   // layout + title + 5 lines
         snprintf(key, sizeof(key), "dcus%d", i);
         if (prefs.isKey(key)) prefs.getString(key, s, sizeof(s));
         oledCustomUnpack(s, c.dispCustom[i]);
@@ -317,6 +223,7 @@ void loadConfigInto(Config& c)
     c.dispNightTo      = prefs.getInt    ("dispnt",    c.dispNightTo);
     prefs.getString("rfcal", c.rfCal, sizeof(c.rfCal));
     prefs.getString("rfnames", c.rfNames, sizeof(c.rfNames));
+    prefs.getString("rfminrssi", c.rfMinRssi, sizeof(c.rfMinRssi));
     c.windDirSensorType = prefs.getInt   ("winddirtyp", c.windDirSensorType);
     c.windDirCalCount  = prefs.getInt    ("wdcalcnt",  c.windDirCalCount);
     prefs.getBytes("wdcaladc", c.windDirCalAdc, sizeof(c.windDirCalAdc));
@@ -334,12 +241,18 @@ void loadConfigInto(Config& c)
     c.mqttEn           = prefs.getInt    ("mqtten",   c.mqttEn);
     c.webApiEn         = prefs.getInt    ("webapien", c.webApiEn);
     c.mqttCtrlEn       = prefs.getInt    ("mqttctrlen", c.mqttCtrlEn);
+    c.httpsEn          = prefs.getInt    ("httpsen",  c.httpsEn);
+    c.httpPortMode     = prefs.getInt    ("httpport", c.httpPortMode);
     prefs.getString("devname",    c.deviceName,   sizeof(c.deviceName));
     c.staticIpEn       = prefs.getInt    ("staticipen", c.staticIpEn);
     prefs.getString("staticip",   c.staticIp,      sizeof(c.staticIp));
     prefs.getString("staticgw",   c.staticGateway, sizeof(c.staticGateway));
     prefs.getString("staticsn",   c.staticSubnet,  sizeof(c.staticSubnet));
     prefs.getString("staticdns",  c.staticDns,     sizeof(c.staticDns));
+    c.apMode           = prefs.getInt    ("apmode",   c.apMode);
+    prefs.getString("apssid",     c.apSsid,        sizeof(c.apSsid));
+    prefs.getString("appass",     c.apPass,        sizeof(c.apPass));
+    c.apChannel        = prefs.getInt    ("apchan",   c.apChannel);
     prefs.getString("mqtthost",   c.mqttHost,     sizeof(c.mqttHost));
     c.mqttPort         = prefs.getInt    ("mqttport", c.mqttPort);
     prefs.getString("mqttuser",   c.mqttUser,     sizeof(c.mqttUser));
@@ -358,6 +271,11 @@ void loadConfigInto(Config& c)
     prefs.getString("ntpserver",  c.ntpServer,    sizeof(c.ntpServer));
     prefs.getString("lat",        c.latitude,     sizeof(c.latitude));
     prefs.getString("lon",        c.longitude,    sizeof(c.longitude));
+    c.gnssEn           = prefs.getInt    ("gnssen",   c.gnssEn);
+    c.gnssBaud         = prefs.getInt    ("gnssbaud", c.gnssBaud);
+    c.gnssTime         = prefs.getInt    ("gnsstime", c.gnssTime);
+    c.gnssPos          = prefs.getInt    ("gnsspos",  c.gnssPos);
+    c.gnssAlt          = prefs.getInt    ("gnssalt",  c.gnssAlt);
     prefs.getString("awkuser",    c.awekasUser,   sizeof(c.awekasUser));
     prefs.getString("awkpass",    c.awekasPass,   sizeof(c.awekasPass));
     c.awekasIntervalSec  = prefs.getInt("awkint", c.awekasIntervalSec);
@@ -384,11 +302,19 @@ void loadConfigInto(Config& c)
     c.cwopPasscode       = prefs.getInt("cwoppass", c.cwopPasscode);
     c.cwopIntervalSec    = prefs.getInt("cwopint", c.cwopIntervalSec);
     c.updateCheckEn      = prefs.getBool("updchk", c.updateCheckEn);
+    c.uiFlashEn          = prefs.getBool("uiflash", c.uiFlashEn);
+    c.uiAgeEn            = prefs.getBool("uiage",   c.uiAgeEn);
     if (prefs.isKey("updurl")) prefs.getString("updurl", c.updateUrl, sizeof(c.updateUrl));
     // Old default (the project's internal Gitea, not reachable for everyone):
     // move nodes that still have it to the public GitHub releases list.
     if (!strcmp(c.updateUrl, "https://git.lb.franzenhof.com/api/v1/repos/esp32/universal-weather-node/tags?limit=20"))
         strlcpy(c.updateUrl, "https://api.github.com/repos/franzenhof/universal-weather-node/releases", sizeof(c.updateUrl));
+
+    c.influxEn           = prefs.getInt   ("influxen",  c.influxEn);
+    prefs.getString("influxurl",  c.influxUrl,         sizeof(c.influxUrl));
+    prefs.getString("influxtok",  c.influxToken,       sizeof(c.influxToken));
+    if (prefs.isKey("influxmeas")) prefs.getString("influxmeas", c.influxMeasurement, sizeof(c.influxMeasurement));
+    c.influxIntervalSec  = prefs.getInt   ("influxint", c.influxIntervalSec);
 
     c.auxAinEn         = prefs.getInt    ("auxainen",   c.auxAinEn);
     c.auxAinScale      = prefs.getFloat  ("auxainscale", c.auxAinScale);
@@ -426,18 +352,43 @@ Config loadConfig()
     return c;
 }
 
+static bool lsSave(Preferences& prefs);
+static bool seriesSave(Preferences& prefs);
+static bool vsSettingsSave(Preferences& prefs);
+
+namespace {
+std::atomic<bool> heldForRestart{false};
+}
+
+void configHoldForRestart() { heldForRestart.store(true); }
+bool configHeldForRestart() { return heldForRestart.load(); }
+
 void saveConfig(const Config& c)
 {
-    Preferences prefs;
-    if (!prefs.begin("config", false, "cfgdata")) {
-        dbgSerial.println("Config save: FAILED to open NVS namespace 'config' in partition 'cfgdata' — nothing was saved.");
+    if (heldForRestart.load()) {
+        dbgSerial.println("Config save skipped: settings saved for the pending restart stay as they are.");
         return;
     }
+    StorageWrite w("config");   // storage_write.h: refused once a reset sealed the storage
+    if (!w.ok()) {
+        dbgSerial.println(storageSealed() ? "Config save: storage sealed by a reset - nothing was saved."
+                                          : "Config save: FAILED to open NVS namespace 'config' in partition 'cfgdata' — nothing was saved.");
+        return;
+    }
+    const bool ok = saveConfigKeys(w.prefs(), c);
 
+    // Non-secret summary only — never log AppKey/WiFi/MQTT credentials/CA cert.
+    dbgSerial.printf("Config saved%s: loraEn=%d region=%s wifiEn=%d mqttEn=%d webApiEn=%d "
+                      "staticIpEn=%d uplinkSec=%d sampleSec=%d\n",
+                      ok ? "" : " (WITH ERRORS, see above)",
+                      c.loraEn, c.region, c.wifiEn, c.mqttEn, c.webApiEn,
+                      c.staticIpEn, c.uplinkIntervalSec, c.sampleSec);
+}
+
+bool saveConfigKeys(Preferences& prefs, const Config& c)
+{
     bool ok = true;
     ok &= checkWrite   ("provisioned", prefs.putInt    ("provisioned", c.provisioned), 4);
-    ok &= checkWrite   ("pcbver",      prefs.putInt    ("pcbver",   c.pcbVersion), 4);
-    ok &= checkWrite   ("board",       prefs.putInt    ("board",    c.boardSel), 4);
     ok &= checkWrite   ("altitude",    prefs.putInt    ("altitude", c.altitudeM), 4);
     ok &= checkWrite   ("uplinksec",   prefs.putInt    ("uplinksec", c.uplinkIntervalSec), 4);
     ok &= checkWrite   ("samplesec",   prefs.putInt    ("samplesec", c.sampleSec), 4);
@@ -446,7 +397,7 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("mqttwagg",    prefs.putInt    ("mqttwagg",  c.mqttWindAgg), 4);
     ok &= checkWrite   ("rfen",        prefs.putInt    ("rfen",      c.rfEn), 4);
     ok &= checkWrite   ("rfproto",     prefs.putInt    ("rfproto",   c.rfProto), 4);
-    ok &= checkWriteStr("rfids",       prefs.putString ("rfids",     c.rfIds), c.rfIds);
+    if (prefs.isKey("rfids")) prefs.remove("rfids");   // the ★ list before A5c (not converted: gLogicalSensors starts empty)
     ok &= checkWriteStr("rfignore",    prefs.putString ("rfignore",  c.rfIgnore), c.rfIgnore);
     ok &= checkWrite   ("uilang",      prefs.putInt    ("uilang",    c.uiLang), 4);
     ok &= checkWrite   ("setupdone",   prefs.putInt    ("setupdone", c.setupDone), 4);
@@ -470,6 +421,10 @@ void saveConfig(const Config& c)
     for (int i = 0; i < (int)sizeof(c.srcSel); i++) {
         char key[8]; snprintf(key, sizeof(key), "src%d", i);
         ok &= checkWrite(key, prefs.putInt(key, c.srcSel[i]), 4);
+        char kid[10]; snprintf(kid, sizeof(kid), "srciid%d", i);
+        ok &= checkWriteStr(kid, prefs.putString(kid, c.sourceInternalId[i]), c.sourceInternalId[i]);
+        snprintf(kid, sizeof(kid), "srcid%d", i);   // radio-ID binding before A5c (not converted)
+        if (prefs.isKey(kid)) prefs.remove(kid);
     }
     ok &= checkWrite   ("windoff",     prefs.putInt    ("windoff",  c.windDirOffsetDeg), 4);
     ok &= checkWrite   ("windunit",    prefs.putInt    ("windunit", c.windUnitMs), 4);
@@ -499,13 +454,19 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("measec",      prefs.putInt    ("measec",    c.measureSec), 4);
     ok &= checkWrite   ("dispbat",     prefs.putInt    ("dispbat",   c.dispBattery), 4);
     ok &= checkWrite   ("displed",     prefs.putInt    ("displed",   c.dispLed), 4);
+    ok &= checkWrite   ("svmode",      prefs.putInt    ("svmode",    c.saverMode), 4);
+    ok &= checkWrite   ("svmin",       prefs.putInt    ("svmin",     c.saverMin), 4);
+    ok &= checkWrite   ("svsec",       prefs.putInt    ("svsec",     c.saverSec), 4);
     {
-        char s[480];
-        seriesPack(c.series, s, sizeof(s));
-        ok &= checkWriteStr("series", prefs.putString("series", s), s);
+        std::unique_ptr<uint8_t[]> b(new (std::nothrow) uint8_t[1 + sizeof(c.net)]);
+        if (b) {
+            b[0] = STORED_NETWORK_SENSORS_VERSION;
+            memcpy(b.get() + 1, c.net, sizeof(c.net));
+            ok &= checkWrite("netsens", prefs.putBytes("netsens", b.get(), 1 + sizeof(c.net)), 1 + sizeof(c.net));
+        } else ok = false;
     }
     for (int i = 0; i < OLED_CUSTOM_COUNT; i++) {
-        char key[8], s[300];
+        char key[8], s[400];
         snprintf(key, sizeof(key), "dcus%d", i);
         oledCustomPack(c.dispCustom[i], s, sizeof(s));
         ok &= checkWriteStr(key, prefs.putString(key, s), s);
@@ -513,6 +474,7 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("dispnt",      prefs.putInt    ("dispnt",    c.dispNightTo), 4);
     ok &= checkWriteStr("rfcal",       prefs.putString ("rfcal",     c.rfCal), c.rfCal);
     ok &= checkWriteStr("rfnames",     prefs.putString ("rfnames",   c.rfNames), c.rfNames);
+    ok &= checkWriteStr("rfminrssi",   prefs.putString ("rfminrssi", c.rfMinRssi), c.rfMinRssi);
     ok &= checkWrite   ("winddirtyp",  prefs.putInt    ("winddirtyp", c.windDirSensorType), 4);
     ok &= checkWrite   ("wdcalcnt",    prefs.putInt    ("wdcalcnt",  c.windDirCalCount), 4);
     ok &= checkWrite   ("wdcaladc",    prefs.putBytes  ("wdcaladc",  c.windDirCalAdc, sizeof(c.windDirCalAdc)), sizeof(c.windDirCalAdc));
@@ -529,12 +491,18 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("mqtten",      prefs.putInt    ("mqtten",   c.mqttEn), 4);
     ok &= checkWrite   ("webapien",    prefs.putInt    ("webapien", c.webApiEn), 4);
     ok &= checkWrite   ("mqttctrlen",  prefs.putInt    ("mqttctrlen", c.mqttCtrlEn), 4);
+    ok &= checkWrite   ("httpsen",     prefs.putInt    ("httpsen",  c.httpsEn), 4);
+    ok &= checkWrite   ("httpport",    prefs.putInt    ("httpport", c.httpPortMode), 4);
     ok &= checkWriteStr("devname",     prefs.putString ("devname",    c.deviceName), c.deviceName);
     ok &= checkWrite   ("staticipen",  prefs.putInt    ("staticipen", c.staticIpEn), 4);
     ok &= checkWriteStr("staticip",    prefs.putString ("staticip",   c.staticIp), c.staticIp);
     ok &= checkWriteStr("staticgw",    prefs.putString ("staticgw",   c.staticGateway), c.staticGateway);
     ok &= checkWriteStr("staticsn",    prefs.putString ("staticsn",   c.staticSubnet), c.staticSubnet);
     ok &= checkWriteStr("staticdns",   prefs.putString ("staticdns",  c.staticDns), c.staticDns);
+    ok &= checkWrite   ("apmode",      prefs.putInt    ("apmode",   c.apMode), 4);
+    ok &= checkWriteStr("apssid",      prefs.putString ("apssid",     c.apSsid), c.apSsid);
+    ok &= checkWriteStr("appass",      prefs.putString ("appass",     c.apPass), c.apPass);
+    ok &= checkWrite   ("apchan",      prefs.putInt    ("apchan",   c.apChannel), 4);
     ok &= checkWriteStr("mqtthost",    prefs.putString ("mqtthost",   c.mqttHost), c.mqttHost);
     ok &= checkWrite   ("mqttport",    prefs.putInt    ("mqttport", c.mqttPort), 4);
     ok &= checkWriteStr("mqttuser",    prefs.putString ("mqttuser",   c.mqttUser), c.mqttUser);
@@ -553,6 +521,11 @@ void saveConfig(const Config& c)
     ok &= checkWriteStr("ntpserver",   prefs.putString ("ntpserver",  c.ntpServer), c.ntpServer);
     ok &= checkWriteStr("lat",         prefs.putString ("lat",        c.latitude), c.latitude);
     ok &= checkWriteStr("lon",         prefs.putString ("lon",        c.longitude), c.longitude);
+    ok &= checkWrite   ("gnssen",      prefs.putInt    ("gnssen",   c.gnssEn), 4);
+    ok &= checkWrite   ("gnssbaud",    prefs.putInt    ("gnssbaud", c.gnssBaud), 4);
+    ok &= checkWrite   ("gnsstime",    prefs.putInt    ("gnsstime", c.gnssTime), 4);
+    ok &= checkWrite   ("gnsspos",     prefs.putInt    ("gnsspos",  c.gnssPos), 4);
+    ok &= checkWrite   ("gnssalt",     prefs.putInt    ("gnssalt",  c.gnssAlt), 4);
     ok &= checkWriteStr("awkuser",     prefs.putString ("awkuser",    c.awekasUser), c.awekasUser);
     ok &= checkWriteStr("awkpass",     prefs.putString ("awkpass",    c.awekasPass), c.awekasPass);
     ok &= checkWrite   ("awkint",      prefs.putInt    ("awkint",     c.awekasIntervalSec), 4);
@@ -580,6 +553,14 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("cwopint",     prefs.putInt    ("cwopint",    c.cwopIntervalSec), 4);
     ok &= checkWrite   ("updchk",      prefs.putBool   ("updchk",     c.updateCheckEn), 1);
     ok &= checkWriteStr("updurl",      prefs.putString ("updurl",     c.updateUrl), c.updateUrl);
+    ok &= checkWrite   ("uiflash",     prefs.putBool   ("uiflash",    c.uiFlashEn), 1);
+    ok &= checkWrite   ("uiage",       prefs.putBool   ("uiage",      c.uiAgeEn), 1);
+
+    ok &= checkWrite   ("influxen",    prefs.putInt    ("influxen",   c.influxEn), 4);
+    ok &= checkWriteStr("influxurl",   prefs.putString ("influxurl",  c.influxUrl), c.influxUrl);
+    ok &= checkWriteStr("influxtok",   prefs.putString ("influxtok",  c.influxToken), c.influxToken);
+    ok &= checkWriteStr("influxmeas",  prefs.putString ("influxmeas", c.influxMeasurement), c.influxMeasurement);
+    ok &= checkWrite   ("influxint",   prefs.putInt    ("influxint",  c.influxIntervalSec), 4);
 
     ok &= checkWrite   ("auxainen",    prefs.putInt    ("auxainen",   c.auxAinEn), 4);
     ok &= checkWrite   ("auxainscale", prefs.putFloat  ("auxainscale", c.auxAinScale), 4);
@@ -605,25 +586,163 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("uvcal",       prefs.putInt    ("uvcal", c.uvCalibrated), 4);
     ok &= checkWrite   ("uvslope",     prefs.putFloat  ("uvslope", c.uvIndexSlope), 4);
     ok &= checkWrite   ("uvoffset",    prefs.putFloat  ("uvoffset", c.uvIndexOffset), 4);
-    prefs.end();
+    ok &= checkWrite   ("cfgver",      prefs.putUChar  ("cfgver",   STORED_CONFIG_VERSION), 1);   // storage_layout.h
+    ok &= lsSave(prefs);   // the logical sensor table (gLogicalSensors) is saved with every settings save
+    ok &= seriesSave(prefs);   // the custom series (series.h), likewise
+    ok &= vsSettingsSave(prefs);   // the virtual sensors (vs_store.h), likewise
+    return ok;
+}
 
-    // Non-secret summary only — never log AppKey/WiFi/MQTT credentials/CA cert.
-    dbgSerial.printf("Config saved%s: loraEn=%d region=%s wifiEn=%d mqttEn=%d webApiEn=%d "
-                      "staticIpEn=%d uplinkSec=%d sampleSec=%d\n",
-                      ok ? "" : " (WITH ERRORS, see above)",
-                      c.loraEn, c.region, c.wifiEn, c.mqttEn, c.webApiEn,
-                      c.staticIpEn, c.uplinkIntervalSec, c.sampleSec);
+// ---- logical sensor table (lsensors.h): NVS blob "lsens", same namespace
+// (a factory reset clears it too). Written by saveConfig() when it changed.
+uint32_t lsRandom() { return esp_random(); }
+
+// The table's lock (scheme: lsensors.h, "concurrent access"). Created during
+// static construction like the other mutexes here, so it exists before any
+// task runs. Recursive: a writer may call helpers that lock again.
+static SemaphoreHandle_t lsMutex = xSemaphoreCreateRecursiveMutex();
+void lsLock()   { xSemaphoreTakeRecursive(lsMutex, portMAX_DELAY); }
+void lsUnlock() { xSemaphoreGiveRecursive(lsMutex); }
+
+void lsLoad()
+{
+    static_assert(LS_BLOB_MAX <= STORED_BLOB_READ_MAX, "lsens beyond the loaders' read ceiling");
+    // unpacked into a local table (1.8 KB on the heap), put in place under the lock - never across NVS I/O
+    std::unique_ptr<LogicalSensorTable> t(new (std::nothrow) LogicalSensorTable());
+    if (!t) return;
+    Preferences prefs;
+    if (prefs.begin("config", true, "cfgdata")) {
+        const size_t n = prefs.isKey("lsens") ? prefs.getBytesLength("lsens") : 0;
+        if (storedBlobLengthReadable(n)) {   // also longer than LS_BLOB_MAX: an older layout for the hook
+            std::unique_ptr<uint8_t[]> b(new (std::nothrow) uint8_t[n]), scratch(new (std::nothrow) uint8_t[LS_BLOB_MAX]);
+            if (b && scratch && prefs.getBytes("lsens", b.get(), n) == n) {
+                const uint8_t* use = b.get();
+                size_t useLen = n;
+                if (storedVersionAction(b[0], LS_BLOB_VERSION) == STORED_MIGRATE) {   // older layout: the hook (storage_layout.h)
+                    useLen = storageMigrateBlob(SF_LOGICAL_SENSORS, b[0], b.get(), n, scratch.get(), LS_BLOB_MAX);
+                    use = scratch.get();
+                }
+                if (!useLen || !lsUnpack(*t, use, useLen)) {
+                    *t = LogicalSensorTable();
+                    dbgSerial.println("Config: logical sensor table of an unknown layout - starting empty.");
+                }
+            }
+        }
+        prefs.end();
+    }
+    LsGuard g;
+    gLogicalSensors = *t;
+}
+
+static bool lsSave(Preferences& prefs)
+{
+    std::unique_ptr<uint8_t[]> b(new (std::nothrow) uint8_t[LS_BLOB_MAX]), old(new (std::nothrow) uint8_t[LS_BLOB_MAX]);
+    if (!b || !old) return false;
+    size_t n;
+    { LsGuard g; n = lsPack(gLogicalSensors, b.get(), LS_BLOB_MAX); }   // packed under the lock, written without it
+    if (prefs.isKey("lsens") && prefs.getBytesLength("lsens") == n && prefs.getBytes("lsens", old.get(), n) == n &&
+        !memcmp(old.get(), b.get(), n))
+        return true;   // unchanged: no flash write
+    return checkWrite("lsens", prefs.putBytes("lsens", b.get(), n), n);
+}
+
+// ---- custom series (series.h): NVS string "series", same namespace. Not in
+// Config (see series.h); loaded once at start, written by saveConfig().
+void seriesLoad()
+{
+    Preferences prefs;
+    if (!prefs.begin("config", true, "cfgdata")) return;
+    // [version][the stored form, no terminator] (storage_layout.h)
+    const size_t n = prefs.isKey("series") ? prefs.getBytesLength("series") : 0;
+    std::unique_ptr<uint8_t[]> scratch(new (std::nothrow) uint8_t[SERIES_PACKED_MAX + 1]);
+    std::unique_ptr<char[]> s(new (std::nothrow) char[SERIES_PACKED_MAX + 1]);
+    if (scratch && s) {
+        s[0] = '\0';
+        static_assert(SERIES_PACKED_MAX + 1 <= STORED_BLOB_READ_MAX, "series beyond the loaders' read ceiling");
+        std::unique_ptr<uint8_t[]> stored(storedBlobLengthReadable(n) ? new (std::nothrow) uint8_t[n] : nullptr);
+        if (stored && prefs.getBytes("series", stored.get(), n) == n) {   // also longer than today's form: an older layout for the hook
+            size_t len = 0;
+            const uint8_t* p = storedBlobLoad(SF_SERIES, stored.get(), n, STORED_SERIES_VERSION, 0, scratch.get(), SERIES_PACKED_MAX + 1, &len);
+            if (p && len <= SERIES_PACKED_MAX) { memcpy(s.get(), p, len); s[len] = '\0'; }
+        }
+        seriesUnpackLocked(s.get());
+    }
+    prefs.end();
+}
+
+static bool seriesSave(Preferences& prefs)
+{
+    std::unique_ptr<uint8_t[]> b(new (std::nothrow) uint8_t[SERIES_PACKED_MAX + 1]), old(new (std::nothrow) uint8_t[SERIES_PACKED_MAX + 1]);
+    if (!b || !old) return false;
+    b[0] = STORED_SERIES_VERSION;
+    const size_t n = 1 + seriesPackLocked((char*)b.get() + 1, SERIES_PACKED_MAX);
+    if (prefs.isKey("series") && prefs.getBytesLength("series") == n && prefs.getBytes("series", old.get(), n) == n &&
+        !memcmp(old.get(), b.get(), n))
+        return true;   // unchanged: no flash write
+    return checkWrite("series", prefs.putBytes("series", b.get(), n), n);
+}
+
+// ---- virtual sensors (vs_store.h): NVS blob "vsens", same namespace (a
+// factory reset clears it too). Not in Config; loaded once at start.
+void vsSettingsLoad()
+{
+    VsSettings s;   // defaults: off
+    Preferences prefs;
+    if (prefs.begin("config", true, "cfgdata")) {
+        const size_t n = prefs.isKey("vsens") ? prefs.getBytesLength("vsens") : 0;
+        static_assert(VS_BLOB_MAX <= STORED_BLOB_READ_MAX, "vsens beyond the loaders' read ceiling");
+        // also longer than VS_BLOB_MAX: an older layout for the hook
+        std::unique_ptr<uint8_t[]> b(storedBlobLengthReadable(n) ? new (std::nothrow) uint8_t[n] : nullptr),
+                                   scratch(new (std::nothrow) uint8_t[VS_BLOB_MAX]);
+        if (b && scratch && prefs.getBytes("vsens", b.get(), n) == n) {
+            size_t len = 0;
+            const uint8_t* p = storedBlobLoad(SF_VIRTUAL_SENSORS, b.get(), n, STORED_VIRTUAL_SENSORS_VERSION, 0,
+                                              scratch.get(), VS_BLOB_MAX, &len);
+            if (!p || !vsSettingsFromPayload(p, len, s))
+                dbgSerial.println("Config: virtual sensor settings of an unknown layout - off.");
+        }
+        prefs.end();
+    }
+    vsSettingsWrite(s);
+}
+
+static bool vsSettingsSave(Preferences& prefs)
+{
+    std::unique_ptr<uint8_t[]> b(new (std::nothrow) uint8_t[VS_BLOB_MAX]), old(new (std::nothrow) uint8_t[VS_BLOB_MAX]);
+    VsSettingsCopy cur = vsSettingsCopy();
+    if (!b || !old || !cur) return false;
+    const size_t n = vsSettingsPack(*cur, b.get(), VS_BLOB_MAX);
+    if (!n) return false;
+    if (prefs.isKey("vsens") && prefs.getBytesLength("vsens") == n && prefs.getBytes("vsens", old.get(), n) == n &&
+        !memcmp(old.get(), b.get(), n))
+        return true;   // unchanged: no flash write
+    return checkWrite("vsens", prefs.putBytes("vsens", b.get(), n), n);
 }
 
 void saveRfProto(int proto)
 {
-    Preferences prefs;
-    if (!prefs.begin("config", false, "cfgdata")) {
-        dbgSerial.println("Config save: FAILED to open NVS namespace 'config' - wireless sensor type not saved.");
+    StorageWrite w("config");
+    if (!w.ok()) {
+        dbgSerial.println("Config save: storage sealed or NVS namespace 'config' not available - wireless sensor type not saved.");
         return;
     }
+    Preferences& prefs = w.prefs();
     checkWrite("rfproto", prefs.putInt("rfproto", proto), 4);
-    prefs.end();
+}
+
+void saveStationPosition(const Config& c, bool pos, bool alt)
+{
+    StorageWrite w("config");
+    if (!w.ok()) {
+        dbgSerial.println("Config save: storage sealed or NVS namespace 'config' not available - GNSS position not saved.");
+        return;
+    }
+    Preferences& prefs = w.prefs();
+    if (pos) {
+        checkWriteStr("lat", prefs.putString("lat", c.latitude), c.latitude);
+        checkWriteStr("lon", prefs.putString("lon", c.longitude), c.longitude);
+    }
+    if (alt) checkWrite("altitude", prefs.putInt("altitude", c.altitudeM), 4);
 }
 
 // IDs whose Home Assistant configs were published (ha_rf.h): written only
@@ -641,11 +760,29 @@ void loadHaRfIds(char* out, size_t len)
 
 void saveHaRfIds(const char* ids)
 {
-    Preferences prefs;
-    if (!prefs.begin("config", false, "cfgdata")) {
-        dbgSerial.println("Config save: FAILED to open NVS namespace 'config' - HA wireless sensor list not saved.");
+    StorageWrite w("config");
+    if (!w.ok()) {
+        dbgSerial.println("Config save: storage sealed or NVS namespace 'config' not available - HA wireless sensor list not saved.");
         return;
     }
+    Preferences& prefs = w.prefs();
     checkWriteStr("harfids", prefs.putString("harfids", ids), ids);
+}
+
+// Value groups announced to Home Assistant (ha_groups.h): written only when a
+// group is seen for the first time; same namespace, so a reset clears it.
+uint8_t loadHaGroupsSeen()
+{
+    Preferences prefs;
+    if (!prefs.begin("config", true, "cfgdata")) return 0;
+    const uint8_t v = prefs.isKey("haseen") ? prefs.getUChar("haseen", 0) : 0;
     prefs.end();
+    return v;
+}
+
+void saveHaGroupsSeen(uint8_t seen)
+{
+    StorageWrite w("config");
+    if (!w.ok()) return;   // sealed by a reset: the next start announces from scratch
+    checkWrite("haseen", w.prefs().putUChar("haseen", seen), 1);
 }

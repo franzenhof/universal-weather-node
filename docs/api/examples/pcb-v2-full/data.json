@@ -100,7 +100,7 @@
     "bus1Present": true,
     "sendFailCount": 0,
     "pcbRev": 20,
-    "board": "V3",
+    "board": "V4",
     "uvEnabled": true,
     "uvIndexCalibrated": true
   },

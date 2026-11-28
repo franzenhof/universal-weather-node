@@ -1,4 +1,4 @@
-"""Schematic placement for the weather node v2.0 (gen_sch2.py).
+"""Schematic placement for the Weather Node V4 Full (formerly v2.0; gen_sch2.py).
 
 Coordinates in 2.54 mm grid units, relative to the block origin. Orientation cheat sheet:
   R/C/L/F: a=90 horizontal (pin 1 left), a=270 (pin 1 right), a=0 vertical (pin 1 top)
@@ -7,7 +7,7 @@ Coordinates in 2.54 mm grid units, relative to the block origin. Orientation che
   FET:     a=0 -> G left, D top, S bottom; P-FET a=180 -> G right, S top, D bottom
 """
 TITLE = "Universal Weather Node"
-REV = "2.0 (SMD)"
+REV = "V4 Full Rev 1.0 (SMD)"
 COMMENTS = ["KiCad/SMD redesign of the Fritzing Rev 1.3 board; parts with LCSC numbers (JLCPCB)",
             "franzenhof.com"]
 PAPER = "A1"
@@ -25,7 +25,7 @@ FLAG_AT = (66, 56)
 # LM66100 ideal diodes form an OR-ing pair on +5V / +5V_V4 (both rails are also fed through
 # connectors / JP8) and ST is tied to GND: treat these pins as passive for the ERC
 PASSIVE_PINS = {"Power_Management:LM66100DCK": {"VIN", "VOUT", "ST"}}
-LABEL_PARTS = ["J1", "J2", "J19", "J20", "J21", "J3", "J4", "J5", "J6", "J7", "J9", "J10", "J11", "J12", "J13", "J14", "J15", "J16", "J17", "J18"]
+LABEL_PARTS = ["J19", "J20", "J21", "J3", "J4", "J5", "J6", "J7", "J9", "J10", "J11", "J12", "J13", "J14", "J15", "J16", "J17", "J18"]
 LABEL_AT = {("C10", "1"): True, ("D12", "3"): True, ("D13", "3"): True, ("D15", "3"): True, ("D16", "1"): True,
             ("C15", "1"): True, ("R21", "1"): True, ("D24", "1"): True, ("D22", "2"): True, ("F6", "2"): True,
             ("R37", "1"): True, ("F7", "2"): True}
@@ -37,21 +37,19 @@ BS = {"a": 180}                             # BAT54S COM up
 PF = {"a": 180}                             # P-FET: G right, S top, D bottom
 
 BLOCKS = [
-    dict(title="Heltec WiFi LoRa 32 V3 socket set (J1/J2)", x=2, y=2, w=58, h=62, parts=[
-        ("J1", 16, 30), ("J2", 40, 30, M),
+    dict(title="HW revision ID, Heltec 3.3 V bulk, expansion header, test pads", x=2, y=2, w=58, h=62, parts=[
         ("R1", 8, 48, V), ("R2", 8, 54, V), ("C10", 13, 54, V), ("C37", 52, 30, V),
         ("J16", 30, 52, M),
         ("TP1", 44, 47), ("TP2", 47, 47, VF), ("TP3", 50, 47, VF), ("TP4", 53, 47, VF), ("TP5", 56, 47),
         ("TP6", 50, 57, VF)],
-        notes=[(3, 7, "J1 = header on the 5 V side, J2 = header on the 3V3 side (pin 1 = GND, USB-C end)\n"
-                      "V3 / V3.1 / V3.2 are pin-compatible. Populate ONE socket set only (V3: J1/J2, V4: J19/J20/J21)"),
-               (3, 42, "HW revision ID (V3 GPIO20, V4 GPIO15):\nv2.0 = 1M / 1M -> 0.5 x 3V3"),
+        notes=[(3, 7, "Weather Node V4 Full Rev 1.0: Heltec WiFi LoRa 32 V4 only\n(the V3 socket set J1/J2 of v2.0 was removed)"),
+               (3, 42, "HW revision ID (GPIO15):\nV4 Full = 1M / 1M -> 0.5 x 3V3\n(V4 Light: 1M / 470k)"),
                (22, 58, "J16 expansion header, TP1-TP7 test pads (not populated)")]),
-    dict(title="Heltec WiFi LoRa 32 V4 socket set (J19/J20 + P4 J21)", x=2, y=152, w=64, h=62, parts=[
+    dict(title="Heltec WiFi LoRa 32 V4 (J19/J20 + P4 J21)", x=2, y=152, w=64, h=62, parts=[
         ("J19", 16, 30), ("J20", 44, 30, M), ("J21", 44, 52, M),
         ("U8", 26, 49), ("U9", 26, 57, {"m": True}), ("C39", 33, 53, V)],
-        notes=[(3, 7, "V4.2 / V4.3: rows 2.54 mm towards J1, P4 socket J21 beyond pin 18 (0.45 mm off grid)\n"
-                      "J19 = 5 V side, J20 = 3V3 side, pin 1 = GND (USB-C end). Populate ONE socket set only"),
+        notes=[(3, 7, "V4.2 / V4.3 (not V4-R8): P4 socket J21 beyond pin 18 (0.45 mm off grid)\n"
+                      "J19 = 5 V side, J20 = 3V3 side, pin 1 = GND (USB-C end)"),
                (3, 42, "V4 pin 2 is USB VBUS (no diode on the module):\nU8 ideal diode board 5 V -> V4, U9 V4 USB -> board 5 V\n"
                        "(CE = own output: reverse-current blocking, antiparallel)"),
                (30, 42, "Open on purpose: V4 GPIO2/5/7/46 (RF front end),\n19/20 (native USB), 26, 0, 1, 21, 35-37")]),
@@ -85,7 +83,7 @@ BLOCKS = [
     dict(title="Victron VE.Direct (isolated)", x=170, y=2, w=62, h=36, parts=[
         ("U4", 30, 16), ("C21", 20, 8, V), ("R65", 14, 20, V), ("C22", 40, 10, V), ("D27", 42, 23),
         ("J14", 56, 16), ("J15", 56, 27)],
-        notes=[(3, 26, "GPIO33 = RX (from Victron TX)\nTX (to Victron RX): V3 GPIO34, V4 GPIO45\nR65 100k pull-down: GPIO45 strap LOW at reset\nside 2 powered by the Victron (VE.Direct +V)"),
+        notes=[(3, 26, "GPIO33 = RX (from Victron TX)\nTX (to Victron RX): GPIO45\nR65 100k pull-down: GPIO45 strap LOW at reset\nside 2 powered by the Victron (VE.Direct +V)"),
                (44, 31, "J15 pin 2 RX / pin 3 TX:\nnode TX -> pin 2, pin 3 -> node RX")]),
     dict(title="Outputs: rain-gauge heater (low side), fan (high side) + tacho", x=170, y=40, w=62, h=52, parts=[
         ("J12", 58, 6),
@@ -106,7 +104,7 @@ BLOCKS = [
         ("D6", 16, 29.5, DK), ("R7", 20, 28, H), ("R8", 24, 21, V), ("JP2", 28, 24, M), ("D9", 27, 30, BS), ("R9", 33, 28, H),
         ("C12", 37, 29.5, V), ("R10", 41, 28, H),
         ("Q6", 62, 30, PF), ("R38", 67, 28.5, V), ("C23", 58, 34, V), ("D29", 54, 34, DK)],
-        notes=[(48, 24, "J4 Davis RJ11: 2 yellow 3V3 (switched), 3 green DIR,\n4 red GND, 5 black SPD\nR8 + JP2: pull-up for reed-switch\nvanes (jumper on); Q6: vane supply, VANE_EN LOW = on\n(V3 GPIO19, V4 GPIO34)"),
+        notes=[(48, 24, "J4 Davis RJ11: 2 yellow 3V3 (switched), 3 green DIR,\n4 red GND, 5 black SPD\nR8 + JP2: pull-up for reed-switch\nvanes (jumper on); Q6: vane supply, VANE_EN LOW = on\n(GPIO34)"),
                (3, 35, "speed: tau 0.5-0.9 ms (min. contact time ~1.5 ms), direction: 10k / 1 uF")]),
     dict(title="Rain (Davis 6466M)", x=82, y=66, w=60, h=40, parts=[
         ("J6", 5, 12, M), ("J7", 5, 20, M),

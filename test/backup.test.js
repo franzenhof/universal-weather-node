@@ -20,3 +20,17 @@ test('every fieldSecret is in the backup secret list', () => {
   assert.match(web, /backupIsSecret\(name\) && !gCaptureSecrets\)\) return;/);
   for (const n of ['whurl', 'cu0url', 'cu1url']) assert.ok(list.includes(`"${n}"`), n);
 });
+
+test('Web UI options are wired end to end (NVS, form, backup capture, /api/info)', () => {
+  const rd = (f) => fs.readFileSync(path.join(root, f), 'utf8');
+  const cfg = rd('src/config.cpp'), web = rd('src/web_api.cpp'), info = rd('src/api_info.cpp'), page = rd('include/chart_page.h');
+  for (const [nvs, field, form, api] of [['uiflash', 'uiFlashEn', 'uiflash', 'flashOnChange'], ['uiage', 'uiAgeEn', 'uiage', 'showAge']]) {
+    assert.match(cfg, new RegExp(`c\\.${field}\\s*= prefs\\.getBool\\("${nvs}"`));
+    assert.match(cfg, new RegExp(`putBool\\s*\\("${nvs}"`));
+    assert.match(web, new RegExp(`fieldCheck \\(html, "${form}"`));   // fieldCheck also records it in the backup
+    assert.match(web, new RegExp(`present\\("${form}"\\)\\)\\s+gCfg\\.${field}`));
+    assert.ok(nvs.length <= 15);
+    assert.match(info, new RegExp(`ui\\["${api}"\\]\\s*= gCfg\\.${field}`));
+    assert.ok(page.includes(`o.${api}`), `dashboard reads ${api}`);
+  }
+});

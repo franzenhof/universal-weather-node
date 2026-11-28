@@ -7,8 +7,13 @@
 // (test/firmware_backup.cpp).
 #include <stddef.h>
 #include <ArduinoJson.h>
+#include "lsensors.h"
 
-constexpr int SETTINGS_BACKUP_VERSION = 1;   // a backup with a higher major version is refused
+// 2: the logical sensor table ("sensors") and references by internal ID (A5c).
+// A version-1 file restores everything else; its ★ list and its references by
+// radio ID (value sources, series) are ignored - not converted. A higher
+// version is refused.
+constexpr int SETTINGS_BACKUP_VERSION = 2;
 
 // Write-only fields (passwords, keys): only in a backup when asked for.
 bool backupIsSecret(const char* name);
@@ -27,3 +32,14 @@ void backupValue(JsonVariantConst v, char* out, size_t len);
 // change in `changes` ({key, old, new}; secrets only {key, secret: true}) and
 // returns how many. secretSame(key, value): true = the stored secret is the same.
 int backupPrepare(JsonObject set, JsonObjectConst cur, JsonArray changes, bool (*secretSame)(const char*, const char*));
+
+// The logical sensor table as the backup's "sensors" array:
+// [{"internalId": "L3F9A2C", "customId": "garten", "displayName": "Garten Süd", "radioId": "17000008", "minRssiDbm": -95}]
+// (minRssiDbm only when set).
+void backupSensors(JsonArray a, const LogicalSensorTable& t);
+// The other way: false = not an array; entries that do not fit (lsAppend())
+// are left out and counted in *skipped.
+bool backupReadSensors(JsonVariantConst a, LogicalSensorTable& t, int* skipped = nullptr);
+// Version 1: drops the references by radio ID ("r<ID>" value sources, series
+// slots with a wireless source) - not converted; those keep their current setting.
+void backupDropV1Refs(JsonObject set);

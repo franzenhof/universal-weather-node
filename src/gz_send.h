@@ -8,7 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-class WebServer;
-
-void sendGzipAsset(WebServer& srv, const uint8_t* gz, size_t gzLen, size_t rawLen, const char* contentType,
+// Srv: WebServer (config portal) or HttpServer (web interface) - both
+// instantiated in gz_send.cpp.
+template <class Srv>
+void sendGzipAsset(Srv& srv, const uint8_t* gz, size_t gzLen, size_t rawLen, const char* contentType,
                    const char* cacheControl = nullptr);

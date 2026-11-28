@@ -25,9 +25,9 @@ Rain rate [mm/h] = rain [mm] / (window length [ms] / 3,600,000)
 
 The window is the cycle (or the output's own send interval), but **at least 5 minutes**: with a shorter cycle (e.g. MQTT every 10 s) the rate is taken over the last 5–5.5 minutes instead, so a single 0.2-mm tip reads 2.4 mm/h, not 72 mm/h. Right after the start the rain so far is spread over 5 minutes. The amounts (rain per cycle, rain today …) are not affected.
 
-"Rain since start" survives restarts, watchdog resets and OTA updates; only a power cut or downlink `0x01` resets it.
+"Rain since start" survives restarts, watchdog resets and OTA updates; only a power cut, downlink `0x01` or *Reset rain statistics* (*Settings → System → Reset values*) resets it.
 
-**Temperature probes (DS18B20):** up to 3 probes, found automatically every cycle (hot-pluggable). The order follows their ROM addresses. A conversion that is still incomplete after 1 s is aborted: probe readings are marked unavailable, the switched bus supply is turned off on Rev 1.3/v2.0, and the next cycle searches/retries normally. A stuck bus cannot indefinitely stop all other measurements or telemetry.
+**Temperature probes (DS18B20):** up to 3 probes, found automatically every cycle (hot-pluggable). The order follows their ROM addresses. A conversion that is still incomplete after 1 s is aborted: probe readings are marked unavailable, the switched bus supply is turned off on the V4 Full / V4 Light, and the next cycle searches/retries normally. A stuck bus cannot indefinitely stop all other measurements or telemetry.
 
 **Air pressure (BME280 or a wireless sensor with a barometer, see [value sources](wireless-sensors.md#value-sources)):** the station pressure is converted to sea level (QNH) using the configured altitude — the same formula for both:
 
@@ -50,10 +50,10 @@ The node samples once and aggregates **separately for every transmission path**,
 | Rain | pulses counted continuously, read with every wind sample | 1 tip (Davis 0.2 mm) | one running total (`rainSinceStart`); each path reports the difference since its own last send |
 | BME280 (temperature, humidity, pressure) | every 10 s, at least once per base cycle | 0.01 °C / 0.008 %rH / 0.18 Pa (sensor) | average of the readings in the base cycle |
 | DS18B20 | once per base cycle (~750 ms conversion) | 0.0625 °C | |
-| UV, AUX analog, 2nd anemometer (PCB v2.0) | with every wind sample | 12-bit ADC | average / gust per base cycle |
+| UV, AUX analog, 2nd anemometer (V4 Full) | with every wind sample | 12-bit ADC | average / gust per base cycle |
 | Battery, CPU temperature | once per base cycle | | |
 
-**Base cycle:** the **measurement cycle** (*Settings → Measurement*, default 30 s), independent of the send intervals. At its end the status page, REST API (`/api/data`), display, dashboard history, records and alarms get the cycle's values, and every output whose own interval is up sends — LoRaWAN, MQTT and Loxone each keep their own window (wind mean / gust and rain since their last send), so a 300-s LoRaWAN uplink still covers 300 s. If a send interval is not a multiple of the measurement cycle, the cycle shortens to the greatest common divisor (60 s and an MQTT interval of 90 s → 30 s; never below 10 s — otherwise the shortest interval); an output can also be faster than the cycle. The first cycle completes 30 s after the start. **LoRa-only low-power mode** keeps the old behaviour: the cycle is the LoRaWAN interval, the node sleeps in between. Up to rc.8 the base cycle was the shortest send interval (the LoRaWAN interval even with LoRaWAN off), so e.g. the chart got a value only every 5 minutes.
+**Base cycle:** the **measurement cycle** (*Settings → Sensors → Measurement*, default 30 s), independent of the send intervals. At its end the status page, REST API (`/api/data`), display, dashboard history, records and alarms get the cycle's values, and every output whose own interval is up sends — LoRaWAN, MQTT and Loxone each keep their own window (wind mean / gust and rain since their last send), so a 300-s LoRaWAN uplink still covers 300 s. If a send interval is not a multiple of the measurement cycle, the cycle shortens to the greatest common divisor (60 s and an MQTT interval of 90 s → 30 s; never below 10 s — otherwise the shortest interval); an output can also be faster than the cycle. The first cycle completes 30 s after the start. **LoRa-only low-power mode** keeps the old behaviour: the cycle is the LoRaWAN interval, the node sleeps in between. Up to rc.8 the base cycle was the shortest send interval (the LoRaWAN interval even with LoRaWAN off), so e.g. the chart got a value only every 5 minutes.
 
 **Gust:** the highest 3-second mean (WMO-No. 8). With 1-s sampling that is the pulses of the last three samples, with 3-s sampling one sample. A single 1-s spike is therefore averaged out, as at official stations. 3-s sampling uses fixed, non-overlapping windows: slightly fewer wake-ups (low-power mode), but a peak that straddles two windows reads a little lower. Faster sampling than 1 s does not improve the 3-s gust; at 0.5 s one pulse would already be 2 m/s.
 
@@ -68,7 +68,7 @@ The node samples once and aggregates **separately for every transmission path**,
 
 - **Interval** is the right choice when the data is aggregated further downstream (e.g. Grafana computing 10-minute means: average the means, take the `max()` of the gusts, vector-average the direction — and use only one path per measurement, LoRaWAN *or* MQTT).
 - **10 min** delivers ready-to-use values comparable with official stations, for receivers without their own aggregation (e.g. Home Assistant). Do **not** average these again downstream — that smears the means and counts gusts several times.
-- The wind ring keeps the last 10 minutes of wind samples (about 4 KB). After a restart the 10-min values cover the buffered span only.
+- The wind ring keeps the last 10 minutes of wind samples (about 4 KB). A wireless wind source is kept in 15-s buckets (10 to 10.25 min, about 1 KB), whatever its packet rate (Davis 2.56 s, WS80 4.75 s, a network source as often as it is pushed). After a restart the 10-min values cover the buffered span only.
 - **Timing:** the node only waits the remaining time of each interval, so measuring and sending don't add up. The minimum configurable LoRaWAN interval (5 s) is not a legal transmit interval: the node stretches it to keep **1 % airtime** at the current data rate (SF7, 27 bytes: ~7 s; SF12: ~150 s; shown on the status page). On TTN also apply the [daily fair-use budget](lorawan.md#the-things-network-ttn).
 
 ## Derived Values
@@ -80,7 +80,7 @@ Computed on the node from the measured values — the same numbers in JSON/MQTT,
 | Dew point | Magnus formula (17.62 / 243.12 °C) | temperature + humidity |
 | Feels like | wind chill (JAG/TI, at ≤ 10 °C and wind > 4.8 km/h), else heat index (NWS, from 26.7 °C), else the air temperature | temperature (+ wind / humidity) |
 | Cloud base | 125 m per K of temperature − dew point spread, above the station (cumulus estimate) | temperature + humidity |
-| Pressure tendency (3 h) | QNH now minus 3 h ago: *steady* (< 0.1 hPa), *slowly* (< 1.6), normal (< 3.6), *quickly* (< 6), *very rapidly* | BME280, 3 h of history after a start |
+| Pressure tendency (3 h) | QNH now minus 3 h ago: *steady* (< 0.1 hPa), *slowly* (< 1.6), normal (< 3.6), *quickly* (< 6), *very rapidly* | pressure source (BME280 or a wireless barometer), 3 h of history after a start |
 | Weather trend | barometer rule of thumb: *storm warning* (falling ≥ 6 hPa / 3 h), *worsening* (≥ 1.6), *improving* (rising ≥ 1.6), else *settled* (QNH ≥ 1020), *unsettled* (< 1000) or *no change* — not a forecast model | as above |
 | Temperature trend (1 h) | now minus 1 h ago | 1 h of history (shown after about 1 h, the pressure tendency after about 3 h) |
 | Rain last hour / 24 h | sum of the 5-min history buckets (fixed 5-min windows, each with the cycles that ended in it) that lie completely inside the window, plus the current one — never longer than 1 h / 24 h, at most one bucket shorter (since start if shorter) | rain source |
@@ -94,13 +94,13 @@ Which sensor feeds each value group is set with the [value sources](wireless-sen
 
 All values above use the **calibrated** main values (offsets / factors after the value source, see [Calibration](settings.md#calibration)).
 
-Longer statistics (summer/frost days, multi-year series) are a job for your database — e.g. InfluxDB/Grafana or Home Assistant's long-term statistics fed by MQTT; the node keeps 7 days of history in RAM, plus the records below.
+Longer statistics (summer/frost days, multi-year series) are a job for your database — e.g. InfluxDB/Grafana or Home Assistant's long-term statistics fed by MQTT; the node keeps up to 2 years of [history](api.md#history-ranges-and-buckets) (daily values), plus the records below.
 
 ### Records
 
 Minimum and maximum **with their time** of temperature, humidity, pressure (QNH), the maximum gust and rain rate, plus the largest **daily rain** — for **today, yesterday, this month, this year and all time** (the daily rain: month, year, all time). Fed every measurement cycle from the selected (calibrated) values; the gust is the cycle gust of the wind source, the rain rate the cycle value (over at least 5 minutes, see above). Days, months and years roll over at local midnight (time zone setting), so the records need the clock (NTP); before the first sync nothing is recorded. "Yesterday" is the last day the node saw.
 
-Kept in one small flash record (namespace `records`, ~430 bytes): written at most once per hour, at the day change and before every planned restart or update — a power cut loses at most the last hour. Reset in *Settings → System → Records* (today … this year, or everything including all time; parameter 64).
+Kept in one small flash record (namespace `records`, ~430 bytes): written at most once per hour, at the day change and before every planned restart or update — a power cut loses at most the last hour. Reset in *Settings → System → Reset values* (today … this year, or everything including all time; parameter 64).
 
 Output: the full set in `GET /api/records` ([API](api.md#records)) and the dashboard's *Records* panel; today's minimum / maximum temperature and maximum gust also in `/api/data` (`tempMinToday`, `tempMaxToday`, `gustMaxToday`) and therefore in MQTT, Home Assistant (*Temperature Min / Max Today*, *Gust Max Today*) and Loxone.
 

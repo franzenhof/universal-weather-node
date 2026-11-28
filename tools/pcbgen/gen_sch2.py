@@ -8,7 +8,8 @@ the block get a local label. ERC + netlist comparison (checknet.py) verify it.
 import sys, uuid, math, json, os, importlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sexp import Sym, dump, flat, pins, find, get
-from design import PARTS
+import importlib as _il, os as _os
+_D = _il.import_module(_os.environ.get("DESIGN", "design")); PARTS = _D.PARTS
 from lcsc import LCSC, VALUE_OVERRIDE
 S = importlib.import_module(os.environ.get("SCHEM", "schem_w"))
 

@@ -19,7 +19,7 @@ Up to **12 rules**. A rule watches **one value**:
 | Rain rate, rain today, rain last hour | mm/h, mm / in/h, in |
 | UV index | – |
 | Frost / fog-dew / sultry warning | 1 = warning on ([Warnings](values.md#derived-values)) |
-| **Wireless sensor value** (by sensor ID) | temperature, humidity, wind, gust, UV, illuminance, **leak** (1 = water), **lightning distance** (km, 999 = none), **soil moisture** %, **CO2** ppm, **PM2.5** µg/m³, **silent for** (minutes since the last packet), **battery low** (1 = low) |
+| **Wireless sensor value** (a ★ sensor, by its internal ID) | temperature, humidity, wind, gust, UV, illuminance, **leak** (1 = water), **lightning distance** (km, 999 = none), **soil moisture** %, **CO2** ppm, **PM2.5** µg/m³, **silent for** (minutes since the last packet), **battery low** (1 = low), **reception** (% of the expected packets in the last hour, radio sensors; e.g. below 30 for 60 min — see [Reception watchdog](wireless-sensors.md#reception-watchdog)) |
 
 All values are the calibrated ones of the selected [value sources](wireless-sensors.md#value-sources).
 
@@ -36,7 +36,7 @@ All values are the calibrated ones of the selected [value sources](wireless-sens
 | Notify the all clear | also send a message when the alarm clears |
 | Name, message, all-clear message | texts; empty = default text in the device language (*Settings → Basics → Language*; *Auto* = English) |
 
-Evaluated every **30 s**. A value that is **not available** — wireless sensor silent for more than 5 minutes, no source selected, clock not yet synced for *rain today* — never raises and never clears an alarm, and a pending *minimum duration* starts over. The exception is *silent for*, which keeps counting while a sensor is gone. Alarm states live in RAM: after a restart a rule raises again if the condition still holds.
+Evaluated every **30 s**. A value that is **not available** — wireless sensor silent for more than 5 minutes, no source selected, clock not yet synced for *rain today* — never raises and never clears an alarm, and a pending *minimum duration* starts over. The exception is *silent for*, which keeps counting while a sensor is gone. *Reception* is not available until the watchdog knows a rate (learned interval, 10 minutes of data) and while the sensor is silent for an hour. Alarm states live in RAM: after a restart a rule raises again if the condition still holds.
 
 **Ready-made rules** (*Add a ready-made rule*, goes into the first free slot): **frost**, **fog / dew**, **sultry** (the node's [warnings](values.md#derived-values)), **storm** (pressure falling ≥ 6 hPa in 3 h, clears at −3 hPa, priority 4) and **rain starts** (rain rate above 0.1 mm/h, cleared when it stops, no all clear). Adjust them afterwards.
 
@@ -44,7 +44,7 @@ Parameter **66** switches rules on and off by LoRaWAN downlink (bit n = rule n +
 
 ### Messages and placeholders
 
-Message templates may use **`{name}`** (rule name), **`{value}`**, **`{unit}`**, **`{threshold}`** (the raise threshold; the clear threshold in an all-clear message), **`{sensor}`** (wireless sensor ID), **`{state}`** (`raised` / `cleared` / `test`), **`{priority}`**, **`{rule}`**, **`{time}`** (local) and every placeholder of the [custom upload](weather-networks.md#placeholders), e.g. `{temp}`, `{wind:kmh}`. Default: `{name}: {value} {unit} (limit {threshold} {unit})`.
+Message templates may use **`{name}`** (rule name), **`{value}`**, **`{unit}`**, **`{threshold}`** (the raise threshold; the clear threshold in an all-clear message), **`{sensor}`** (wireless sensor: its name, else its custom ID), **`{state}`** (`raised` / `cleared` / `test`), **`{priority}`**, **`{rule}`**, **`{time}`** (local) and every placeholder of the [custom upload](weather-networks.md#placeholders), e.g. `{temp}`, `{wind:kmh}`. Default: `{name}: {value} {unit} (limit {threshold} {unit})`.
 
 ## Channels
 
@@ -56,9 +56,9 @@ Message templates may use **`{name}`** (rule name), **`{value}`**, **`{unit}`**,
 | MQTT | *MQTT alarm events* on | see below |
 | Webhook | URL (GET), or URL + JSON body (POST) — both with placeholders | URL placeholders URL-encoded, body placeholders JSON-escaped, `Content-Type: application/json` |
 
-Example webhook body: `{"alarm":"{name}","state":"{state}","value":{value},"unit":"{unit}","station":"{station}"}`.
+Example webhook body: `{"alarm":"{name}","state":"{state}","value":{value},"unit":"{unit}","station":"{station}"}`. `{message}` is inserted whole (up to 199 characters). With the values filled in, the URL may have up to 319 characters and the body up to 639; a longer one is not sent (status *too long, not sent*) rather than sent cut off.
 
-- **One request at a time**, sent by the same background task as the weather networks — never in parallel with an upload. HTTPS needs a lot of memory (see [Memory and HTTPS](troubleshooting.md)): a request starts only with at least 70 KiB free and 24 KiB in one free block, and not while a settings / status page is being built — **a notification can therefore be delayed** by a few seconds (busy page) or, with little memory, longer (retries after 10 s, doubling up to 5 min). A failed request is retried up to 4 times with the same back-off; the queue holds 6 messages (the oldest is dropped when full).
+- **One request at a time**, sent by the same background task as the weather networks — never in parallel with an upload. HTTPS needs a lot of memory (see [Memory and HTTPS](troubleshooting.md)): a request starts only with at least 70 KiB free and 24 KiB in one free block, and not while a settings / status page is being built — **a notification can therefore be delayed** by a few seconds (busy page) or, with little memory, longer (retries after 10 s, doubling up to 5 min). A failed request is tried up to 4 times in all (retries after 15 s, doubling up to 5 min); the queue holds 6 messages (the oldest is dropped when full).
 - The status page (*Alarms* box) and `/api/info` `outputs.status` (`ntfy`, `pushover`, `telegram`, `webhook`) show the last success / error of each channel.
 - **Tokens and keys are write-only** fields like the other passwords, never shown, never logged (a log line names only the channel and the HTTP status) and not in `/api/alarms`. In the [settings backup](settings.md#backup-and-restore) they — and the webhook URL, which may carry a key — are only included with *include passwords and keys*.
 

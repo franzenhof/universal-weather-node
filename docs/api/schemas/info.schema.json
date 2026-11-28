@@ -4,10 +4,19 @@
   "title": "Universal Weather Node — device description (/api/info)",
   "description": "What this node is and what /api/data will contain: read it once at start-up (and again after the node restarted, i.e. device.uptimeSec went down) to build your UI. Contains no secrets (no passwords, keys, station IDs, broker or coordinates). Stability: within apiVersion 1 fields are only added.",
   "type": "object",
-  "required": ["apiVersion", "device", "system", "firmware", "hardware", "units", "measurement", "history", "outputs", "available", "sources"],
+  "required": ["apiVersion", "device", "system", "ui", "firmware", "hardware", "units", "measurement", "history", "outputs", "available", "sources"],
   "additionalProperties": true,
   "properties": {
     "apiVersion": { "type": "integer", "minimum": 1, "description": "API contract version (1). Check it first: refuse or warn on an unknown major version.", "x-present": "always" },
+    "ui": {
+      "type": "object", "additionalProperties": false, "x-present": "always",
+      "required": ["flashOnChange", "showAge"],
+      "description": "Web UI options of the node's own dashboard (Settings → System → Web UI). The dashboard reads them once at load; another UI may ignore them.",
+      "properties": {
+        "flashOnChange": { "type": "boolean", "description": "Dashboard tiles briefly highlight when their value changes." },
+        "showAge": { "type": "boolean", "description": "Dashboard tiles show how long ago their value was received." }
+      }
+    },
     "system": {
       "type": "object", "additionalProperties": false, "x-present": "always",
       "required": ["uptimeSec", "heapFree", "heapMin", "heapLargest"],
@@ -29,8 +38,41 @@
             "largest": { "type": "integer", "minimum": 0, "description": "Largest free PSRAM block now.", "x-unit": "bytes" }
           }
         },
-        "settingsStoreUsed": { "type": "integer", "minimum": 0, "description": "Settings flash partition (cfgdata, 64 KB NVS): bytes in use - settings, alarms, records, rain statistics, saved history.", "x-unit": "bytes" },
-        "settingsStoreFree": { "type": "integer", "minimum": 0, "description": "Settings flash partition: bytes free. The saved history is skipped when less than 16 KB would stay free.", "x-unit": "bytes" },
+        "settingsStoreUsed": { "type": "integer", "minimum": 0, "description": "Settings flash partition (cfgdata, 128 KB NVS): bytes in use - settings, alarms, records, rain statistics, reset history (the chart history has its own partition).", "x-unit": "bytes" },
+        "settingsStoreFree": { "type": "integer", "minimum": 0, "description": "Settings flash partition: bytes free.", "x-unit": "bytes" },
+        "starts": { "type": "integer", "minimum": 0, "description": "Starts counted since the reset history began (a factory reset keeps it; erasing the flash starts it again).", "x-present": "always" },
+        "resets": {
+          "type": "array", "maxItems": 10, "x-present": "always",
+          "description": "Why the node restarted, the last 10 times, newest first ([0] = this run's start).",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["cause"],
+            "properties": {
+              "cause": { "type": "string", "enum": ["unknown", "powerOn", "external", "software", "panic", "interruptWatchdog", "taskWatchdog", "watchdog", "deepSleep", "brownout", "usb", "jtag", "powerGlitch", "cpuLockup", "other"], "description": "Reset cause (ESP-IDF reset reason): powerOn = power applied, external = reset button / EN pin, software = planned restart (detail says why), panic = crash, taskWatchdog = a task hung (120 s), interruptWatchdog = interrupts blocked, brownout = supply voltage dip, usb = reset over USB (flashing tools)." },
+              "uptimeSec": { "type": "integer", "minimum": 0, "description": "How long the node had run before this reset: the main loop's last heartbeat (after a watchdog reset: when the loop last ran).", "x-unit": "s", "x-present": "when known (lost with the power: not after power-on)" },
+              "time": { "type": "string", "format": "date-time", "description": "UTC of that last heartbeat - about the time of the reset.", "x-present": "when the clock was set before the reset" },
+              "detail": { "type": "string", "maxLength": 47, "description": "software: the restart's reason (\"settings saved\", \"firmware update\"); a crash: \"<task>: <panic details or CPU exception>\" (cut).", "x-present": "when there is one" },
+              "crash": { "type": "boolean", "description": "true = lastCrash belongs to this reset.", "x-present": "only when true" }
+            }
+          }
+        },
+        "lastCrash": {
+          "type": "object", "additionalProperties": false, "required": ["task", "pc", "backtrace", "firmware", "elfSha", "coreDump"],
+          "x-present": "after the first crash with a core dump (kept until a newer crash)",
+          "description": "Summary of the ESP-IDF core dump the last crash left in flash. Addresses are decoded with the firmware.elf of that build (xtensa-esp32s3-elf-addr2line -pfiaC -e firmware.elf <addresses>); the whole dump is an admin download (GET /api/diag/coredump).",
+          "properties": {
+            "time": { "type": "string", "format": "date-time", "description": "UTC of the crash (the last heartbeat before it).", "x-present": "when the clock was set" },
+            "task": { "type": "string", "maxLength": 15, "description": "FreeRTOS task that crashed (after a task watchdog: the task that was running, often IDLE0/1 - reason names the hung tasks)." },
+            "pc": { "type": "string", "pattern": "^0x[0-9a-f]{8}$", "description": "Program counter at the crash." },
+            "backtrace": { "type": "array", "maxItems": 8, "items": { "type": "string", "pattern": "^0x[0-9a-f]{8}$" }, "description": "Return addresses of the crashing task, innermost first (up to 8)." },
+            "backtraceCorrupted": { "type": "boolean", "description": "The stack walk stopped at a damaged frame.", "x-present": "only when true" },
+            "reason": { "type": "string", "maxLength": 95, "description": "Panic details: abort() / assert text (file, line, function), or \"task watchdog: <hung tasks>\".", "x-present": "abort, assert, watchdog (a CPU exception has none: see exception)" },
+            "exception": { "type": "string", "description": "CPU exception (Xtensa EXCCAUSE), e.g. LoadProhibited, StoreProhibited, IllegalInstruction.", "x-present": "a CPU exception (no reason)" },
+            "exceptionAddress": { "type": "string", "pattern": "^0x[0-9a-f]{8}$", "description": "The address the exception was about (EXCVADDR), e.g. 0x00000000 for a null pointer.", "x-present": "with exception" },
+            "firmware": { "type": "string", "maxLength": 31, "description": "Firmware version that crashed." },
+            "elfSha": { "type": "string", "pattern": "^[0-9a-f]{0,16}$", "description": "Leading hex digits of that build's ELF SHA-256 (9 with the stock build setting): which firmware.elf decodes the addresses." },
+            "coreDump": { "type": "boolean", "description": "The full core dump is still in flash (admin download GET /api/diag/coredump)." }
+          }
+        },
         "stackFree": {
           "type": "object",
           "description": "Stack of each task never used so far (FreeRTOS high-water mark, bytes) - a value near 0 is the warning before a stack overflow. Tasks: loop (24 KB, measuring / sending / setup portal), web (8 KB, web server), wxUpload (12 KB, weather networks / notifications). A task that does not run is left out.",
@@ -67,7 +109,31 @@
       "properties": {
         "board": { "type": "string", "enum": ["V3", "V4", "V4-R8"], "description": "Heltec WiFi LoRa 32 board (= /api/data status.board).", "x-present": "always" },
         "boardFem": { "type": "string", "enum": ["GC1109", "KCT8103L"], "description": "RF front end of a V4.", "x-present": "V4 with a detected front end" },
-        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20], "description": "PCB revision (= /api/data status.pcbRev): 12, 13 (also a board without PCB), 20 = v2.0 (also a V4 on PCB v2.0), 0 = Heltec V4 without PCB (no revision ID on GPIO15).", "x-present": "always" }
+        "pcbRev": { "type": "integer", "enum": [0, 12, 13, 20, 21], "description": "Board type (= /api/data status.pcbRev): 20 = V4 Full (formerly \"V4 Full\"), 21 = V4 Light (no I/O block: heater, fan, tacho, AUX, UV, VE.Direct), 0 = Heltec V4 without PCB (no revision ID on GPIO15); 12, 13 = Rev 1.2 / 1.3 (V3 boards, firmware 2.x only).", "x-present": "always" },
+        "bme280Pins": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2, "description": "GPIOs (SDA, SCL) of the BME280 bus in use: [41, 42] on a V4 Full / V4 Light; [47, 48] on a V4 without PCB, [41, 42] there only for old wiring found while GNSS is off (bme280OldPins). Also when no BME280 answers (the pins it is expected on).", "x-present": "always" },
+        "bme280OldPins": { "type": "boolean", "description": "true = V4 without PCB with the BME280 on the old pins 41/42: works, but must move to 47/48 before a GNSS module is used.", "x-present": "always" },
+        "gnss": {
+          "type": "object", "additionalProperties": false, "x-present": "GNSS module switched on (V4 without PCB)",
+          "required": ["seen", "baud", "fix", "fixQuality", "satellites", "pps", "takeTime", "takePosition", "takeAltitude"],
+          "description": "GNSS module on the V4's GNSS connector (Settings → Sensors → GNSS module).",
+          "properties": {
+            "seen": { "type": "boolean", "description": "A valid NMEA sentence within the last 5 s." },
+            "baud": { "type": "integer", "enum": [9600, 38400, 115200], "description": "UART rate in use (while searching: the one being tried)." },
+            "fix": { "type": "boolean", "description": "RMC status A or GGA fix quality >= 1 within the last 3 s." },
+            "fixQuality": { "type": "integer", "minimum": 0, "maximum": 9, "description": "GGA fix quality: 0 none, 1 GPS, 2 DGPS, 4/5 RTK, 6 dead reckoning." },
+            "satellites": { "type": "integer", "minimum": 0, "description": "Satellites in use (GGA)." },
+            "hdop": { "type": "number", "description": "Horizontal dilution of precision (GGA). Position / altitude are taken over only at <= 2.", "x-present": "the module reports it" },
+            "lat": { "type": "number", "description": "Latitude of the last fix, decimal degrees (north positive).", "x-unit": "°", "x-present": "a fix with a position since the start, and only for a request with a valid admin login (Digest) - the station position is private; without a login the field is left out" },
+            "lon": { "type": "number", "description": "Longitude of the last fix, decimal degrees (east positive).", "x-unit": "°", "x-present": "a fix with a position since the start, and only for a request with a valid admin login (Digest) - the station position is private; without a login the field is left out" },
+            "altitudeM": { "type": "number", "description": "Altitude above mean sea level of the last fix (GGA).", "x-unit": "m", "x-present": "a fix with an altitude since the start" },
+            "pps": { "type": "boolean", "description": "A PPS edge on GPIO41 within the last 2 s." },
+            "timeAgeSec": { "type": "integer", "minimum": 0, "description": "Seconds since the clock last took (or confirmed) the GNSS time.", "x-unit": "s", "x-present": "the GNSS time was used since the start" },
+            "timePps": { "type": "boolean", "description": "That time was timestamped with the PPS edge (about 20 ms) rather than the NMEA line (about 1 s).", "x-present": "the GNSS time was used since the start" },
+            "takeTime": { "type": "boolean", "description": "Setting: the clock takes the GNSS time (source gnss, the best one)." },
+            "takePosition": { "type": "boolean", "description": "Setting: latitude / longitude follow the 5-min mean when it moved more than 100 m." },
+            "takeAltitude": { "type": "boolean", "description": "Setting: the station altitude (sea-level pressure) follows the 5-min mean when it differs by more than 5 m." }
+          }
+        }
       }
     },
     "units": {
@@ -93,21 +159,37 @@
         "mqttWindAggregation": { "type": "string", "enum": ["interval", "10min"], "description": "Wind window of the MQTT payload: the MQTT interval, or the WMO 10-min mean. /api/data always uses the base cycle.", "x-present": "always" },
         "altitudeM": { "type": "integer", "description": "Station altitude used for pressureQnh.", "x-unit": "m", "x-present": "always" },
         "clockSynced": { "type": "boolean", "description": "NTP time has been received since the start; without it rainToday … rainYear, lastRain and sunshine are absent.", "x-present": "always" },
-        "timeZone": { "type": "string", "description": "Device time zone as POSIX TZ string (defines 'today' for rainToday etc.).", "x-present": "always" }
+        "timeZone": { "type": "string", "description": "Device time zone as POSIX TZ string (defines 'today' for rainToday etc.).", "x-present": "always" },
+        "clockSource": { "type": "string", "enum": ["none", "gnss", "ntp", "dcf77", "phone", "lorawan"], "description": "Time source the clock follows (the last one that set or confirmed it): gnss (GNSS module, V4 without PCB), ntp, dcf77 (radio-clock time of a WH31 / WN31 DNT sensor), phone (a browser time, POST /api/time), lorawan (DeviceTimeReq). Priority gnss > ntp > dcf77 > phone > lorawan; a worse source never overrides a fresh better one. none = no time since the start.", "x-present": "always" },
+        "clockSourceAgeSec": { "type": "integer", "minimum": 0, "description": "Seconds since clockSource last delivered a time.", "x-unit": "s", "x-present": "with a clock source" },
+        "clockSourceFresh": { "type": "boolean", "description": "clockSource is within its freshness window (gnss 1 h, ntp 24 h, dcf77 25 h, phone 24 h, lorawan 24 h); false = the clock runs on its own since then.", "x-present": "with a clock source" },
+        "loraTimeReqInSec": { "type": "integer", "minimum": 0, "description": "Next LoRaWAN DeviceTimeReq in seconds (0 = with the next uplink). Absent when LoRaWAN is not joined or a better source (NTP ...) is fresh.", "x-unit": "s", "x-present": "LoRaWAN joined, no better fresh time source" }
       }
     },
     "history": {
-      "type": "object", "description": "History ranges served by /api/history.", "x-present": "always",
-      "required": ["ranges"], "additionalProperties": true,
+      "type": "object", "description": "History served by /api/history: the ranges (at end = now) and the tiers behind them.", "x-present": "always",
+      "required": ["ranges", "tiers"], "additionalProperties": true,
       "properties": {
         "ranges": {
           "type": "array", "minItems": 1, "description": "Available ranges.", "x-present": "always",
           "items": {
-            "type": "object", "description": "One range.", "required": ["range", "bucketSec", "maxPoints"], "additionalProperties": true,
+            "type": "object", "description": "One range.", "required": ["range", "bucketSec", "maxPoints", "res"], "additionalProperties": true,
             "properties": {
-              "range": { "type": "string", "enum": ["24h", "7d"], "description": "Value of the range query parameter.", "x-present": "always" },
-              "bucketSec": { "type": "integer", "minimum": 1, "description": "Bucket length.", "x-unit": "s", "x-present": "always" },
-              "maxPoints": { "type": "integer", "minimum": 1, "description": "Ring capacity (finished buckets); plus one open bucket.", "x-present": "always" }
+              "range": { "type": "string", "enum": ["24h", "7d", "30d", "1y"], "description": "Value of the range query parameter.", "x-present": "always" },
+              "bucketSec": { "type": "integer", "minimum": 1, "description": "Length of one point (tier bucket x buckets merged per point).", "x-unit": "s", "x-present": "always" },
+              "maxPoints": { "type": "integer", "minimum": 1, "description": "Most finished points the range returns (plus one open bucket; one more where merged points do not line up with the window).", "x-present": "always" },
+              "res": { "type": "string", "enum": ["5m", "1h", "1d"], "description": "Tier that serves the range at end = now.", "x-present": "always" }
+            }
+          }
+        },
+        "tiers": {
+          "type": "array", "minItems": 1, "description": "The stored tiers; capacity x bucketSec is how far back a tier reaches (for the end parameter).", "x-present": "always",
+          "items": {
+            "type": "object", "description": "One tier.", "required": ["res", "bucketSec", "capacity"], "additionalProperties": true,
+            "properties": {
+              "res": { "type": "string", "enum": ["5m", "1h", "1d"], "description": "Value of the res query parameter.", "x-present": "always" },
+              "bucketSec": { "type": "integer", "minimum": 1, "description": "Bucket length (1d: local days, nominal 86400).", "x-unit": "s", "x-present": "always" },
+              "capacity": { "type": "integer", "minimum": 1, "description": "Buckets kept.", "x-present": "always" }
             }
           }
         }
@@ -124,6 +206,12 @@
         "lorawan": { "type": "boolean", "description": "LoRaWAN enabled.", "x-present": "always" },
         "loxone": { "type": "boolean", "description": "Loxone UDP push enabled.", "x-present": "always" },
         "updateCheck": { "type": "boolean", "description": "Daily firmware update check enabled.", "x-present": "always" },
+        "influxdb": { "type": "boolean", "description": "InfluxDB / VictoriaMetrics push enabled (Wi-Fi on, push on, write URL set).", "x-present": "always" },
+        "accessPoint": { "type": "string", "enum": ["off", "fallback", "always"], "description": "Own Wi-Fi access point (docs/settings.md#own-access-point): off, fallback (opens while the Wi-Fi network is unreachable) or always; off while Wi-Fi or the web interface is off.", "x-present": "always" },
+        "accessPointActive": { "type": "boolean", "description": "The own access point runs now (its name and password are never listed).", "x-present": "always" },
+        "accessPointClients": { "type": "integer", "minimum": 0, "maximum": 8, "description": "Devices connected to the own access point (updated every 2 s, at most 8).", "x-present": "while accessPointActive" },
+        "https": { "type": "string", "enum": ["off", "on", "waitingForNetwork", "generateFailed", "lowMemory", "startFailed"], "description": "HTTPS on port 443 (Settings -> System -> HTTPS): off (not enabled, the default), on (running), or why it does not run - waitingForNetwork (no usable uploaded certificate, and the generated one waits for the station's Wi-Fi address), generateFailed (generating a self-signed certificate failed), lowMemory, startFailed. In every case but on the web interface runs on plain HTTP without redirects.", "x-present": "always" },
+        "httpsCertificate": { "type": "string", "enum": ["uploaded", "generated"], "description": "Whose certificate HTTPS runs with: the admin's uploaded one, or the self-signed one the node generated (docs/settings.md#https).", "x-present": "while https is on" },
         "weatherNetworks": {
           "type": "array", "description": "Weather networks the node uploads to.", "x-present": "always (may be empty)",
           "items": { "type": "string", "enum": ["awekas", "wunderground", "weathercloud", "wetternetzwerk", "windy", "opensensemap", "wow", "cwop"], "description": "Network key." }
@@ -149,7 +237,8 @@
             "telegram": { "$ref": "#/$defs/outStatus", "description": "Send status of alarm notifications via Telegram." },
             "webhook": { "$ref": "#/$defs/outStatus", "description": "Send status of the alarm webhook." },
             "custom1": { "$ref": "#/$defs/outStatus", "description": "Send status of custom upload 1." },
-            "custom2": { "$ref": "#/$defs/outStatus", "description": "Send status of custom upload 2." }
+            "custom2": { "$ref": "#/$defs/outStatus", "description": "Send status of custom upload 2." },
+            "influxdb": { "$ref": "#/$defs/influxStatus", "description": "Send status of the InfluxDB / VictoriaMetrics push, with its backfill queue." }
           }
         }
       }
@@ -168,7 +257,7 @@
         "ds18b20Probes": { "type": "integer", "minimum": 0, "maximum": 3, "description": "Number of DS18B20 probe slots (length of /api/data ds18b20).", "x-present": "always" },
         "battery": { "type": "boolean", "description": "batteryVolt.", "x-present": "always" },
         "wirelessSensors": { "type": "boolean", "description": "Wireless reception on: rfSensors, sources, radioBatteryLow.", "x-present": "always" },
-        "uvSensorVolts": { "type": "boolean", "description": "Board UV input (PCB v2.0).", "x-present": "always" },
+        "uvSensorVolts": { "type": "boolean", "description": "Board UV input (V4 Full).", "x-present": "always" },
         "wind2": { "type": "boolean", "description": "wind2 object.", "x-present": "always" },
         "auxAnalog": { "type": "boolean", "description": "auxAnalogV.", "x-present": "always" },
         "auxPulses": { "type": "boolean", "description": "auxPulses/auxPulsesTotal.", "x-present": "always" },
@@ -185,6 +274,63 @@
         "mine": { "type": "integer", "minimum": 0, "maximum": 32, "description": "IDs in the \"Mine\" list (numbered first, wireless 1..n; Home Assistant devices).", "x-present": "always" },
         "hidden": { "type": "integer", "minimum": 0, "maximum": 32, "description": "IDs in the hidden list (never stored, numbered or output).", "x-present": "always" },
         "hiddenInRange": { "type": "integer", "minimum": 0, "maximum": 16, "description": "Hidden sensors heard within the last 10 minutes.", "x-present": "always" }
+      }
+    },
+    "virtualSensors": {
+      "type": "object", "additionalProperties": false, "x-present": "the setting Send virtual sensors is on",
+      "required": ["txPowerDbm", "frequencyMHz", "airtimeLastHourMs", "airtimeBudgetMs", "slots"],
+      "description": "Virtual sensors (docs/virtual-sensors.md): the node's own values sent as Fine Offset (Ecowitt) sensor frames on 868.3 MHz. Never carries frame bytes.",
+      "properties": {
+        "txPowerDbm": { "type": "integer", "minimum": 0, "maximum": 14, "description": "Configured transmit power at the antenna, dBm.", "x-present": "always" },
+        "frequencyMHz": { "type": "number", "description": "Transmit frequency, MHz (868.3).", "x-present": "always" },
+        "airtimeLastHourMs": { "type": "integer", "minimum": 0, "description": "The node's airtime in the 868.0-868.6 MHz band in the last hour (virtual sensors + LoRaWAN uplinks), ms.", "x-present": "always" },
+        "airtimeBudgetMs": { "type": "integer", "minimum": 0, "description": "Airtime allowed per hour in that band (1 % = 36000 ms); a frame that would exceed it is skipped.", "x-present": "always" },
+        "davisGapFrames": { "type": "integer", "minimum": 0, "description": "Frames sent in the gap after a Davis packet since start (all slots).", "x-present": "Davis mode" },
+        "davisGapMaxMs": { "type": "integer", "minimum": 0, "description": "Longest gap use measured: from the first frame's transmit setup until Davis reception runs again on the next hop channel, ms.", "x-present": "Davis mode" },
+        "slots": {
+          "type": "array", "x-present": "always", "description": "Configured slots (type not off).",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["slot", "type", "enabled", "id", "fields", "sent", "skipped"],
+            "properties": {
+              "slot": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Slot number 1-8.", "x-present": "always" },
+              "type": { "type": "string", "enum": ["wh31", "wh40", "wn32p", "wh65", "tx29", "tx35"], "description": "Sensor type sent.", "x-present": "always" },
+              "enabled": { "type": "boolean", "description": "The slot is switched on.", "x-present": "always" },
+              "id": { "type": "string", "pattern": "^[0-9A-F]{8}$", "description": "The sensor's table ID as a receiving node shows it (family code + ID; WH31 with the channel). Derived from the node's MAC and the slot, never configurable.", "x-present": "always" },
+              "channel": { "type": "integer", "minimum": 1, "maximum": 8, "description": "WH31 channel.", "x-present": "type wh31" },
+              "fields": {
+                "type": "object", "additionalProperties": false, "x-present": "always",
+                "description": "Frame field -> value name (placeholder name in the stored form, e.g. temp, @L3F9A2C_temp, ds1, rain_total); only mapped fields.",
+                "properties": {
+                  "temp": { "type": "string", "description": "Temperature, °C.", "x-present": "mapped" },
+                  "hum": { "type": "string", "description": "Humidity, %.", "x-present": "mapped" },
+                  "press": { "type": "string", "description": "Station pressure, hPa.", "x-present": "mapped" },
+                  "wind": { "type": "string", "description": "Mean wind, m/s.", "x-present": "mapped" },
+                  "gust": { "type": "string", "description": "Gust, m/s.", "x-present": "mapped" },
+                  "dir": { "type": "string", "description": "Wind direction, degrees.", "x-present": "mapped" },
+                  "rain": { "type": "string", "description": "Rain running total, mm.", "x-present": "mapped" },
+                  "uv": { "type": "string", "description": "UV index.", "x-present": "mapped" },
+                  "lux": { "type": "string", "description": "Illuminance, lux.", "x-present": "mapped" }
+                }
+              },
+              "sent": { "type": "integer", "minimum": 0, "description": "Frames sent since start.", "x-present": "always" },
+              "lastTxSecAgo": { "type": "integer", "minimum": 0, "description": "Seconds since the last frame was sent.", "x-present": "sent > 0" },
+              "idReceived": { "type": "boolean", "description": "true = a received sensor in range has the same ID (WH31 IDs have 8 bits); the ID stays stable — use another slot or type.", "x-present": "only when true" },
+              "skipped": {
+                "type": "object", "additionalProperties": false, "x-present": "always",
+                "required": ["airtime", "radioBusy", "valueMissing", "deferredDavis"],
+                "description": "Frames not sent since start, by reason.",
+                "properties": {
+                  "airtime": { "type": "integer", "minimum": 0, "description": "The hourly airtime budget was used up.", "x-present": "always" },
+                  "radioBusy": { "type": "integer", "minimum": 0, "description": "A firmware upload ran, or the transmit failed.", "x-present": "always" },
+                  "valueMissing": { "type": "integer", "minimum": 0, "description": "A needed value was not available.", "x-present": "always" },
+                  "deferredDavis": { "type": "integer", "minimum": 0, "description": "Davis mode: the frame found no gap after a Davis packet before the slot's next frame (missed hop, prediction not locked) and was replaced or dropped.", "x-present": "always" }
+                }
+              },
+              "lastError": { "type": "integer", "description": "RadioLib error code of the last failed transmit.", "x-present": "after a failed transmit" }
+            }
+          }
+        }
       }
     },
     "sources": {
@@ -210,6 +356,30 @@
         "lastError": { "type": "string", "maxLength": 39, "description": "Last error: local reason or trimmed server reply." },
         "lastErrorCode": { "type": "integer", "description": "Code of the last error: HTTP status, negative HTTP client / RadioLib code, or the MQTT client state." },
         "failsInRow": { "type": "integer", "minimum": 0, "description": "Consecutive failures (0 after a success)." }
+      }
+    },
+    "influxStatus": {
+      "type": "object", "required": ["failsInRow"], "additionalProperties": false,
+      "description": "Send status of the InfluxDB push (fields as outStatus) plus the backfill queue.",
+      "properties": {
+        "lastOkSecAgo": { "type": "integer", "minimum": 0, "description": "Seconds since the last accepted request (absent: none since start).", "x-unit": "s" },
+        "lastErrorSecAgo": { "type": "integer", "minimum": 0, "description": "Seconds since the last error (absent: none since start).", "x-unit": "s" },
+        "lastError": { "type": "string", "maxLength": 39, "description": "Last error: local reason or trimmed server reply." },
+        "lastErrorCode": { "type": "integer", "description": "HTTP status or negative HTTP client code of the last error." },
+        "failsInRow": { "type": "integer", "minimum": 0, "description": "Consecutive failures (0 after a success)." },
+        "backlog": {
+          "type": "object", "x-present": "when the queue's PSRAM ring is allocated (push on)", "additionalProperties": false,
+          "required": ["pushes", "bytes", "capacity", "droppedFull", "droppedRejected"],
+          "description": "Pushes not yet accepted by the database (RAM only, lost on a restart); sent oldest first with their original timestamps.",
+          "properties": {
+            "pushes": { "type": "integer", "minimum": 0, "description": "Queued pushes (one per interval; 1 normally while it is being sent)." },
+            "bytes": { "type": "integer", "minimum": 0, "description": "Bytes used in the ring.", "x-unit": "B" },
+            "capacity": { "type": "integer", "minimum": 0, "description": "Ring size.", "x-unit": "B" },
+            "oldestSecAgo": { "type": "integer", "minimum": 0, "description": "Age of the oldest queued push (absent: empty).", "x-unit": "s" },
+            "droppedFull": { "type": "integer", "minimum": 0, "description": "Pushes dropped since start because the ring was full (oldest first)." },
+            "droppedRejected": { "type": "integer", "minimum": 0, "description": "Pushes dropped since start because the database refused them (4xx other than 401/403/404/408/429)." }
+          }
+        }
       }
     }
   }

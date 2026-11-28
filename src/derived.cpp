@@ -79,6 +79,7 @@ const char* windDirText(int deg)
 
 PressureTendency pressureTendency(float d)
 {
+    if (!isfinite(d)) return PT_STEADY;   // no tendency (every comparison on NaN is false)
     float a = fabsf(d);
     int k = a < 0.1f ? 0 : a < 1.6f ? 1 : a < 3.6f ? 2 : a < 6.0f ? 3 : 4;
     return (PressureTendency)(d < 0 ? -k : k);

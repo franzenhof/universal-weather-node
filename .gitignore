@@ -3,7 +3,6 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
-pcb/v1.3/universal-weather-node-pcb-gerberfile rev13/*
 kicad/*
 kicad
 .DS_Store
@@ -13,9 +12,6 @@ include/decoder_js.h
 include/readme_md.h
 include/i18n_keys.h
 include/i18n_table.h
-include/chart_page_gz.h
-include/web_assets.h
-
 
 # KiCad
 *.kicad_prl
@@ -25,3 +21,18 @@ fp-info-cache
 _autosave-*
 \#auto_saved_files\#
 
+# local tools / editor settings (not part of the project)
+.claude/
+.vscode/settings.json
+tools/pcbgen/freerouting-*.jar
+include/chart_page_gz.h
+include/web_assets.h
+
+# pioarduino HybridCompile (custom_sdkconfig): generated on every rebuild
+.dummy/
+managed_components/
+sdkconfig.defaults
+sdkconfig.heltec_wifi_lora_32_V4
+dependencies.lock
+src/idf_component.yml
+*.orig

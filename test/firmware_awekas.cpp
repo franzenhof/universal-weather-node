@@ -23,7 +23,7 @@ int main()
     d.user = "station1"; d.md5Pass = "5f4dcc3b5aa765d61d8327deb882cf99"; d.date = "15.06.2026"; d.time = "14:05";
     d.hasTemp = true; d.tempC = 18.44f; d.hasHum = true; d.humidity = 63.4f; d.hasPress = true; d.pressureHpa = 1013.27f;
     d.hasRain = true; d.dailyRainMm = 2.4f; d.rainRateMmH = 0.6f;
-    d.hasWind = true; d.windKmh = 12.34f; d.gustKmh = 25.0f; d.dirDeg = 235;
+    d.hasWind = true; d.hasDir = true; d.windKmh = 12.34f; d.gustKmh = 25.0f; d.dirDeg = 235;
     d.software = "weather-node-2.0.0"; d.lon = "13.04"; d.lat = "47.80";
     // the fields the firmware sent before (no tendency/solar/UV/lux/sunshine): byte-identical
     awekasVal(d, v, sizeof(v));
@@ -42,6 +42,12 @@ int main()
     assert(f.size() == 25);
     assert(f[14] == "-1" && f[15] == "25.0" && f[16] == "512" && f[17] == "4.2" && f[18] == "30124" && f[19] == "5.85");
     assert(f[20].empty() && f[21] == "0.6" && f[13] == "en" && f[10].empty() && f[11].empty() && f[12].empty());
+    // direction not known: its field empty, speed and gust stay
+    d.hasDir = false;
+    awekasVal(d, v, sizeof(v));
+    f = fields(v);
+    assert(f.size() == 25 && f[9].empty() && f[8] == "12.3" && f[15] == "25.0");
+    d.hasDir = true;
     // absent values stay empty, the field count stays
     AwekasData e; e.user = "u"; e.md5Pass = "p"; e.date = "d"; e.time = "t";
     awekasVal(e, v, sizeof(v));

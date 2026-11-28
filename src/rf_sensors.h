@@ -31,6 +31,7 @@
 #include <stdint.h>
 #include <vector>
 #include "sources.h"         // SRC_RF_FRESH_MS
+#include "reception_window.h"   // ReceptionWindow (B10)
 
 // Wireless sensors received at the same time (table gRfSensors[], also the
 // maximum of the ID list). Slot n (1..RF_MAX_SENSORS) = the n-th ID of
@@ -61,6 +62,7 @@ struct RfSensorReading {
     bool          batteryOk = true;
     uint16_t      batteryMv = 0;     // Fine Offset sensors that send their battery voltage (WH51, WN34, WH40 ...), 0 = none
     unsigned long lastMs = 0;        // millis() of the last packet (any content)
+    unsigned long firstMs = 0;       // millis() when the slot was taken (first packet of this ID since start); 0 = unknown
     // millis() of the last packet that actually carried each value: a sensor
     // can keep sending (e.g. wind) while one of its measurements fails, so the
     // freshness of every value is judged on its own (sources.cpp)
@@ -75,12 +77,20 @@ struct RfSensorReading {
     // and the send interval learned from the gaps (0 = not known yet)
     unsigned long schedMs = 0;
     uint32_t      periodMs = 0;
+    // reception watchdog (reception_window.h): packets of the last hour, only
+    // while the sensor is ★ (stopped otherwise, so a ★ / re-bind starts fresh);
+    // read with rfReceptionOf()
+    ReceptionWindow reception;
     // weather values (only the *_ok groups the sensor sends)
     bool  hasTemp = false, hasHumidity = false, hasWind = false, hasRain = false, hasUv = false, hasLight = false;
     float tempC = 0.0f;
     uint8_t humidity = 0;
     float windAvgMs = 0.0f, windGustMs = 0.0f, windDirDeg = 0.0f;
     float rainTotalMm = 0.0f;        // the sensor's own running total (resets on battery change)
+    // phantom-rain filter (rfStoreValues()): a total that dropped or jumped,
+    // held until the next packet confirms it
+    bool  rainTotalHeld = false;
+    float heldRainTotalMm = 0.0f;
     float uvIndex = 0.0f;
     float lightLux = 0.0f;
     // Fine Offset only (rfSensors JSON, status page; no value-source groups)
@@ -111,6 +121,10 @@ struct RfSensorReading {
     uint8_t leafWetnessPct = 0;
     bool    hasConductivity = false; // WH52 soil EC
     float   conductivityUsCm = 0.0f;
+    bool    hasDistance = false;     // LDS01 laser distance (air gap), mm
+    uint16_t distanceMm = 0;
+    bool    hasHeatCount = false;    // LDS01 heater-on count (low byte, wraps)
+    uint8_t heatCount = 0;
 };
 
 extern RfSensorReading gRfSensors[RF_MAX_SENSORS];
@@ -123,9 +137,9 @@ std::vector<uint32_t> rfParseIds(const char* s);
 // it ("181A2" for our 900181A2; WH31 / WH25 / WH32: the 8-bit ID): false =
 // not a Fine Offset ID (family byte unknown).
 bool rfEcowittId(uint32_t id, uint32_t& shortId);
-// A short ID typed into the Mine / Hidden lists ("181A2") is replaced by the
+// A short ID typed into the Hidden list ("181A2") is replaced by the
 // full ID of the Fine Offset sensor it belongs to once that sensor is heard.
-// true = a list changed (gCfg.rfIds / rfIgnore, in RAM; saved with the next save).
+// true = the list changed (gCfg.rfIgnore, in RAM; saved with the next save).
 bool rfNormalizeShortId(uint32_t fullId);
 
 // ---- Table handling (rf_sensors_data.cpp, no RadioLib: host-tested) ----
@@ -144,33 +158,46 @@ struct RfValues {
 // sets lastMs. Returns the rain increase since the sensor's previous rain
 // value (0 for the first one after a node start: rain while the node was
 // down is not known). rainGapMs: 0 normally; the age of the previous rain
-// value (> SRC_RF_FRESH_MS) when the sensor was not heard for longer than
-// the freshness window, so the increase covers that whole outage.
+// value (> rfFreshMs()) when the sensor was not heard for longer than its
+// freshness window, so the increase covers that whole outage.
+// Radio rain totals (Fine Offset, Bresser) pass a phantom-rain filter, the
+// counterpart of DavisRainFilter: a total below the previous one (counter
+// restart or a corrupt packet whose checksum happened to pass) or above it by
+// more than plausible rain is held (increase 0) until the next packet. If that
+// one continues from the held total, the step is real - a restart counts the
+// new counter's total, a jump counts while it fits a cloudburst rate, else the
+// counter is re-based; if it continues from the old total, the held packet was
+// corrupt and is dropped. Davis (filtered by DavisRainFilter) and network
+// sources are taken as they come.
 float rfStoreValues(RfSensorReading& r, const RfValues& v, unsigned long now, unsigned long& rainGapMs);
+// Counts rfStoreValues() calls (any task; the web task pushes new values to /api/events subscribers).
+extern volatile uint32_t gRfStoreCount;
 
 // Table index for a sensor ID: its own slot, else a free one, else the slot
 // of the sensor heard longest ago provided that was more than takeOverMs ago
 // (the slot is then cleared for the new sensor), else -1 (table full).
 // onlyProto != 0: take over only a sensor received with that RF_PROTO_*.
-// mine: a "Mine" sensor (rfIds) - if the table is full of others, it takes
+// mine: a ★ sensor (gLogicalSensors) - if the table is full of others, it takes
 // the entry of the non-"Mine" sensor heard longest ago.
 int rfSlotFor(uint32_t id, unsigned long now, unsigned long takeOverMs = SRC_RF_FRESH_MS, int onlyProto = 0,
               bool mine = false);
 
 // ---- Sensor states (settings: star / circle / cross) ----
-// MINE     in gCfg.rfIds: numbered first (wireless 1..n in list order; 1-4 =
+// MINE     a logical sensor (gLogicalSensors, lsensors.h): numbered first (wireless 1..n in table order; 1-4 =
 //          value sources), Home Assistant device
 // RECEIVED any other sensor: stored and output, numbered after the "Mine"
-//          ones in reception order; not accepted while rfOnlyMine and a list is set
+//          ones in reception order; not accepted while rfOnlyMine and a ★ sensor exists
 // HIDDEN   in gCfg.rfIgnore: never stored, no number, not output anywhere
 enum RfSensorState : uint8_t { RF_STATE_RECEIVED = 0, RF_STATE_MINE = 1, RF_STATE_HIDDEN = 2 };
 RfSensorState rfStateOf(uint32_t id);
-bool rfOnlyMineActive();                 // rfOnlyMine and a non-empty ID list
+bool rfOnlyMineActive();                 // rfOnlyMine and at least one ★ sensor
 bool rfIdAccepted(uint32_t id);          // may enter the table
-// Moves id into the state's list (out of the other); false = that list is
-// full (RF_MAX_SENSORS IDs), nothing changed.
+// Moves id into the state (out of the other): ★ = a new logical sensor
+// (lsAdd(), takes over the rfNames / rfMinRssi entry), un-★ = lsRemove() (name
+// and minimum go back to rfNames / rfMinRssi); false = the table / hidden
+// list is full, nothing changed.
 bool rfSetState(uint32_t id, RfSensorState st);
-// Moves a "Mine" ID one place up (dir < 0) or down in rfIds; false = not possible.
+// Moves a ★ sensor one place up (dir < 0) or down in the table; false = not possible.
 bool rfMoveMine(uint32_t id, int dir);
 // "XXXXXXXX, YYYYYYYY"
 void rfFormatIds(const std::vector<uint32_t>& ids, char* out, size_t len);
@@ -181,11 +208,18 @@ void rfRemoveRejected();
 // Hidden sensors still in range (status page "n hidden sensors in range",
 // settings "Hidden sensors in range"): noted when a frame of a hidden ID is
 // dropped. Not part of the sensor table.
-struct RfHiddenSeen { uint32_t id = 0; const char* model = nullptr; float rssi = 0; unsigned long lastMs = 0; uint32_t packets = 0; };
+// outOfRange: latched by rfExpireValues() once lastMs is older than
+// RF_HIDDEN_RANGE_MS (like staleMask: an old time stamp looks recent again
+// after the millis() wrap), cleared by the next frame.
+struct RfHiddenSeen {
+    uint32_t id = 0; const char* model = nullptr; float rssi = 0; unsigned long lastMs = 0; uint32_t packets = 0;
+    bool outOfRange = false;
+};
 constexpr int RF_HIDDEN_SEEN = 16;
 constexpr unsigned long RF_HIDDEN_RANGE_MS = 600000UL;   // "in range": heard within 10 min
 extern RfHiddenSeen gRfHidden[RF_HIDDEN_SEEN];
 void rfNoteHidden(uint32_t id, const char* model, float rssi, unsigned long now);
+bool rfHiddenSeenInRange(const RfHiddenSeen& h, unsigned long now);   // a hidden ID heard within RF_HIDDEN_RANGE_MS
 int  rfHiddenInRange(unsigned long now);
 
 // Indoor sensors (Fine Offset WH45 / WH46 air quality, WN32P / WH25 indoor
@@ -197,9 +231,40 @@ bool rfIsIndoor(const RfSensorReading& r);
 // "transmission intervals"; Fine Offset family by ID, 0 = unknown) and its
 // freshness window: max(SRC_RF_FRESH_MS, 2.5 x the interval) - the 10-minute
 // air quality sensors (WH41 / WH43 / WH45 / WH46 on battery) stay fresh
-// between their packets, everything else keeps the 5 minutes.
+// between their packets, everything else keeps the 5 minutes. Network
+// sensors: the window set for their slot (net_sensor.h, default 10 min).
+// IT+ (both data rates): about 4 s (docs/wireless-sensors.md).
 unsigned long rfNominalIntervalMs(const RfSensorReading& r);
+// The nominal interval when the sensor always sends at it, 0 otherwise (unknown,
+// or it depends on the power supply: the air quality sensors send every 10 min
+// on battery, every 60 s on USB). Interval learning never goes below 0.75 x it,
+// and a shorter gap counts as evidence of a second transmitter on this ID
+// (rf_schedule.h rfGapImpossible(), reception_window.h).
+unsigned long rfFixedIntervalMs(const RfSensorReading& r);
 unsigned long rfFreshMs(const RfSensorReading& r);
+// A packet of this sensor arrived within rfFreshMs() (and it has not expired
+// across a millis() wrap): its values are current. Outputs that stamp values
+// with "now" (InfluxDB push, /metrics) leave the values of a silent sensor out.
+bool rfSensorFresh(const RfSensorReading& r);
+// Reception of a ★ radio sensor over the last hour (reception_window.h):
+// unknown for network sensors and while the window has too little data. A
+// sensor that is not ★ has no window (stopped with its next packet): callers
+// show it for ★ sensors only. Any task (racy read of small counters, display value).
+// idCollision: two transmitters suspected on this radio ID (percentage unknown then).
+ReceptionVerdict rfReceptionOf(const RfSensorReading& r);
+// Battery change (A5c): the same kind of sensor = same protocol and, for IT+
+// the same humidity variant (RF_ID_ITPLUS_HUM), Fine Offset the same model,
+// Bresser the same type. Other protocols (Davis): the protocol.
+bool rfSameKind(const RfSensorReading& a, const RfSensorReading& b);
+// "Replaces?" offer: the one received sensor (not in the table, not hidden,
+// same kind as `star`, first heard after `star` had been silent for its
+// freshness window) among all[0..n) while `star` is silent now. -1 = none or
+// more than one (then only the manual select is offered).
+int rfReplaceCandidate(const RfSensorReading* all, int n, const RfSensorReading& star, unsigned long now);
+// Table index of the received IT+ twin of id (same IT+ ID, the other kind -
+// with / without humidity; see rfItPlusTwin()), -1 = none.
+int rfTwinIndex(uint32_t id);
+
 
 // Forget all sensors (ID filter changed).
 void rfSensorsClear();
@@ -221,10 +286,16 @@ bool    rfSensorsReceiving();
 int16_t rfSensorsLastError();
 int     rfSensorsScheduled();   // sensors followed by the receive schedule (rf_schedule.h), 0 = rotation only
 uint32_t rfSensorsPacketsTotal();
+uint32_t rfSensorsWatchdogRestarts();   // receiver restarts by the receive watchdog (rf_schedule.h) since start
+// A followed sensor's packet is due about now (rf_schedule.h window): the
+// virtual sensors (vs_run.h) hold their frame back. false while rfEn is off.
+bool    rfSensorsPacketDue();
 
 // The last radio-clock time a Fine Offset sensor sent (WH31 with a DCF77 /
 // WWVB receiver, family 0x52): shown on the status page; not used as the
-// node's clock (yet). false = none received since the start.
+// node's clock (yet) - and barely could be: it sends the time only after a
+// battery change and then about once a day at night (~02:00 local, forum
+// SonneKF 2026-11-24). false = none received since the start.
 struct RfRadioClock {
     uint8_t  stationId = 0;      // the sensor's 8-bit ID (as in its WH31 frames)
     uint16_t year = 0;
@@ -276,9 +347,37 @@ struct AutoSearch;
 const AutoSearch& rfAutoSearchState();
 bool rfAutoLockedWeak();
 
+// Table-only protocols (RfSensorReading::proto, never a gCfg.rfProto value):
+// network sensors (net_sensor.h), IDs E1000001 .. E1000004, values from an
+// MQTT topic or a polled URL. rfProtoName(): "MQTT" / "REST".
+constexpr uint8_t RF_PROTO_MQTT = 32, RF_PROTO_REST = 33;
+inline bool rfIsNetProto(int p) { return p == RF_PROTO_MQTT || p == RF_PROTO_REST; }
+// The sensor table is in use: 868 MHz reception on, or a network sensor
+// configured. The outputs of the table (JSON rfSensors, value sources, HA,
+// InfluxDB, /metrics, ...) check this instead of gCfg.rfEn.
+bool rfTableOn();
+
 // Davis transmitters appear as DA0000ii, ii = transmitter ID 1-8.
 constexpr uint32_t RF_ID_DAVIS = 0xDA000000UL;
 // Davis solar radiation -> illuminance for the light value source (sunlight,
 // about 126.7 lx per W/m2; an approximation, the native value is solarWm2).
 constexpr float RF_DAVIS_LUX_PER_WM2 = 126.7f;
 constexpr uint32_t RF_ID_ITPLUS17 = 0x17000000UL, RF_ID_ITPLUS9 = 0x09000000UL;
+// IT+ IDs are only 6 bits (+64 for a second probe) and random after every
+// battery change, so two sensors in range may share one. A sensor with a
+// humidity sensor (the frame says so: humidity byte != 0x6A) gets this bit in
+// its node ID, a temperature-only one not: two such twins stay two table rows,
+// and neither one's values end up under the other. Two twins of the same kind
+// cannot be told apart.
+constexpr uint32_t RF_ID_ITPLUS_HUM = 0x00000100UL;
+inline uint32_t rfItPlusId(bool rate17, uint8_t sensorId, bool hasHumidity)
+{
+    return (rate17 ? RF_ID_ITPLUS17 : RF_ID_ITPLUS9) | sensorId | (hasHumidity ? RF_ID_ITPLUS_HUM : 0);
+}
+// The other IT+ variant of id (with / without humidity), 0 if id is no IT+ ID.
+inline uint32_t rfItPlusTwin(uint32_t id)
+{
+    const uint32_t base = id & 0xFF000000UL;
+    if ((base != RF_ID_ITPLUS17 && base != RF_ID_ITPLUS9) || (id & 0x00FFFE00UL)) return 0;
+    return id ^ RF_ID_ITPLUS_HUM;
+}

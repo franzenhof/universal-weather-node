@@ -1,6 +1,7 @@
 // Radio trace (src/rf_trace.cpp): heap check, filters, statistics, ring
 // wrap, frame classification, file name and a header without secrets.
 #include "rf_trace.h"
+#include "ls_host.h"
 #include "globals.h"
 #include "rf_sensors.h"
 #include "rf_fsk17.h"
@@ -32,8 +33,9 @@ bool localTimeNow(struct tm& out)
     gmtime_r(&t, &out);   // TZ=UTC in this test
     return true;
 }
+void localTimeOf(time_t t, struct tm& out) { gmtime_r(&t, &out); }   // TZ=UTC in this test
 
-static size_t hostFree = 200 * 1024, hostLargest = 100 * 1024;
+static size_t hostFree = 1024 * 1024, hostLargest = 512 * 1024;   // PSRAM-sized (the ring is 256 KB)
 static size_t fakeFree() { return hostFree; }
 static size_t fakeLargest() { return hostLargest; }
 
@@ -75,9 +77,9 @@ int main()
     hostFree = 50 * 1024;
     assert(!rfTraceStart(5 * 60000UL, RF_TRACE_ALL, 0, false, err, sizeof(err)));
     assert(strstr(err, "not enough free memory") && !rfTraceStatusNow().allocated);
-    hostFree = 200 * 1024; hostLargest = 20 * 1024;   // fragmented: no block for the ring
+    hostFree = 1024 * 1024; hostLargest = 20 * 1024;  // fragmented: no block for the ring
     assert(!rfTraceStart(5 * 60000UL, RF_TRACE_ALL, 0, false, err, sizeof(err)));
-    hostLargest = 100 * 1024;
+    hostLargest = 512 * 1024;
     assert(!rfTraceStart(5 * 60000UL, RF_TRACE_ONE_ID, 0, false, err, sizeof(err)));    // ID filter without ID
     assert(!rfTraceStart(121 * 60000UL, RF_TRACE_ALL, 0, false, err, sizeof(err)));     // too long
 
@@ -152,6 +154,17 @@ int main()
     // statistics cover the filtered-out frame
     assert(f.find("#   FSK17             1        0        1        1") != std::string::npos);
     assert(f.find("#   300001C3 FSK17   WH31              1 / 0 / 0") != std::string::npos);
+    // a long unknown frame (Ecowitt IoT, first byte 0xB9) is recorded with all RF_TRACE_FRAME_LEN bytes
+    {
+        uint8_t iot[RF_TRACE_FRAME_LEN];
+        for (size_t i = 0; i < sizeof(iot); i++) iot[i] = (uint8_t)(0xB9 + i);
+        RfTracePacket l; l.phase = RF_TP_FSK17; l.raw = iot; l.rawLen = sizeof(iot);
+        rfTraceClassifyFsk17(iot, sizeof(iot), true, true, l, check, sizeof(check));
+        assert(l.result == RF_TR_UNKNOWN && strstr(check, "first byte 0xB9"));
+        rfTracePacket(l);
+        f = file();
+        assert(f.find("| 64B B9BABBBC") != std::string::npos && f.find("F5F6F7F8\n") != std::string::npos);   // last byte 0xB9 + 63 = 0xF8
+    }
 
     // ---- filter: one ID ----
     assert(rfTraceStart(15 * 60000UL, RF_TRACE_ONE_ID, 0x300001C3, false, err, sizeof(err)));
@@ -162,6 +175,13 @@ int main()
     assert(st.seen == 2 && st.recorded == 1 && st.filter == RF_TRACE_ONE_ID && st.filterId == 0x300001C3);
     assert(file().find("only ID") == std::string::npos);   // (status page text, not the file)
     assert(file().find("one sensor ID 300001C3") != std::string::npos);
+
+    // ---- filter: one ID, short form the user typed still matches the full on-air ID ----
+    assert(rfTraceStart(15 * 60000UL, RF_TRACE_ONE_ID, 0x01C3, false, err, sizeof(err)));   // low 2 bytes of 300001C3
+    rfTracePacket(okPacket(0x300001C3, wh31, sizeof(wh31)));   // full ID: low bytes match -> recorded
+    rfTracePacket(okPacket(0x300001C4, wh31, sizeof(wh31)));   // different low bytes -> not recorded
+    st = rfTraceStatusNow();
+    assert(st.seen == 2 && st.recorded == 1 && st.filterId == 0x01C3);
 
     // ---- reception rate per ID (repeats not counted) and read delay ----
     assert(rfTraceStart(30 * 60000UL, RF_TRACE_ALL, 0, false, err, sizeof(err)));
@@ -189,16 +209,17 @@ int main()
     // ---- ring wrap: the newest lines stay, the file starts at a whole line ----
     assert(rfTraceStart(60 * 60000UL, RF_TRACE_ALL, 0, false, err, sizeof(err)));
     int lines = 0;
-    for (int i = 0; i < 400; i++) {
+    const int N = 4000;   // ~100 bytes each: well over RF_TRACE_SIZE (256 KB)
+    for (int i = 0; i < N; i++) {
         RfTracePacket q = okPacket(0x30000000u + i, wh31, sizeof(wh31));
         rfTracePacket(q);
         lines++;
-        delay(1000);
+        delay(200);
     }
     st = rfTraceStatusNow();
-    assert(st.recorded == 400 && st.usedBytes == RF_TRACE_SIZE && st.overwrittenBytes > 0);
+    assert(st.recorded == (uint32_t)N && st.usedBytes == RF_TRACE_SIZE && st.overwrittenBytes > 0);
     f = file();
-    assert(f.find("ID 3000018F") != std::string::npos && f.find("ID 30000000 ") == std::string::npos);   // last kept, first gone
+    assert(f.find("ID 30000F9F") != std::string::npos && f.find("ID 30000000 ") == std::string::npos);   // last kept, first gone
     size_t body = f.find("# Lines:");
     body = f.find("#\n", body) + 2;
     // every line after the header is complete: "<uptime> FSK17 ..."
@@ -210,7 +231,7 @@ int main()
         whole++;
         pos = nl + 1;
     }
-    assert(whole > 100 && whole < 400);
+    assert(whole > 1000 && whole < (size_t)N);   // the ring holds a part of them, all whole lines
     // per-ID statistics are bounded
     assert(f.find("frames of further IDs not listed") != std::string::npos);
 
@@ -256,7 +277,7 @@ int main()
     gCfg.devEui = 0x70B3D57ED0012345ULL;
     gCfg.joinEui = 0x0011223344556677ULL;
     gCfg.rfEn = 1;
-    snprintf(gCfg.rfIds, sizeof(gCfg.rfIds), "300001C3, 9000342B");
+    hostSetMine("300001C3, 9000342B");
     RfSensorReading& r = gRfSensors[0];
     r.used = true; r.id = 0x300001C3; r.proto = RF_PROTO_FINEOFFSET; r.model = "WH31"; r.packets = 12; r.rssi = -70.0f;
     rfTracePacket(okPacket(0x300001C3, wh31, sizeof(wh31)));

@@ -1,64 +1,130 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/franzenhof/universal-weather-node/docs/api/schemas/history.schema.json",
-  "title": "Universal Weather Node — history (/api/history?range=24h|7d)",
-  "description": "In-RAM history as parallel arrays, oldest first: element i of every value array belongs to ageSec[i]. 24h: 5-min buckets (max 288 = 24 h); 7d: 1-h buckets (max 168 = 7 days) — fixed windows (wall clock once synced, else uptime), one point per window, a cycle counts in the window it ends in. The last element with ageSec 0 is the still-open bucket (a live preview). null = no data in that bucket (sensor off/absent, or no cycle in that window when cycles are longer than the bucket) — draw a gap, never a 0. All arrays and unit fields are always present. Cleared by a restart. Stability: within apiVersion 1 fields are only added.",
+  "title": "Universal Weather Node — history (/api/history?range=24h|7d|30d|1y)",
+  "description": "History as parallel arrays, oldest first: element i of every value array belongs to ageSec[i]. Three tiers on the node: 5-min buckets (288 = 24 h), 1-h buckets (840 = 35 days) and local calendar days (731 = 2 years). range picks the window length, end (unix seconds) moves its end into the past (compare periods), res forces a tier; by default the finest tier that reaches back to end − range serves it (/api/info history). Points are the buckets whose end lies in (end − range, end]; ranges with more than 400 buckets are downsampled on the node (30d: 2-h points; see bucketSec). Buckets are fixed windows (wall clock once synced, else uptime; days: local midnight to midnight, 23 or 25 h at the DST changes), one point per window, a cycle counts in the window it ends in. Only at end = now: the last element with ageSec 0 is the still-open bucket (a live preview). null = no data in that bucket (sensor off/absent, node off, or no cycle in that window when cycles are longer than the bucket) — draw a gap, never a 0. All arrays and unit fields are always present (empty arrays when the window holds no bucket). Kept across restarts (flash). Stability: within apiVersion 1 fields are only added.",
   "type": "object",
-  "required": ["apiVersion", "ageSec", "windSpeed", "windGust", "windDirDeg", "rainRate", "rainMm", "temp", "humidityPct", "pressureQnh", "batteryVolt", "uvSensorVolts", "uvIndex", "ds18b20_0", "ds18b20_1", "ds18b20_2", "windUnit", "rainRateUnit", "rainUnit", "tempUnit", "pressureUnit", "uvSensorVoltsUnit", "uvIndexUnit"],
+  "required": ["apiVersion", "range", "res", "bucketSec", "ageSec", "windSpeed", "windGust", "windDirDeg", "rainRate", "rainMm", "temp", "tempMin", "tempMax", "humidityPct", "humMin", "humMax", "pressureQnh", "pressMin", "pressMax", "batteryVolt", "uvSensorVolts", "uvIndex", "ds18b20_0", "ds18b20_1", "ds18b20_2", "windUnit", "rainRateUnit", "rainUnit", "tempUnit", "pressureUnit", "uvSensorVoltsUnit", "uvIndexUnit"],
   "additionalProperties": true,
   "properties": {
-    "apiVersion": { "type": "integer", "minimum": 1, "description": "API contract version (1).", "x-present": "always" },
-    "ageSec": {
-      "type": "array", "maxItems": 289,
-      "items": { "type": "integer", "minimum": 0, "description": "Seconds between the end of the bucket and this response." },
-      "description": "Age of every bucket's end, decreasing (oldest first) in steps of bucketSec (/api/info history.ranges). Timestamp of point i = time of your request − ageSec[i]; bucket i covers the bucketSec before that.",
-      "x-unit": "s", "x-present": "always"
-    },
-    "windSpeed": { "$ref": "#/$defs/series", "description": "Mean wind speed per bucket.", "x-unit-field": "windUnit" },
-    "windGust": { "$ref": "#/$defs/series", "description": "Highest gust per bucket (maximum, not mean).", "x-unit-field": "windUnit" },
-    "windDirDeg": { "$ref": "#/$defs/series", "description": "Last valid wind direction in the bucket (degrees from north; not averaged).", "x-unit": "deg" },
-    "rainRate": { "$ref": "#/$defs/series", "description": "Mean rain rate per bucket.", "x-unit-field": "rainRateUnit" },
-    "rainMm": { "$ref": "#/$defs/series", "description": "Rain amount per bucket (sum — add them up for totals). Despite the name in rainUnit (in when imperial).", "x-unit-field": "rainUnit" },
-    "temp": { "$ref": "#/$defs/series", "description": "Mean air temperature per bucket (selected source).", "x-unit-field": "tempUnit" },
-    "humidityPct": { "$ref": "#/$defs/series", "description": "Mean relative humidity per bucket.", "x-unit": "%" },
-    "pressureQnh": { "$ref": "#/$defs/series", "description": "Mean sea-level pressure per bucket (selected pressure source).", "x-unit-field": "pressureUnit" },
-    "batteryVolt": { "$ref": "#/$defs/series", "description": "Mean LiPo voltage per bucket.", "x-unit": "V" },
-    "uvSensorVolts": { "$ref": "#/$defs/series", "description": "Mean board UV sensor voltage per bucket (PCB v2.0).", "x-unit-field": "uvSensorVoltsUnit" },
-    "uvIndex": { "$ref": "#/$defs/series", "description": "Mean UV index per bucket (wireless or calibrated board input).", "x-unit-field": "uvIndexUnit" },
-    "ds18b20_0": { "$ref": "#/$defs/series", "description": "Mean temperature of DS18B20 probe slot 0 (= /api/data ds18b20[0]).", "x-unit-field": "tempUnit" },
-    "ds18b20_1": { "$ref": "#/$defs/series", "description": "Mean temperature of DS18B20 probe slot 1.", "x-unit-field": "tempUnit" },
-    "ds18b20_2": { "$ref": "#/$defs/series", "description": "Mean temperature of DS18B20 probe slot 2.", "x-unit-field": "tempUnit" },
-    "windUnit": { "type": "string", "enum": ["m/s", "km/h", "mph"], "description": "Unit of windSpeed/windGust.", "x-present": "always" },
-    "rainRateUnit": { "type": "string", "enum": ["mm/h", "in/h"], "description": "Unit of rainRate.", "x-present": "always" },
-    "rainUnit": { "type": "string", "enum": ["mm", "in"], "description": "Unit of rainMm.", "x-present": "always" },
-    "tempUnit": { "type": "string", "enum": ["C", "F"], "description": "Unit of temp and ds18b20_*.", "x-present": "always" },
-    "pressureUnit": { "type": "string", "enum": ["hPa", "inHg"], "description": "Unit of pressureQnh.", "x-present": "always" },
-    "uvSensorVoltsUnit": { "type": "string", "const": "V", "description": "Unit of uvSensorVolts.", "x-present": "always" },
-    "uvIndexUnit": { "type": "string", "const": "index", "description": "Unit of uvIndex.", "x-present": "always" },
+    "apiVersion": {"type": "integer", "minimum": 1, "description": "API contract version (1).", "x-present": "always"},
+    "range": {"type": "string", "enum": ["24h", "7d", "30d", "1y"], "description": "The range served (an unknown range parameter gives 24h).", "x-present": "always"},
+    "res": {"type": "string", "enum": ["5m", "1h", "1d"], "description": "Tier the points come from: 5-min, hourly or daily buckets.", "x-present": "always"},
+    "bucketSec": {"type": "integer", "minimum": 1, "description": "Nominal length of one point: the tier's bucket times the number of buckets merged per point (daily: 86400, real days 82800–90000 at the DST changes).", "x-unit": "s", "x-present": "always"},
+    "ageSec": {"type": "array", "maxItems": 402, "items": {"type": "integer", "minimum": 0, "description": "Seconds between the end of the bucket and this response."}, "description": "Age of every point's end, decreasing (oldest first) in steps of bucketSec (a day of 23/25 h at the DST changes; where points were merged, the end of the newest bucket in it). Timestamp of point i = time of your request − ageSec[i]; it covers the bucketSec before that.", "x-unit": "s", "x-present": "always"},
+    "windSpeed": {"$ref": "#/$defs/series", "description": "Mean wind speed per point.", "x-unit-field": "windUnit"},
+    "windGust": {"$ref": "#/$defs/series", "description": "Highest gust per point (maximum, not mean).", "x-unit-field": "windUnit"},
+    "windDirDeg": {"$ref": "#/$defs/series", "description": "Last valid wind direction in the point (degrees from north; not averaged).", "x-unit": "deg"},
+    "rainRate": {"$ref": "#/$defs/series", "description": "Mean rain rate per point.", "x-unit-field": "rainRateUnit"},
+    "rainMm": {"$ref": "#/$defs/series", "description": "Rain amount per point (sum — add them up for totals). Despite the name in rainUnit (in when imperial).", "x-unit-field": "rainUnit"},
+    "temp": {"$ref": "#/$defs/series", "description": "Mean air temperature per point (daily / merged: mean of the hourly or bucket means) (selected source).", "x-unit-field": "tempUnit"},
+    "tempMin": {"$ref": "#/$defs/series", "description": "Lowest air temperature per point (lowest cycle value; daily: the day's minimum).", "x-unit-field": "tempUnit"},
+    "tempMax": {"$ref": "#/$defs/series", "description": "Highest air temperature per point (highest cycle value; daily: the day's maximum).", "x-unit-field": "tempUnit"},
+    "humidityPct": {"$ref": "#/$defs/series", "description": "Mean relative humidity per point.", "x-unit": "%"},
+    "humMin": {"$ref": "#/$defs/series", "description": "Lowest relative humidity per point (lowest cycle value; daily: the day's minimum).", "x-unit": "%"},
+    "humMax": {"$ref": "#/$defs/series", "description": "Highest relative humidity per point (highest cycle value; daily: the day's maximum).", "x-unit": "%"},
+    "pressureQnh": {"$ref": "#/$defs/series", "description": "Mean sea-level pressure per point (selected pressure source).", "x-unit-field": "pressureUnit"},
+    "pressMin": {"$ref": "#/$defs/series", "description": "Lowest sea-level pressure (QNH) per point (lowest cycle value; daily: the day's minimum).", "x-unit-field": "pressureUnit"},
+    "pressMax": {"$ref": "#/$defs/series", "description": "Highest sea-level pressure (QNH) per point (highest cycle value; daily: the day's maximum).", "x-unit-field": "pressureUnit"},
+    "batteryVolt": {"$ref": "#/$defs/series", "description": "Mean LiPo voltage per point.", "x-unit": "V"},
+    "uvSensorVolts": {"$ref": "#/$defs/series", "description": "Mean board UV sensor voltage per point (V4 Full).", "x-unit-field": "uvSensorVoltsUnit"},
+    "uvIndex": {"$ref": "#/$defs/series", "description": "Mean UV index per point (wireless or calibrated board input).", "x-unit-field": "uvIndexUnit"},
+    "ds18b20_0": {"$ref": "#/$defs/series", "description": "Mean temperature of DS18B20 probe slot 0 (= /api/data ds18b20[0]).", "x-unit-field": "tempUnit"},
+    "ds18b20_1": {"$ref": "#/$defs/series", "description": "Mean temperature of DS18B20 probe slot 1.", "x-unit-field": "tempUnit"},
+    "ds18b20_2": {"$ref": "#/$defs/series", "description": "Mean temperature of DS18B20 probe slot 2.", "x-unit-field": "tempUnit"},
+    "windUnit": {"type": "string", "enum": ["m/s", "km/h", "mph"], "description": "Unit of windSpeed/windGust.", "x-present": "always"},
+    "rainRateUnit": {"type": "string", "enum": ["mm/h", "in/h"], "description": "Unit of rainRate.", "x-present": "always"},
+    "rainUnit": {"type": "string", "enum": ["mm", "in"], "description": "Unit of rainMm.", "x-present": "always"},
+    "tempUnit": {"type": "string", "enum": ["C", "F"], "description": "Unit of temp, tempMin, tempMax and ds18b20_*.", "x-present": "always"},
+    "pressureUnit": {"type": "string", "enum": ["hPa", "inHg"], "description": "Unit of pressureQnh, pressMin and pressMax.", "x-present": "always"},
+    "uvSensorVoltsUnit": {"type": "string", "const": "V", "description": "Unit of uvSensorVolts.", "x-present": "always"},
+    "uvIndexUnit": {"type": "string", "const": "index", "description": "Unit of uvIndex.", "x-present": "always"},
     "series": {
-      "type": "array", "maxItems": 8,
+      "type": "array",
+      "maxItems": 32,
       "description": "Custom series (Settings -> Sensors -> Custom series), one object per defined series; values aligned with ageSec. Temperatures in tempUnit.",
       "x-present": "only with at least one custom series",
       "items": {
         "type": "object",
-        "required": ["slot", "name", "value", "decimals", "values"],
+        "required": [
+          "slot",
+          "name",
+          "field",
+          "agg",
+          "decimals",
+          "values"
+        ],
         "properties": {
-          "slot": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Slot number on the settings page." },
-          "name": { "type": "string", "description": "Free-text name (chart title)." },
-          "value": { "type": "string", "enum": ["temp", "hum", "moist", "leaf", "strikes", "dist", "pm25", "pm10", "co2", "ec", "press", "lux", "uv", "batt", "supercap", "ds1", "ds2", "ds3"], "description": "Which value of the source." },
-          "unit": { "type": "string", "description": "Unit of the values; absent if none (e.g. lightning strikes, UV index)." },
-          "decimals": { "type": "integer", "description": "Decimals to show." },
-          "perBucket": { "type": "boolean", "description": "true = a count per bucket (lightning strikes), not a level; the range total is their sum." },
-          "values": { "$ref": "#/$defs/series", "description": "One value per bucket, aligned with ageSec; null = no value." }
+          "slot": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32,
+            "description": "Slot number on the settings page (also in {series_<slot>}, /api/data and Home Assistant)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Free-text name (chart title)."
+          },
+          "field": {
+            "type": "string",
+            "enum": [
+              "temp",
+              "hum",
+              "moist",
+              "leaf",
+              "strikes",
+              "dist",
+              "pm25",
+              "pm10",
+              "co2",
+              "ec",
+              "press",
+              "lux",
+              "uv",
+              "batt",
+              "supercap",
+              "ds1",
+              "ds2",
+              "ds3",
+              "distance"
+            ],
+            "description": "Which value of the source."
+          },
+          "agg": {
+            "type": "string",
+            "enum": [
+              "mean",
+              "sum",
+              "min",
+              "max"
+            ],
+            "description": "How cycles are combined into a bucket, hours into a day and buckets into a downsampled point: the value's default (lightning strikes sum, storm distance min, else mean) unless set for the series."
+          },
+          "unit": {
+            "type": "string",
+            "description": "Unit of the values; absent if none (e.g. lightning strikes, UV index)."
+          },
+          "decimals": {
+            "type": "integer",
+            "description": "Decimals to show."
+          },
+          "sensor": {
+            "type": "string",
+            "description": "Internal ID of the logical (★) wireless sensor the series follows; absent for a board probe."
+          },
+          "perBucket": {
+            "type": "boolean",
+            "description": "true = a sum per point (agg sum, e.g. lightning strikes), not a level; the range total is their sum."
+          },
+          "values": {
+            "$ref": "#/$defs/series",
+            "description": "One value per bucket, aligned with ageSec; null = no value."
+          }
         }
       }
     }
   },
   "$defs": {
-    "series": {
-      "type": "array", "maxItems": 289,
-      "items": { "type": ["number", "null"], "description": "Bucket value; null = no data." },
-      "x-present": "always (same length as ageSec)"
-    }
+    "series": {"type": "array", "maxItems": 402, "items": {"type": ["number", "null"], "description": "Bucket value; null = no data."}, "x-present": "always (same length as ageSec)"}
   }
 }

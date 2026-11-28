@@ -102,6 +102,7 @@ def put(txt, sz, cx, cy):
     t.SetPosition(pcbnew.VECTOR2I(mm(OX + cx), mm(OY + cy))); b.Add(t)
 existing = {d.GetText() for d in b.GetDrawings() if d.GetLayer() == pcbnew.F_SilkS and hasattr(d, "GetText")}
 done = all(t in existing and t != "franzenhof.com" for t, _ in L.BRAND[:1]) and sum(1 for d in b.GetDrawings() if hasattr(d, "GetText") and d.GetText() == "franzenhof.com" and d.GetLayer() == pcbnew.F_SilkS) >= 2
+if not getattr(L, "BRAND_BLOCK", True): done = True      # the layout places the brand texts itself
 if done: print("brand block already present")
 for sz in ((1.6, 1.4, 1.2) if not done else ()):
     lines = [(t, sz) for t, _ in L.BRAND]

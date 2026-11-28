@@ -1,9 +1,11 @@
+#include "heltec_board.h"
 #include "board_io.h"
 #include "sensors.h"
 #include "globals.h"
 #include "params.h"
 #include "LoRaWAN_ESP32.h"
-#include "driver/pcnt.h"
+#include "pulse_counter.h"
+extern uint32_t hostCounts[PULSE_COUNTER_COUNT];
 #include <esp_timer.h>
 #include <cassert>
 #include <cmath>
@@ -11,8 +13,8 @@
 extern Config hostSavedConfig;
 int main()
 {
-    gCfg.pcbVersion=20;
-    sensorsInit(getPins(20));
+    gCfg.pcbVersion=20; gBoard.pcb=true;   // PCB v2.0
+    sensorsInit(getPins());
     ioInit();
     pulseSettleStart(); hostNow+=PULSE_SETTLE_MS;   // past the settling time after the start
     gCfg.wind2Mode=1;
@@ -33,7 +35,15 @@ int main()
         hostNow+=1000;hostCounts[2]+=10;ioPoll();ioSample();
         hostNow+=3000;ioPoll();ioSample();
         ioFinishCycle(4000);
-        assert(std::fabs(gIo.wind2SpeedMs-2.5f)<0.01f);
+        assert(std::fabs(gIo.wind2SpeedMs-2.5f)<0.01f && gIo.wind2Valid);
+        // a cycle without an accepted sample (all far above the plausibility
+        // limit: EMI, broken line) has no current value - not the previous one
+        for (int k=0;k<3;k++) { hostNow+=1000;hostCounts[2]+=500;ioPoll();ioSample(); }
+        ioFinishCycle(3000);
+        assert(!gIo.wind2Valid);
+        for (int k=0;k<3;k++) { hostNow+=1000;hostCounts[2]+=4;ioPoll();ioSample(); }
+        ioFinishCycle(3000);
+        assert(gIo.wind2Valid && std::fabs(gIo.wind2SpeedMs-4.0f)<0.01f);
         gCfg.windMsPerPps=1.00584f;
     }
     gCfg.wind2Mode=0;
@@ -136,6 +146,17 @@ int main()
     block("12700","5");
     assert(!gIo.fanOn);
     block("12700","20");
+    assert(gIo.fanOn);
+    // PV power hovering around the limit does not switch the fan with every
+    // block: on from the limit, off only below limit - max(1 W, 10 %)
+    int toggles=0;
+    for (int k=0;k<20;k++) { bool was=gIo.fanOn; block("12700",k%2?"9":"11"); toggles+=gIo.fanOn!=was; }
+    assert(toggles==0 && gIo.fanOn);
+    block("12700","8");
+    assert(!gIo.fanOn);
+    block("12700","9");
+    assert(!gIo.fanOn);
+    block("12700","10");
     assert(gIo.fanOn);
     gIo.ve.pvW=NAN;ioPoll();
     assert(!gIo.fanOn);

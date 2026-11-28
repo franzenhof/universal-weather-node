@@ -19,7 +19,7 @@ enum ParamId : uint8_t {
     PARAM_RAIN_MM_PER_TIP_X1000 = 12,
     PARAM_WIND_MS_PER_PPS_X1000 = 13,
     PARAM_WIND_DIR_SENSOR_TYPE  = 14,
-    // PCB v2.0 I/O block (rejected with "invalid" on Rev 1.2/1.3 boards,
+    // V4 Full I/O block (rejected with "invalid" on Rev 1.2/1.3 boards,
     // except switching a function off)
     PARAM_AUX_AIN_EN            = 15,
     PARAM_AUX_AIN_SCALE_X1000   = 16,
@@ -39,9 +39,9 @@ enum ParamId : uint8_t {
     PARAM_HEATER_FULL_BELOW_DC  = 30,
     PARAM_LOW_POWER_EN          = 31,
     PARAM_VANE_POWER_SAVE       = 32,
-    PARAM_WIND2_MODE            = 33,   // PCB v2.0: 2nd anemometer on AUX
+    PARAM_WIND2_MODE            = 33,   // V4 Full: 2nd anemometer on AUX
     PARAM_WIND2_DIR_OFFSET_DEG  = 34,
-    PARAM_UV_EN                 = 35,   // PCB v2.0: raw UV sensor voltage, GPIO3
+    PARAM_UV_EN                 = 35,   // V4 Full: raw UV sensor voltage, GPIO3
     PARAM_UV_AIN_SCALE_X1000    = 36,   // terminal V per ADC V, x1000
     PARAM_UV_INDEX_EN           = 37,   // calculated UV index publication
     PARAM_UV_CALIBRATED         = 38,   // explicit calibration-valid flag
@@ -63,7 +63,7 @@ enum ParamId : uint8_t {
     PARAM_LOX_EN                = 52,   // 1 = Loxone UDP output on (host/port/prefix: web settings / portal)
     PARAM_LOX_INTERVAL_SEC      = 53,   // Loxone interval: 0 = every base cycle, else 2..3600 s
     PARAM_SRC_PRESSURE          = 54,   // value source of the pressure (like 45-49; Auto = BME280 first)
-    PARAM_RF_ONLY_MINE          = 55,   // 1 = accept only the "Mine" IDs (rfIds; no effect while the list is empty), 0 = all except hidden
+    PARAM_RF_ONLY_MINE          = 55,   // 1 = accept only the ★ sensors (logical sensor table; no effect while it is empty), 0 = all except hidden
     PARAM_RF_HIDDEN_CLEAR       = 56,   // value 0: empty the hidden-sensor list (the IDs themselves: web settings / portal)
     PARAM_UI_LANG               = 57,   // web interface / portal language: 0 Auto (browser), 1 en, 2 de, 3 fr, 4 es, 5 pt
     PARAM_SETUP_DONE            = 58,   // 1 = setup wizard done, 0 = offer it again on the next dashboard visit

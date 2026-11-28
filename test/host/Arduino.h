@@ -29,13 +29,11 @@ inline void digitalWrite(int p, int v) { hostPins[p]=v; }
 inline int digitalRead(int p) { return hostPins[p]; }
 inline int analogRead(int p) { return hostAdc[p]; }
 inline uint32_t analogReadMilliVolts(int p) { return hostAdc[p]; }
-inline void adcAttachPin(int) {}
 inline void analogReadResolution(int) {}
 inline int* hostPwmFrequencies() { static int frequencies[8]={}; return frequencies; }
-inline void ledcSetup(int ch, int frequency, int) { hostPwmFrequencies()[ch]=frequency; }
-inline void ledcAttachPin(int p, int ch) { hostAttached[p]=ch+1; }
-inline void ledcDetachPin(int p) { hostAttached[p]=0; }
-inline void ledcWrite(int ch, uint32_t v) { hostPwm[ch]=v; }
+inline bool ledcAttachChannel(int p, int frequency, int, int ch) { hostPwmFrequencies()[ch]=frequency; hostAttached[p]=ch+1; return true; }
+inline bool ledcDetach(int p) { hostAttached[p]=0; return true; }
+inline bool ledcWrite(int p, uint32_t v) { if (hostAttached[p]) hostPwm[hostAttached[p]-1]=v; return true; }
 inline long map(long v,long a,long b,long c,long d) { return (v-a)*(d-c)/(b-a)+c; }
 inline void setCpuFrequencyMhz(int) {}
 struct HostESP {

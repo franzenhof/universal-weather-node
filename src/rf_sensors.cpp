@@ -1,4 +1,5 @@
 #include "rf_sensors.h"
+#include "lsensors.h"
 #include "rf_autosearch.h"
 #include "rf_schedule.h"
 #include "calibration.h"
@@ -9,7 +10,9 @@
 #include "sources.h"
 #include "rf_fsk17.h"
 #include "davis_rx.h"
+#include "rf_minrssi.h"
 #include "rf_trace.h"
+#include "status_led.h"
 #include <TfaWeatherSensor.h>
 #include <FineOffsetSensor.h>
 
@@ -30,10 +33,14 @@ bool          receiving   = false;   // FSK reception running (cleared by LoRaWA
 int16_t       lastError   = 0;
 unsigned long lastStartMs = 0;
 uint32_t      packetsTotal = 0;
+// receive watchdog (rf_schedule.h): the last frame of any kind or successful
+// (re)start, and how often the watchdog restarted the receiver
+unsigned long lastLifeSignMs = 0;
+uint32_t      watchdogRestarts = 0;
 // Sensor states (rf_sensors.h): the lists as applied (checked every loop,
-// parsed once per change) - "Mine" (gCfg.rfIds), hidden (gCfg.rfIgnore) and
-// "Only my sensors".
-char          appliedIds[sizeof(gCfg.rfIds)] = "";
+// parsed once per change) - "Mine" (the logical sensor table gLogicalSensors), hidden
+// (gCfg.rfIgnore) and "Only my sensors".
+bool          appliedForce = true;
 char          appliedIgnore[sizeof(gCfg.rfIgnore)] = "";
 int           appliedOnly = -1;
 std::vector<uint32_t> mineIds, hiddenIds;
@@ -67,6 +74,10 @@ FineOffsetSensor fo;
 
 void onLoraRadioTaken() { receiving = false; }
 
+// Fine Offset phase: fixed read length - longer while a capture runs (rf_trace.h)
+uint8_t foFrameLen = FO_MAX_FRAME_LEN;
+uint8_t wantedFoFrameLen() { return rfTraceRunning() ? RF_TRACE_FRAME_LEN : FO_MAX_FRAME_LEN; }
+
 bool fineOffsetPhase() { return phase == RF_PROTO_ITPLUS17 && (protoSet & RF_PROTO_FINEOFFSET); }
 
 // Auto search (rf_autosearch.h): valid packets (CRC-checked by the decoders,
@@ -95,7 +106,7 @@ void autoLock(int receivedProto, uint32_t id, float rssi)
 {
     if (!rfAutoShouldLock(gCfg.rfProto, true) || !rfAutoDetectedProto(receivedProto)) return;
     const AutoCand* c = nullptr;
-    const AutoResult res = autoSearchPacket(autoSearch, id, (uint8_t)receivedProto, rssi, boardIsV4(), millis(), &c);
+    const AutoResult res = autoSearchPacket(autoSearch, id, (uint8_t)receivedProto, rssi, true, millis(), &c);   // V4: RSSI threshold for its LNA
     if (res != AUTO_NONE && c) lockType(*c, res == AUTO_LOCK_WEAK);
 }
 
@@ -103,7 +114,8 @@ int16_t startPhase()
 {
     if (phase == RF_PROTO_BRESSER) return ws.startReceive();   // re-registers the library's IRQ handler
     if (fineOffsetPhase()) {
-        FineOffsetSensor::RxConfig c;            // fixed length FO_MAX_FRAME_LEN: also holds an IT+ frame
+        FineOffsetSensor::RxConfig c;            // fixed length (32 bytes, 64 during a capture): also holds an IT+ frame
+        c.frameLen = foFrameLen = wantedFoFrameLen();
         if (protoSet & RF_PROTO_ITPLUS17) { c.frequencyMhz = SHARED_FREQ_MHZ; c.bandwidthKhz = SHARED_BW_KHZ; }
         return fo.startReceive(c);
     }
@@ -114,9 +126,14 @@ bool isHidden(uint32_t id) { return std::find(hiddenIds.begin(), hiddenIds.end()
 
 // May enter the table: not hidden, and "Mine" while only those are accepted.
 // A hidden ID is noted for "hidden sensors in range".
+bool lastBelowMin = false;   // the last refusal was "below the minimum signal" (radio trace text)
 bool idAccepted(uint32_t id, const char* model, float rssi)
 {
+    lastBelowMin = false;
+    if (netSlotOfId(id) >= 0) return false;   // the network sensors' IDs (net_sensor.h): never a radio frame
     if (isHidden(id)) { rfNoteHidden(id, model, rssi, millis()); return false; }
+    const int minDbm = rfMinRssiOf(id);   // expert setting: a weaker packet is not this sensor's (a neighbour's twin)
+    if (minDbm && rssi < (float)minDbm) { lastBelowMin = true; return false; }
     return !onlyMine || std::find(mineIds.begin(), mineIds.end(), id) != mineIds.end();
 }
 bool isMine(uint32_t id) { return std::find(mineIds.begin(), mineIds.end(), id) != mineIds.end(); }
@@ -130,7 +147,7 @@ int scheduledPhase(int set, unsigned long now)
     RfSchedEntry e[RF_MAX_SENSORS];
     int n = 0;
     for (const RfSensorReading& r : gRfSensors) {
-        if (!r.used || !r.periodMs || r.proto == RF_PROTO_DAVIS) continue;
+        if (!r.used || !r.periodMs || r.proto == RF_PROTO_DAVIS || rfIsNetProto(r.proto)) continue;
         const int ph = rfPhaseSet(r.proto);
         if (!(set & ph) || (!mineIds.empty() && !isMine(r.id))) continue;
         e[n++] = { (uint8_t)ph, (uint32_t)r.schedMs, r.periodMs };
@@ -142,7 +159,7 @@ int scheduledPhase(int set, unsigned long now)
 // Returns how the frame was taken (radio trace): OK, or IGNORED (ID list, table full).
 RfTraceResult storeItPlus(const ItPlusFrame& f, float rssi)
 {
-    uint32_t id = (phase == RF_PROTO_ITPLUS17 ? RF_ID_ITPLUS17 : RF_ID_ITPLUS9) | f.sensorId;
+    uint32_t id = rfItPlusId(phase == RF_PROTO_ITPLUS17, f.sensorId, f.hasHumidity);
     if (!idAccepted(id, nullptr, rssi)) {
         if (f.newBattery)
             dbgSerial.printf("RF sensor 0x%08lX (IT+, new battery) not in the sensor ID list - ignored.\n", (unsigned long)id);
@@ -166,6 +183,7 @@ RfTraceResult storeItPlus(const ItPlusFrame& f, float rssi)
     r.batteryOk = !f.weakBattery;
     r.packets++;
     packetsTotal++;
+    statusLedPacket(isMine(id));
     RfValues v;
     v.ok = RF_VAL_TEMP | (f.hasHumidity ? RF_VAL_HUM : 0);
     v.tempC = f.tempC;  v.humidity = f.humidity;
@@ -197,6 +215,19 @@ uint8_t fineOffsetType(uint8_t family)
     }
 }
 
+// the ★ radio IDs (gLogicalSensors) differ from the applied ones (no allocation: runs every loop)
+static bool mineChanged()
+{
+    LsGuard g;   // a compare, no allocation: microseconds
+    size_t k = 0;
+    for (int i = 0; i < LS_MAX && gLogicalSensors.s[i].internalId[0]; i++) {
+        if (!gLogicalSensors.s[i].radioId) continue;
+        if (k >= mineIds.size() || mineIds[k] != gLogicalSensors.s[i].radioId) return true;
+        k++;
+    }
+    return k != mineIds.size();
+}
+
 // the last radio-clock time (rfRadioClock())
 static RfRadioClock lastClock;
 static bool haveClock = false;
@@ -204,11 +235,9 @@ static bool haveClock = false;
 RfTraceResult storeFineOffset(const FoFrame& f, float rssi)
 {
     uint32_t id = rfFineOffsetId(f);
-    if (rfNormalizeShortId(id)) {   // "181A2" in the Mine / Hidden list: now the full ID
-        mineIds   = rfParseIds(gCfg.rfIds);
+    if (rfNormalizeShortId(id)) {   // "181A2" in the Hidden list: now the full ID
         hiddenIds = rfParseIds(gCfg.rfIgnore);
-        onlyMine  = gCfg.rfOnlyMine && !mineIds.empty();
-        dbgSerial.printf("RF sensors: short ID of 0x%08lX replaced by the full ID in the sensor lists\n", (unsigned long)id);
+        dbgSerial.printf("RF sensors: short ID of 0x%08lX replaced by the full ID in the hidden list\n", (unsigned long)id);
     }
     if (!idAccepted(id, f.model, rssi)) return RF_TR_IGNORED;
     // The ID changes with a battery change (WH65, WH31, ...): the new one
@@ -244,6 +273,7 @@ RfTraceResult storeFineOffset(const FoFrame& f, float rssi)
     rfFineOffsetExtras(r, f);
     r.packets++;
     packetsTotal++;
+    statusLedPacket(isMine(id));
     RfValues v = rfFineOffsetValues(f);
     unsigned long rainGapMs;
     float rainDelta = rfStoreValues(r, v, now, rainGapMs);
@@ -261,7 +291,11 @@ uint8_t tracePhase()
     return phase == RF_PROTO_ITPLUS9 ? RF_TP_ITPLUS9 : RF_TP_ITPLUS17;
 }
 
-const char* ignoredText(RfTraceResult r) { return r == RF_TR_IGNORED ? "hidden, not Mine (only my sensors) or table full" : "ok"; }
+const char* ignoredText(RfTraceResult r)
+{
+    if (r != RF_TR_IGNORED) return "ok";
+    return lastBelowMin ? "below the minimum signal of this ID" : "hidden, not Mine (only my sensors) or table full";
+}
 
 // The 17.241 / 9.579 kbit/s phases. Every frame goes to the radio trace
 // (while one runs) - also those no decoder accepts.
@@ -274,13 +308,14 @@ void readFsk()
     if (!fineOffsetPhase()) {
         uint8_t b[ITPLUS_FRAME_LEN];
         if (!tfa.getRaw(b, rssi)) return;
+        lastLifeSignMs = millis();
         ItPlusFrame f;
         tp.rssi = rssi; tp.raw = b; tp.rawLen = sizeof(b);
         if (itPlusDecode(b, f)) {
             tp.result = storeItPlus(f, rssi);
             if (!rfTraceRunning()) return;
             tp.protocol = "IT+"; tp.check = tp.result == RF_TR_OK ? "CRC ok" : ignoredText(tp.result);
-            tp.hasId = true; tp.id = (phase == RF_PROTO_ITPLUS17 ? RF_ID_ITPLUS17 : RF_ID_ITPLUS9) | f.sensorId;
+            tp.hasId = true; tp.id = rfItPlusId(phase == RF_PROTO_ITPLUS17, f.sensorId, f.hasHumidity);
             rfTraceItPlusValues(f, vals, sizeof(vals)); tp.values = vals;
         } else {
             if (!rfTraceRunning()) return;
@@ -289,9 +324,10 @@ void readFsk()
         rfTracePacket(tp);
         return;
     }
-    uint8_t b[FO_MAX_FRAME_LEN];
+    uint8_t b[RF_TRACE_FRAME_LEN];
     size_t len;
     if (!fo.getRaw(b, sizeof(b), len, rssi)) return;
+    lastLifeSignMs = millis();
     tp.hasReadDelay = true; tp.readDelayMs = FineOffsetSensor::lastReadDelayMs();
     FoFrame f;
     ItPlusFrame it;
@@ -330,7 +366,7 @@ void readFsk()
             if (!rfTraceRunning()) return;
             tp.rawLen = ITPLUS_FRAME_LEN;
             tp.protocol = "IT+"; tp.check = tp.result == RF_TR_OK ? "CRC ok" : ignoredText(tp.result);
-            tp.hasId = true; tp.id = RF_ID_ITPLUS17 | it.sensorId;
+            tp.hasId = true; tp.id = rfItPlusId(true, it.sensorId, it.hasHumidity);
             rfTraceItPlusValues(it, vals, sizeof(vals)); tp.values = vals;
             break;
         default:
@@ -384,6 +420,7 @@ bool copySlot(int slot)
     r.staleMask &= (uint8_t)~RF_VAL_ANY;
     r.packets++;
     packetsTotal++;
+    statusLedPacket(isMine(s.sensor_id));
 
     // Any decoded Bresser packet (digest-checked; the library applies the ID
     // list) ends an auto search - also non-weather types (lightning, ...).
@@ -427,6 +464,7 @@ bool         bHave = false;
 
 void bresserRaw(const uint8_t* data, size_t len, float rssi, DecodeStatus res)
 {
+    lastLifeSignMs = millis();   // any frame read (receive watchdog)
     if (!rfTraceRunning()) return;
     size_t n = len < sizeof(bRaw) ? len : sizeof(bRaw);
     memcpy(bRaw, data, n);
@@ -528,7 +566,7 @@ void rfSensorsLoop()
         lastStartMs = 0;
         lastError = 0;
         protoSet = 0;
-        appliedIds[0] = '\x01';
+        appliedForce = true;
     }
     if (mode == RF_RADIO_OFF) return;
     if (!initialized) {
@@ -537,16 +575,17 @@ void rfSensorsLoop()
         lastError = ws.begin(RF_MAX_SENSORS, false);   // slots + first start; filters below
         receiving = lastError == RADIOLIB_ERR_NONE;
         lastStartMs = millis() | 1;
+        lastLifeSignMs = millis();
         initialized = true;
-        appliedIds[0] = '\x01';           // force the filter update below
+        appliedForce = true;              // force the filter update below
     }
     // Sensor states from the settings (live; compared every loop, cheap)
-    if (strncmp(appliedIds, gCfg.rfIds, sizeof(appliedIds)) != 0 ||
+    if (appliedForce || mineChanged() ||
         strncmp(appliedIgnore, gCfg.rfIgnore, sizeof(appliedIgnore)) != 0 || appliedOnly != gCfg.rfOnlyMine) {
-        strlcpy(appliedIds, gCfg.rfIds, sizeof(appliedIds));
+        appliedForce = false;
         strlcpy(appliedIgnore, gCfg.rfIgnore, sizeof(appliedIgnore));
         appliedOnly = gCfg.rfOnlyMine;
-        mineIds   = rfParseIds(appliedIds);
+        mineIds   = lsMineIds();
         hiddenIds = rfParseIds(appliedIgnore);
         onlyMine  = appliedOnly && !mineIds.empty();
         // Bresser: the library filters "Only my sensors"; hidden IDs are
@@ -556,8 +595,8 @@ void rfSensorsLoop()
         // Only entries no longer accepted are dropped; the others keep their
         // values (a change of the "Mine" order just renumbers them).
         rfRemoveRejected();
-        dbgSerial.printf("RF sensors: accepting %s%s%s\n", onlyMine ? "only " : "any sensor ID",
-                         onlyMine ? appliedIds : "", hiddenIds.empty() ? "" : " (some hidden)");
+        dbgSerial.printf("RF sensors: accepting %s%s\n", onlyMine ? "only the star sensors" : "any sensor ID",
+                         hiddenIds.empty() ? "" : " (some hidden)");
     }
     // Protocol set changed (settings, auto search locked) or time to switch
     // to the next phase. Auto (search) = all families in rotation.
@@ -571,9 +610,10 @@ void rfSensorsLoop()
         dbgSerial.println("RF sensors: auto search - Bresser, IT+ 17.241 kbit/s + Fine Offset and IT+ 9.579 kbit/s in turn");
     }
     appliedCfg = cfg;
-    if (cfg == RF_PROTO_AUTO) {   // only weak sensors so far: after 30 min the best of them (rf_autosearch.h)
+    if (cfg == RF_PROTO_AUTO) {   // the falling threshold may reach a candidate without a new packet; after 30 min the best weak one (rf_autosearch.h)
         const AutoCand* c = nullptr;
-        if (autoSearchTick(autoSearch, millis(), &c) == AUTO_LOCK_WEAK && c) lockType(*c, true);
+        const AutoResult res = autoSearchTick(autoSearch, millis(), &c, true);   // V4 base threshold
+        if (res != AUTO_NONE && c) lockType(*c, res == AUTO_LOCK_WEAK);
     }
     if (protos != protoSet) {
         protoSet = protos;
@@ -589,12 +629,22 @@ void rfSensorsLoop()
             receiving = false;
         }
     }
+    // A capture started / ended: the Fine Offset phase reads a different frame length.
+    if (receiving && fineOffsetPhase() && foFrameLen != wantedFoFrameLen()) receiving = false;
+    // Receive watchdog (rf_schedule.h): no frame and no restart for 10 min.
+    if (receiving && rfReceiverSilentTooLong((uint32_t)millis(), (uint32_t)lastLifeSignMs)) {
+        receiving = false;
+        watchdogRestarts++;
+        dbgSerial.printf("RF sensors: nothing received for %lu min - restarting the receiver (restart %lu since start).\n",
+                         (unsigned long)(RF_RECEIVE_WATCHDOG_MS / 60000), (unsigned long)watchdogRestarts);
+    }
     // (Re)start after LoRaWAN used the transceiver, or retry after a failure.
     if (!receiving && (lastStartMs == 0 || lastError == 0 || millis() - lastStartMs >= RESTART_RETRY_MS)) {
         lastStartMs = millis();
         if (!lastStartMs) lastStartMs = 1;
         lastError = startPhase();
         receiving = lastError == RADIOLIB_ERR_NONE;
+        if (receiving) lastLifeSignMs = millis();
         if (!receiving)
             dbgSerial.printf("RF sensors: FSK receive start failed (%d), retry in %lu s.\n",
                              lastError, RESTART_RETRY_MS / 1000);
@@ -627,5 +677,18 @@ bool     rfSensorsReceiving()   { return gCfg.rfEn && gCfg.rfEn == activeMode &&
 int16_t  rfSensorsLastError()   { return lastError; }
 int      rfSensorsScheduled()   { return (rfPhaseSet(protoSet) & (rfPhaseSet(protoSet) - 1)) ? schedTracked : 0; }
 uint32_t rfSensorsPacketsTotal() { return packetsTotal; }
+uint32_t rfSensorsWatchdogRestarts() { return watchdogRestarts; }
+
+bool rfSensorsPacketDue()
+{
+    if (!gCfg.rfEn || !initialized || rfDavisMode(gCfg.rfEn, gCfg.rfProto)) return false;
+    RfSchedEntry e[RF_MAX_SENSORS];
+    int n = 0;
+    for (const RfSensorReading& r : gRfSensors) {   // every phase: the TX interrupts whichever is listening
+        if (!r.used || !r.periodMs || r.proto == RF_PROTO_DAVIS || rfIsNetProto(r.proto) || (!mineIds.empty() && !isMine(r.id))) continue;
+        e[n++] = { 1, (uint32_t)r.schedMs, r.periodMs };
+    }
+    return rfSchedDuePhase(e, n, (uint32_t)millis()) != 0;
+}
 
 bool rfRadioClock(RfRadioClock& out) { if (haveClock) out = lastClock; return haveClock; }

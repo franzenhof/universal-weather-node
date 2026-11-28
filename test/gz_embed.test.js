@@ -43,7 +43,7 @@ test('help Markdown: gzip bytes decompress to the combined documentation', () =>
   assert.ok(header.includes(`README_MD_LEN = ${md.length};`));
 });
 
-test('handlers send the gzip assets with Content-Encoding, Vary and the collected Accept-Encoding', () => {
+test('handlers send the gzip assets with Content-Encoding, Vary and the Accept-Encoding header readable', () => {
   const send = fs.readFileSync(path.join(root, 'src/gz_send.cpp'), 'utf8');
   assert.match(send, /sendHeader\("Content-Encoding", "gzip"\)/);
   assert.match(send, /sendHeader\("Vary", "Accept-Encoding"\)/);
@@ -53,7 +53,7 @@ test('handlers send the gzip assets with Content-Encoding, Vary and the collecte
   const web = fs.readFileSync(path.join(root, 'src/web_api.cpp'), 'utf8');
   assert.match(web, /sendGzipAsset\(server, CHART_PAGE_GZ, CHART_PAGE_GZ_LEN, CHART_PAGE_LEN, "text\/html; charset=utf-8", "no-store"\)/);
   assert.match(web, /sendGzipAsset\(server, README_MD_GZ, README_MD_GZ_LEN, README_MD_LEN, "text\/plain; charset=utf-8"\)/);
-  assert.match(web, /"Accept-Encoding" };\s*server\.collectHeaders\(headerKeys, 5\)/);
+  assert.match(web, /^HttpServer server\(80\);/m);                              // esp_http_server: every header readable
   assert.ok(!/#include "chart_page\.h"/.test(web), 'the uncompressed page must not be linked');
   const portal = fs.readFileSync(path.join(root, 'src/portal.cpp'), 'utf8');
   assert.match(portal, /sendGzipAsset\(\*wm\.server, README_MD_GZ/);

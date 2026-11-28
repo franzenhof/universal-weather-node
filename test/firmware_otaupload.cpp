@@ -25,7 +25,7 @@ static std::vector<uint8_t> load(const char* path)
 
 // fake device
 static std::vector<uint8_t> written, devicePt;
-static bool   beginOk, writeOk, endOk, ptOk, begun, aborted;
+static bool   beginOk, writeOk, endOk, ptOk, begun, aborted, ended;
 static size_t largest;
 static uint32_t clockMs;
 static const char* fakeError;
@@ -34,7 +34,7 @@ static void resetFake()
 {
     written.clear();
     beginOk = writeOk = endOk = ptOk = true;
-    begun = aborted = false;
+    begun = aborted = ended = false;
     largest = 100 * 1024;
     fakeError = "No Error";
 }
@@ -47,7 +47,7 @@ static const OtaUpdateOps FAKE = {
         written.insert(written.end(), d, d + n);
         return true;
     },
-    []() { if (!endOk) fakeError = "MD5 Check Failed"; return endOk; },
+    []() { assert(begun && !aborted); ended = true; if (!endOk) fakeError = "MD5 Check Failed"; return endOk; },
     []() { aborted = true; written.clear(); },
     []() { return fakeError; },
     [](uint8_t* b, size_t n) {
@@ -61,7 +61,7 @@ static const OtaUpdateOps FAKE = {
     [](const char*, const char*) {},
 };
 
-// one request: start, the file in chunks, end
+// one request: start, the file in chunks, end, the handler commits
 static OtaOutcome upload(const std::vector<uint8_t>& file, size_t chunk, bool authorized = true)
 {
     otaUploadReset();
@@ -71,7 +71,8 @@ static OtaOutcome upload(const std::vector<uint8_t>& file, size_t chunk, bool au
         clockMs += 10;
     }
     otaUploadFinish();
-    assert(!otaUploadActive());
+    assert(!otaUploadActive() && !ended);   // nothing switched before the request is complete
+    otaUploadCommit();
     return otaUploadOutcome();
 }
 
@@ -96,6 +97,33 @@ int main()
     }
     otaUploadReset();
     assert(otaUploadOutcome() == OTA_OUT_NONE);
+
+    // the request fails after the file part (connection lost, malformed rest,
+    // too many fields): the server aborts the upload - the checked image is
+    // never made the boot one
+    resetFake();
+    otaUploadStart(FAKE, true, "test");
+    otaUploadChunk(app.data(), app.size());
+    otaUploadFinish();
+    assert(otaUploadOutcome() == OTA_OUT_NONE && !ended && !aborted);
+    otaUploadAbort();
+    assert(aborted && !ended && otaUploadOutcome() == OTA_OUT_FAILED);
+    otaUploadCommit();   // the handler does not run then; if it did: still nothing
+    assert(!ended && otaUploadOutcome() == OTA_OUT_FAILED);
+    // a second file part in the same request starts over: only the last one counts
+    resetFake();
+    otaUploadReset();
+    otaUploadStart(FAKE, true, "test");
+    otaUploadChunk(app.data(), app.size());
+    otaUploadFinish();
+    std::vector<uint8_t> junk(4096, 0x41);
+    otaUploadStart(FAKE, true, "test");
+    assert(written.empty());   // the first, checked image was aborted (the fake's abort drops its bytes)
+    otaUploadChunk(junk.data(), junk.size());
+    otaUploadFinish();
+    otaUploadCommit();
+    assert(!ended && otaUploadOutcome() == OTA_OUT_REFUSED);
+    otaUploadReset();
 
     // active while chunks arrive, not before / after
     resetFake();

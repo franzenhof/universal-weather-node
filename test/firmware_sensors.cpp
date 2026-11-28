@@ -1,19 +1,22 @@
+#include "heltec_board.h"
 #include "sensors.h"
 #include "globals.h"
 #include "DallasTemperature.h"
 #include "wind_window.h"
-#include "driver/pcnt.h"
+#include "pulse_counter.h"
+extern uint32_t hostCounts[PULSE_COUNTER_COUNT];
 #include <cassert>
 #include <climits>
 #include <cmath>
 
 extern bool hostBmeOk;
 extern float hostBmeT,hostBmeP,hostBmeH;
+extern int hostBmeSda,hostBmeAddr;
 
 int main()
 {
-    gCfg.pcbVersion=20;
-    sensorsInit(getPins(20));
+    gCfg.pcbVersion=20; gBoard.pcb=true;   // PCB v2.0 (revision ID read)
+    sensorsInit(getPins());
     hostProbeCount=3;
     startOneWireConversion();
     assert(digitalRead(PIN_1WIRE_HSS)==HIGH);
@@ -47,10 +50,11 @@ int main()
     hostNow+=1000;
     assert(pollOneWireConversion());
     assert(bus1Temps[0]==DEVICE_DISCONNECTED_C);
-    gCfg.pcbVersion=12;
+    gBoard.pcb=false;                         // supply not switched (no HSS step)
     hostConversionComplete=true;
     startOneWireConversion();
     assert(pollOneWireConversion() && bus1Temps[0]==10.5f);
+    gBoard.pcb=true;
 
     // ---- settling after the start: wind and rain pulses ignored for PULSE_SETTLE_MS ----
     gCfg.windEn=1;gCfg.rainEn=1;
@@ -65,23 +69,25 @@ int main()
     }
     hostNow+=PULSE_SETTLE_MS;
     assert(!pulseSettling());
-    sensorsInit(getPins(20));                 // counters back to 0 for the wrap tests below
+    sensorsInit(getPins());                   // counters back to 0 for the wrap tests below
 
-    // ---- PCNT: any number of counter wraps between two reads ----
+    // ---- PCNT: accumulated counts across hardware overflows ----
     gCfg.windMsPerPps=0.001f;   // high-pulse anemometer
     hostCounts[PCNT_UNIT_WINDSPEED]=0;readPulseCounters();
-    hostPcntIsr[PCNT_UNIT_WINDSPEED](hostPcntArg[PCNT_UNIT_WINDSPEED]);
-    hostPcntIsr[PCNT_UNIT_WINDSPEED](hostPcntArg[PCNT_UNIT_WINDSPEED]);
-    hostCounts[PCNT_UNIT_WINDSPEED]=100;hostNow+=60000;
+    hostCounts[PCNT_UNIT_WINDSPEED]=2u*32767u+100u;hostNow+=60000;
     PulseSample ps=readPulseCounters();
     assert(ps.windValid && ps.windPulses==2u*32767u+100u);   // > 65535: no uint16 truncation
-    // wrapped, but the interrupt has not run yet: counted once, not twice
-    hostCounts[PCNT_UNIT_WINDSPEED]=50;hostNow+=1000;
-    ps=readPulseCounters();assert(ps.windPulses==32767u-50u);
-    hostPcntIsr[PCNT_UNIT_WINDSPEED](hostPcntArg[PCNT_UNIT_WINDSPEED]);
-    hostCounts[PCNT_UNIT_WINDSPEED]=60;hostNow+=1000;
-    ps=readPulseCounters();assert(ps.windPulses==10u);
+    // 32-bit count wrapping around between two reads
+    hostCounts[PCNT_UNIT_WINDSPEED]=0xFFFFFFF0u;readPulseCounters();
+    hostCounts[PCNT_UNIT_WINDSPEED]=20u;hostNow+=1000;
+    ps=readPulseCounters();assert(ps.windPulses==36u);
     gCfg.windMsPerPps=1.00584f;
+    // hardware wrapped, but the driver's overflow interrupt has not run yet
+    // (count reads 32767 too low): counted once, not twice
+    assert(pulseCounterMonotonic(32767u+10u, 32767u+5u)==32767u+10u);
+    assert(pulseCounterMonotonic(50u, 32767u+5u)==32767u+50u);     // pending overflow added
+    assert(pulseCounterMonotonic(32767u+60u, 32767u+50u)==32767u+60u);   // interrupt ran: exact again
+    assert(pulseCounterMonotonic(3u, 0xFFFFFFF0u)==3u);           // 32-bit wrap is not a pending overflow
 
     // ---- BME280: out-of-range readings count as a failed read ----
     hostBmeOk=true;hostBmeT=21.5f;hostBmeP=95000.0f;hostBmeH=55.0f;
@@ -92,6 +98,30 @@ int main()
     hostBmeT=21.5f;hostBmeP=20000.0f;assert(!readBme280());
     hostBmeP=95000.0f;assert(readBme280() && bme280Present);   // re-probed
     hostBmeOk=false;
+
+    // ---- BME280 pins (B9): PCB 41/42; wireless 47/48, old wiring 41/42 only while GNSS is off ----
+    {
+        int sda,scl; bool old; uint8_t addr;
+        sensorsBmePins(sda,scl,old,addr); assert(sda==41 && scl==42 && !old);   // PCB (above)
+        const bool pcb=gBoard.pcb; const int pcbVer=gCfg.pcbVersion;
+        gBoard.pcb=false; gCfg.pcbVersion=0; gCfg.gnssEn=0;
+        hostBmeOk=true; hostBmeSda=41; hostBmeAddr=0x76;               // old wiring
+        sensorsInit(getPins()); sensorsBmePins(sda,scl,old,addr);
+        assert(bme280Present && sda==41 && scl==42 && old && addr==0x76);
+        gCfg.gnssEn=1;                                                  // GNSS on: 41/42 never touched
+        sensorsInit(getPins()); sensorsBmePins(sda,scl,old,addr);
+        assert(!bme280Present && sda==47 && scl==48 && !old);
+        hostBmeSda=47; hostBmeAddr=0x77;                                // moved to 47/48, SDO high
+        assert(readBme280() && bme280Present);                          // hot-plug on 47/48, 0x77 found
+        sensorsInit(getPins()); sensorsBmePins(sda,scl,old,addr);
+        assert(bme280Present && sda==47 && scl==48 && !old && addr==0x77);
+        gCfg.gnssEn=0; hostBmeOk=false;                                 // nothing anywhere: waits on 47/48
+        sensorsInit(getPins()); sensorsBmePins(sda,scl,old,addr);
+        assert(!bme280Present && sda==47 && scl==48 && !old);
+        hostBmeSda=-1; hostBmeAddr=-1;
+        gBoard.pcb=pcb; gCfg.pcbVersion=pcbVer;
+        sensorsInit(getPins());
+    }
 
     // ---- rain reset: the per-path windows keep counting ----
     rainMMSinceStart=5.0f;

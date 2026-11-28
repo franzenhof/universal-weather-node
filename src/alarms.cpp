@@ -1,4 +1,6 @@
 #include "alarms.h"
+#include "lsensors.h"
+#include <stddef.h>
 #include "units.h"
 #include <math.h>
 #include <stdio.h>
@@ -69,7 +71,7 @@ const char* alarmSrcKey(uint8_t src)
 const char* alarmRfFieldKey(uint8_t f)
 {
     static const char* const k[AF_COUNT] = { "temp", "humidity", "windSpeed", "windGust", "uvIndex", "lightLux", "leak",
-        "lightningKm", "moisturePct", "co2Ppm", "pm25", "silentMin", "batteryLow" };
+        "lightningKm", "moisturePct", "co2Ppm", "pm25", "silentMin", "batteryLow", "receptionPct" };
     return f < AF_COUNT ? k[f] : "temp";
 }
 
@@ -80,9 +82,10 @@ const char* alarmChannelKey(uint8_t c)
 }
 
 uint16_t alarmCapMask(bool temp, bool hum, bool wind, bool uv, bool light, bool leak, bool lightning, bool moisture,
-                      bool co2, bool pm25)
+                      bool co2, bool pm25, bool radio)
 {
     uint16_t m = (1u << AF_SILENT_MIN) | (1u << AF_BATTERY_LOW);
+    if (radio)     m |= 1u << AF_RECEPTION_PCT;
     if (temp)      m |= 1u << AF_TEMP;
     if (hum)       m |= 1u << AF_HUM;
     if (wind)      m |= (1u << AF_WIND) | (1u << AF_GUST);
@@ -146,7 +149,7 @@ const char* alarmUnitLabel(PhKind k, uint8_t src, uint8_t f, const Config& c)
     if (src == AS_HUM) return "%";
     if (src != AS_RF) return "";
     switch (f) {
-        case AF_HUM: case AF_MOISTURE: return "%";
+        case AF_HUM: case AF_MOISTURE: case AF_RECEPTION_PCT: return "%";
         case AF_LUX: return "lx";
         case AF_LIGHTNING_KM: return "km";
         case AF_CO2: return "ppm";
@@ -157,7 +160,11 @@ const char* alarmUnitLabel(PhKind k, uint8_t src, uint8_t f, const Config& c)
 }
 
 namespace {
-constexpr uint32_t ALARM_MAGIC = 0x414C5231;   // "ALR1"
+constexpr uint32_t ALARM_MAGIC    = 0x414C5232;   // "ALR2": sensorInternalId (A5c)
+constexpr uint32_t ALARM_MAGIC_V1 = 0x414C5231;   // "ALR1": uint32_t rfId at the same place
+// "ALR1" rule: 8 bytes of flags, the 4-byte radio ID, then the same fields as now
+constexpr size_t ALARM_V1_RULE = sizeof(AlarmRule) - sizeof(AlarmRule::sensorInternalId) + 4;
+constexpr size_t ALARM_V1_BLOB = 4 + ALARM_V1_RULE * ALARM_RULES + 4;
 uint32_t fnv1a(const uint8_t* p, size_t n)
 {
     uint32_t h = 2166136261u;
@@ -177,15 +184,29 @@ void alarmsEncode(const AlarmRule* rules, uint8_t* out)
 
 bool alarmsDecode(const uint8_t* in, size_t len, AlarmRule* rules)
 {
-    if (len != ALARM_BLOB_SIZE) return false;
+    if (len != ALARM_BLOB_SIZE && len != ALARM_V1_BLOB) return false;
     uint32_t m, h;
     memcpy(&m, in, 4);
-    memcpy(&h, in + ALARM_BLOB_SIZE - 4, 4);
-    if (m != ALARM_MAGIC || h != fnv1a(in, ALARM_BLOB_SIZE - 4)) return false;
-    memcpy(rules, in + 4, sizeof(AlarmRule) * ALARM_RULES);
+    memcpy(&h, in + len - 4, 4);
+    if (h != fnv1a(in, len - 4)) return false;
+    if (len == ALARM_BLOB_SIZE && m == ALARM_MAGIC) {
+        memcpy(rules, in + 4, sizeof(AlarmRule) * ALARM_RULES);
+    } else if (len == ALARM_V1_BLOB && m == ALARM_MAGIC_V1) {   // before A5c: the radio ID is dropped
+        constexpr size_t head = offsetof(AlarmRule, sensorInternalId);
+        for (int i = 0; i < ALARM_RULES; i++) {
+            const uint8_t* r = in + 4 + ALARM_V1_RULE * i;
+            uint8_t* o = reinterpret_cast<uint8_t*>(&rules[i]);
+            memset(o, 0, sizeof(AlarmRule));
+            memcpy(o, r, head);
+            memcpy(o + head + sizeof(AlarmRule::sensorInternalId), r + head + 4, ALARM_V1_RULE - head - 4);
+        }
+    } else {
+        return false;
+    }
     for (int i = 0; i < ALARM_RULES; i++) {   // never trust stored strings / enums
         AlarmRule& r = rules[i];
         r.name[sizeof(r.name) - 1] = r.msg[sizeof(r.msg) - 1] = r.clearMsg[sizeof(r.clearMsg) - 1] = '\0';
+        if (!lsIsInternalId(r.sensorInternalId)) r.sensorInternalId[0] = '\0';
         if (r.src >= AS_COUNT) r.src = AS_OFF;
         if (r.rfField >= AF_COUNT) r.rfField = AF_TEMP;
         if (r.priority < 1 || r.priority > 5) r.priority = 3;
@@ -194,7 +215,7 @@ bool alarmsDecode(const uint8_t* in, size_t len, AlarmRule* rules)
 }
 
 void alarmsJson(JsonDocument& doc, const AlarmRule* rules, const AlarmState* st, const AlarmChannels& ch,
-                const Config& c, uint32_t now)
+                const Config& c, uint32_t now, uint32_t (*sensorOf)(const char* internalId, char* customId))
 {
     doc.clear();
     doc["apiVersion"] = 1;
@@ -211,9 +232,15 @@ void alarmsJson(JsonDocument& doc, const AlarmRule* rules, const AlarmState* st,
         o["enabled"] = r.enabled != 0;
         o["value"]   = alarmSrcKey(r.src);
         if (r.src == AS_RF) {
-            char id[12];
-            snprintf(id, sizeof(id), "%08lX", (unsigned long)r.rfId);
-            o["sensorId"] = id;
+            // the bound logical sensor: its custom ID, and its current radio ID (compatibility)
+            char customId[17] = "";
+            const uint32_t rid = sensorOf && r.sensorInternalId[0] ? sensorOf(r.sensorInternalId, customId) : 0;
+            if (rid) {
+                char id[12];
+                snprintf(id, sizeof(id), "%08lX", (unsigned long)rid);
+                o["sensorId"] = id;
+            }
+            if (customId[0]) o["customId"] = customId;
             o["sensorValue"] = alarmRfFieldKey(r.rfField);
         }
         o["compare"]  = r.above ? ">" : "<";

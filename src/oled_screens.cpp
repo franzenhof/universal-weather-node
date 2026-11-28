@@ -12,10 +12,13 @@
 #include "oled_custom.h"
 #include "ph_live.h"
 #include "time_sync.h"
+#include "wifi_ap.h"
+#include "qr_code.h"
 #include <OLEDDisplay.h>
 #include <OLEDDisplayFonts.h>
 #include <WiFi.h>
 #include <math.h>
+#include <memory>
 #include <new>
 #include <stdio.h>
 #include <string.h>
@@ -65,7 +68,7 @@ const char* trendWord(const char* en)
 // that is not there (or a misspelt name) shows as "--".
 struct DispCtx {
     PhLive live;
-    char   clock[8] = "", date[12] = "", ip[16] = "";
+    char   clock[8] = "", date[12] = "", dateFull[12] = "", ip[16] = "";
 };
 
 bool dispLookup(const char* n, PhValue& o, void* ctx)
@@ -73,7 +76,8 @@ bool dispLookup(const char* n, PhValue& o, void* ctx)
     DispCtx& c = *(DispCtx*)ctx;
     auto txt = [&](const char* s) { o.kind = PK_TEXT; o.text = s && *s ? s : "--"; return true; };
     if (!strcmp(n, "clock"))   return txt(c.clock);
-    if (!strcmp(n, "date"))    return txt(c.date);
+    if (!strcmp(n, "date"))      return txt(c.date);
+    if (!strcmp(n, "date_full")) return txt(c.dateFull);
     if (!strcmp(n, "ip"))      return txt(c.ip);
     if (!strcmp(n, "u_temp"))  { static char u[4]; snprintf(u, sizeof(u), "\xC2\xB0%s", temperatureUnitLabel(gCfg)); return txt(u); }
     if (!strcmp(n, "u_wind"))  return txt(windSpeedUnitLabel(gCfg));
@@ -97,13 +101,15 @@ DispCtx* newDispCtx()
 {
     DispCtx* ctx = new (std::nothrow) DispCtx();
     if (!ctx) return nullptr;
-    phLiveInit(ctx->live, nullptr);
+    phLiveInit(ctx->live, nullptr, /*liveScalars=*/true);   // the display shows the newest value per packet
     struct tm lt;
     if (localTimeNow(lt)) {
         strftime(ctx->clock, sizeof(ctx->clock), "%H:%M", &lt);
         strftime(ctx->date, sizeof(ctx->date), gCfg.unitSystem == 1 ? "%m/%d" : "%d.%m.", &lt);
+        strftime(ctx->dateFull, sizeof(ctx->dateFull), gCfg.unitSystem == 1 ? "%m/%d/%Y" : "%d.%m.%Y", &lt);
     }
     if (gCfg.wifiEn && wifiIsConnected()) strlcpy(ctx->ip, WiFi.localIP().toString().c_str(), sizeof(ctx->ip));
+    else if (apIsActive()) strlcpy(ctx->ip, AP_IP_TEXT, sizeof(ctx->ip));
     return ctx;
 }
 
@@ -127,9 +133,24 @@ void drawCustom(OLEDDisplay& d, const OledCustom& c)
 }
 
 // Off-screen canvas for the preview: the display library's drawing, no I2C.
+// The driver's UTF-8 decoder (DefaultFontTableLookup) keeps the previous byte in a
+// static shared by every OLEDDisplay. The preview canvas draws on the web task while
+// the loop task draws the real display, so it gets its own copy of that state.
+char previewFontLookup(const uint8_t ch)
+{
+    static uint8_t last = 0;   // web task only (the previews)
+    if (ch < 128) { last = 0; return (char)ch; }
+    const uint8_t prev = last;
+    last = ch;
+    if (prev == 0xC2) return (char)ch;
+    if (prev == 0xC3) return (char)(ch | 0xC0);
+    if (prev == 0x82 && ch == 0xAC) return (char)0x80;   // the euro sign
+    return 0;
+}
+
 class OledCanvas : public OLEDDisplay {
 public:
-    OledCanvas() { setGeometry(GEOMETRY_128_64); }
+    OledCanvas() { setGeometry(GEOMETRY_128_64); setFontTableLookupFunction(previewFontLookup); }
     void display() override {}
     const uint8_t* pixels() const { return buffer; }
 protected:
@@ -139,7 +160,7 @@ protected:
 
 } // namespace
 
-const char* const OLED_PH_NAMES[] = { "clock", "date", "ip", "u_temp", "u_wind", "u_rain", "u_rate", "u_press" };
+const char* const OLED_PH_NAMES[] = { "clock", "date", "date_full", "ip", "u_temp", "u_wind", "u_rain", "u_rate", "u_press" };
 const int OLED_PH_NAME_COUNT = sizeof(OLED_PH_NAMES) / sizeof(OLED_PH_NAMES[0]);
 
 void oledPlaceholderValues(const char* const* names, int n,
@@ -158,7 +179,8 @@ void oledPlaceholderValues(const char* const* names, int n,
     delete ctx;
 }
 
-static_assert(OS_CUSTOM1 + OLED_CUSTOM_COUNT == OS_COUNT, "one OledScreen per custom screen");
+static_assert(OS_CUSTOM1 + OLED_CUSTOM_COUNT == OS_QR, "one OledScreen per custom screen");
+static_assert(OS_QR == 8, "config.h: the dispScreens default sets bit 8 (QR screen)");
 
 bool oledPreviewCustom(const OledCustom& c, uint8_t out[1024])
 {
@@ -184,6 +206,49 @@ uint8_t oledNextScreen(uint8_t cur, uint16_t mask)
     return OS_CLASSIC;
 }
 
+uint16_t oledScreenMask()
+{
+    uint16_t m = (uint16_t)gCfg.dispScreens;
+    if (!apIsActive()) m &= (uint16_t)~(1u << OS_QR);
+    return m;
+}
+
+// Wi-Fi QR code of the own access point: the code on the left (lit box,
+// qrOledRender), network name, password and address on the right.
+static void drawQr(OLEDDisplay& d)
+{
+    char text[WIFI_QR_TEXT_MAX];
+    QrCode q;   // ~420 bytes on the loop task's stack
+    if (!apIsActive() || !apQrText(text, sizeof(text)) || !qrEncode((const uint8_t*)text, strlen(text), QR_ECC_L, q)) {
+        d.setFont(ArialMT_Plain_10);
+        d.drawString(0, 0, "Wi-Fi AP off");
+        return;
+    }
+    qrOledRender(q, d.buffer);
+    ApStatus st;
+    apStatus(st);
+    d.setFont(ArialMT_Plain_10);
+    d.setTextAlignment(TEXT_ALIGN_LEFT);
+    // three lines each for the name and the password would not fit: one each, cut to the 62 px
+    // (measured as drawn: UTF-8, cut at a character boundary)
+    auto cut = [&d](const char* s, char* out, size_t cap) {
+        strlcpy(out, s, cap);
+        size_t n = strlen(out);
+        while (n > 0 && d.getStringWidth(out, (uint16_t)n, true) > 62) {
+            do n--; while (n > 0 && ((uint8_t)out[n] & 0xC0) == 0x80);
+            out[n] = '\0';
+        }
+    };
+    char l[64];
+    cut(st.ssid, l, sizeof(l));
+    d.drawString(66, OLED_ROW[0], l);
+    cut(gCfg.apPass, l, sizeof(l));
+    d.drawString(66, OLED_ROW[1], l);
+    d.drawString(66, OLED_ROW[3], AP_IP_TEXT);
+    snprintf(l, sizeof(l), "%u / %d", (unsigned)st.clients, AP_MAX_CLIENTS);
+    d.drawString(66, OLED_ROW[4], l);
+}
+
 bool oledNightNow(int from, int to, int h)
 {
     if (from == to) return false;
@@ -195,15 +260,17 @@ void oledDrawScreen(OLEDDisplay& d, uint8_t s)
     char big[24], l1[48], l2[48] = "";
     static DerivedNow dn;   // ~150 bytes, not on the loop task's stack
     derivedNow(dn, windSpeedMs, windDirection);
+    const SrcValues live = srcLive();   // instantaneous scalars (per packet); derived (dn) stays on the cycle
     const char* none = tx(T_oled_nodata);
-    if (s >= OS_CUSTOM1 && s < OS_COUNT) { drawCustom(d, gCfg.dispCustom[s - OS_CUSTOM1]); return; }
+    if (s == OS_QR) { drawQr(d); return; }
+    if (s >= OS_CUSTOM1 && s < OS_QR) { drawCustom(d, gCfg.dispCustom[s - OS_CUSTOM1]); return; }
     switch (s) {
         case OS_TEMP:
-            if (gSrc.tempValid) snprintf(big, sizeof(big), "%.1f\xC2\xB0%s", temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg));
+            if (live.tempValid) snprintf(big, sizeof(big), "%.1f\xC2\xB0%s", temperatureForOutput(live.tempC, gCfg), temperatureUnitLabel(gCfg));
             else strlcpy(big, none, sizeof(big));
             l1[0] = '\0';
-            if (gSrc.tempValid && gSrc.humValid) {
-                int n = snprintf(l1, sizeof(l1), "%.0f %%", gSrc.humidity);
+            if (live.tempValid && live.humValid) {
+                int n = snprintf(l1, sizeof(l1), "%.0f %%", live.humidity);
                 if (dn.dewValid) snprintf(l1 + n, sizeof(l1) - n, "  %s %.1f\xC2\xB0", tx(T_oled_dew), temperatureForOutput(dn.dewPointC, gCfg));
             }
             if (dn.feelsValid) snprintf(l2, sizeof(l2), "%s %.1f\xC2\xB0", tx(T_oled_feels), temperatureForOutput(dn.feelsLikeC, gCfg));
@@ -231,8 +298,8 @@ void oledDrawScreen(OLEDDisplay& d, uint8_t s)
             break;
         }
         case OS_PRESS:
-            if (gSrc.pressValid) snprintf(big, sizeof(big), "%.*f %s", gCfg.unitSystem == 1 ? 2 : 1,
-                                          pressureForOutput(gSrc.pressSeaHpa, gCfg), pressureUnitLabel(gCfg));
+            if (live.pressValid) snprintf(big, sizeof(big), "%.*f %s", gCfg.unitSystem == 1 ? 2 : 1,
+                                          pressureForOutput(live.pressSeaHpa, gCfg), pressureUnitLabel(gCfg));
             else strlcpy(big, none, sizeof(big));
             l1[0] = '\0';
             if (dn.pressTrendValid) {
@@ -250,6 +317,7 @@ void oledDrawScreen(OLEDDisplay& d, uint8_t s)
             d.drawHorizontalLine(0, 12, 128);
             if (!gCfg.wifiEn) snprintf(l1, sizeof(l1), "WiFi off");
             else if (wifiIsConnected()) snprintf(l1, sizeof(l1), "%s  %d dBm", WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+            else if (apIsActive()) snprintf(l1, sizeof(l1), "AP %s", AP_IP_TEXT);
             else snprintf(l1, sizeof(l1), "WiFi ...");
             d.drawString(0, 14, l1);
             char host[40];
@@ -258,9 +326,44 @@ void oledDrawScreen(OLEDDisplay& d, uint8_t s)
             d.drawString(0, 26, l1);
             int n = 0;
             for (int i = 0; i < RF_MAX_SENSORS; i++) n += gRfSensors[i].used;
-            snprintf(l1, sizeof(l1), "%d %s   %d %s", gCfg.rfEn ? n : 0, tx(T_oled_sensors), alarmsActiveCount(), tx(T_oled_alarms));
+            snprintf(l1, sizeof(l1), "%d %s   %d %s", rfTableOn() ? n : 0, tx(T_oled_sensors), alarmsActiveCount(), tx(T_oled_alarms));
             d.drawString(0, 38, l1);
             break;
         }
     }
+}
+
+// ---- screensaver input -------------------------------------------------------
+static bool          frostSeen = false;
+static unsigned long frostMs   = 0;
+
+constexpr unsigned long THAW_MS = 12UL * 3600UL * 1000UL;
+
+void oledSaverNoteCycle()
+{
+    if (gSrc.tempValid && gSrc.tempC < 0) { frostSeen = true; frostMs = millis(); }
+    else if (frostSeen && millis() - frostMs >= THAW_MS) frostSeen = false;   // over: the millis() wrap never brings it back
+}
+
+void oledSaverInput(SaverInput& in)
+{
+    const SrcValues live = srcLive();
+    std::unique_ptr<DerivedNow> dn(new (std::nothrow) DerivedNow());   // its own: also called from the web task (preview)
+    if (dn) derivedNow(*dn, windSpeedMs, windDirection);
+    if (live.tempValid) in.tempC = live.tempC;
+    if (live.humValid) in.humidity = live.humidity;
+    if (live.uvRadio) in.uvIndex = live.uvIndexRadio;
+    if (srcActive(SG_RAIN)) { in.rainRateMmH = rainRateMmH; if (dn && dn->rainValid) in.rain1hMm = dn->rain1hMm; }
+    if (srcActive(SG_WIND) && windCycleValid) { in.windMs = windSpeedMs; in.gustMs = windGustMs; }
+    for (int i = 0; i < RF_MAX_SENSORS; i++) {
+        const RfSensorReading& r = gRfSensors[i];
+        if (!r.used || millis() - r.lastMs > 15UL * 60000UL) continue;
+        if (r.hasLightning && r.lightningKm > 0) in.lightning = true;
+        if (r.hasPm25 && (isnan(in.pm25) || r.pm25 > in.pm25)) in.pm25 = r.pm25;
+        if (r.hasCo2 && (isnan(in.co2Ppm) || r.co2Ppm > in.co2Ppm)) in.co2Ppm = r.co2Ppm;
+        if (r.hasMoisture && (in.soilPct < 0 || r.moisturePct < in.soilPct)) in.soilPct = r.moisturePct;
+    }
+    in.thawed = frostSeen && millis() - frostMs < THAW_MS;
+    struct tm lt;
+    in.night = localTimeNow(lt) && (lt.tm_hour >= 21 || lt.tm_hour < 6);
 }

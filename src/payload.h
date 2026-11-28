@@ -36,7 +36,7 @@ struct Measurements {
     bool     hasDs18b20[3] = {};
     float    ds18b20[3] = {};                             // °C or °F
 
-    // PCB v2.0 I/O block. Victron values: NAN / -1 = not sent by the device.
+    // V4 Full I/O block. Victron values: NAN / -1 = not sent by the device.
     bool     hasIoStatus = false;
     uint8_t  ioStatus = 0;                                // IO_* bits, board_io.h
     bool     hasAuxAin = false;
@@ -81,7 +81,7 @@ struct Measurements {
 // decoder still reads them; this firmware always sends version 4.
 // Version 2 vs. 1: imperial rain x1000 / pressure x100, rain since start u32.
 constexpr uint8_t BIN_PROTO_VERSION = 4;
-constexpr size_t  BIN_MAX_SIZE      = 96;   // all fields incl. debug, v2.0 I/O, UV, light, sources
+constexpr size_t  BIN_MAX_SIZE      = 96;   // all fields incl. debug, V4 Full I/O, UV, light, sources
 
 enum BinField : uint8_t {
     BIN_WIND_DIR = 0, BIN_WIND_SPEED, BIN_WIND_GUST,
@@ -92,7 +92,7 @@ enum BinField : uint8_t {
     BIN_BME_TEMP,       // i16 x10 - temperature of the selected source (BME280 or wireless)
     BIN_DS18B20_0, BIN_DS18B20_1, BIN_DS18B20_2,
     BIN_DBG_CYCLE, BIN_DBG_CPU_TEMP, BIN_DBG_FAIL_COUNT, BIN_DBG_FREE_HEAP, BIN_DBG_UPTIME,
-    // PCB v2.0 I/O block
+    // V4 Full I/O block
     BIN_IO_STATUS,      // u8, IO_* bits
     BIN_AUX_AIN,        // u16, V x1000
     BIN_AUX_PULSES,     // u16, pulses this cycle (clamped)

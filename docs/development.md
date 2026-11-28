@@ -8,7 +8,7 @@ Building and flashing from source, host-side tests, robustness measures, config 
 
 Install [PlatformIO](https://platformio.org/install) (VS Code extension or CLI), clone/download this repository and run commands from its root. Use a USB **data** cable, and select the serial device if more than one is connected.
 
-Environment `heltec_wifi_lora_32_V3` (`espressif32 @ 6.11.0`, Arduino core 2.0.17 / ESP-IDF 4.4.7):
+Environment `heltec_wifi_lora_32_V4` (pioarduino `55.03.313` = Arduino core 3.3.13 / ESP-IDF 5.5; Heltec V4, 16 MB flash, quad PSRAM). The 2.x line (branch `2.x`) builds with `espressif32 @ 6.11.0` (Arduino 2.0.17); both share PlatformIO's framework package, so switching branches reinstalls it:
 
 ```bash
 pio run                 # build
@@ -17,10 +17,10 @@ pio device monitor      # serial log, 115200 baud
 ```
 
 - **A new board must be flashed over USB once** — this writes the custom partition table. After that, use OTA.
-- [`firmware/`](../firmware/) contains per release the **application image** `universal-weather-node-<version>.bin` (OTA, or flashed at `0x10000`) and, from 2.0.0-beta.3, the **factory image** `universal-weather-node-<version>-factory.bin` (bootloader + partition table + boot_app0 + application, flashed at `0x0` — see [Installing the Firmware](installation.md#installing-the-firmware-browser-no-software)). The build writes it with `esptool merge_bin` ([`tools/version.py`](../tools/version.py)); `pio run` leaves it in `.pio/build/<env>/firmware-factory.bin`. Manual esptool flashing with the separate parts, for this project's 8 MB layout:
+- [`firmware/`](../firmware/) contains per release the **application image** `universal-weather-node-<version>.bin` (OTA, or flashed at `0x10000`) and, from 2.0.0-beta.3, the **factory image** `universal-weather-node-<version>-factory.bin` (bootloader + partition table + boot_app0 + application, flashed at `0x0` — see [Installing the Firmware](installation.md#installing-the-firmware-browser-no-software)). The build writes it with `esptool merge_bin` ([`tools/version.py`](../tools/version.py)); `pio run` leaves it in `.pio/build/<env>/firmware-factory.bin`. Manual esptool flashing with the separate parts, for this project's 16 MB layout:
 
 ```bash
-esptool.py --chip esp32s3 write_flash --flash_size 8MB \
+esptool.py --chip esp32s3 write_flash --flash_size 16MB \
   0x0     bootloader.bin \
   0x8000  partitions.bin \
   0xe000  boot_app0.bin \
@@ -39,10 +39,10 @@ Or everything in one go with the factory image: `esptool.py --chip esp32s3 write
 Host-side, no hardware needed: Node.js and a C++11 compiler (`c++`, `g++` or `clang++`). Run a normal PlatformIO build first to restore ArduinoJson for the runtime regressions.
 
 ```bash
-node --test test/*.test.js           # all test files: firmware runtime regressions, API contract, doc links, PCB v2.0 BOM/CPL checks
+node --test test/*.test.js           # all test files: firmware runtime regressions, API contract, doc links, PCB V4 Full BOM/CPL checks
 ```
 
-The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 design/BOM/CPL consistency (needs python3), and five real-module C++ regression programs with deterministic hardware fakes (sensors, I/O, LoRa transport, telemetry and payloads). The **API contract test** (`test/api_contract.test.js`) regenerates the [example responses](api.md#example-responses) of `/api/data`, `/api/history` and `/api/info` with the real serializers, compares them with `docs/api/examples/`, validates them against `docs/api/schemas/` and fails on any JSON key the schemas don't describe — after an intended change: `UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js`. The **translation check** (`test/i18n.test.js`) fails if a key is missing in a language, placeholders or HTML tags differ from English, an ASCII apostrophe would break an attribute, or the sources use an unknown / leave an unused key. The **link check** (`test/doc_links.test.js`) resolves every relative link and `#anchor` in the Markdown files. See [test/README](../test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
+The suite covers decoding/encoder round trips, VE.Direct parsing, PCB V4 Full design/BOM/CPL consistency (needs python3), and the real-module C++ regression programs `test/firmware_*.cpp` (about 70) with deterministic hardware fakes (sensors, I/O, LoRa transport, telemetry and payloads, radio decoders, web and storage logic). The **API contract test** (`test/api_contract.test.js`) regenerates the [example responses](api.md#example-responses) of `/api/data`, `/api/history` and `/api/info` with the real serializers, compares them with `docs/api/examples/`, validates them against `docs/api/schemas/` and fails on any JSON key the schemas don't describe — after an intended change: `UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js`. The **translation check** (`test/i18n.test.js`) fails if a key is missing in a language, placeholders or HTML tags differ from English, an ASCII apostrophe would break an attribute, or the sources use an unknown / leave an unused key. The **link check** (`test/doc_links.test.js`) resolves every relative link and `#anchor` in the Markdown files. See [test/README](../test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
 
 ## Robustness
 
@@ -62,7 +62,7 @@ For bench tests and diagnostics. Adds cycle counter, CPU temperature, send failu
 
 ## Translations (web interface)
 
-All user-visible texts of the node's own pages (settings, status, log, radio trace, firmware update) and of the setup portal live in **`i18n/<lang>.json`** — `en.json` is the master (key → English text), `de`, `fr`, `es`, `pt` carry the same keys. `tools/i18n_gen.py` (run by `tools/version.py` before every build and by the host tests) turns them into `include/i18n_keys.h` (`enum TextId`: `T_<key>`) and `include/i18n_table.h` (the strings in flash, a missing translation falls back to English); both are generated and not in git.
+All user-visible texts of the node's own pages (settings, status, log, radio trace, firmware update) and of the config portal live in **`i18n/<lang>.json`** — `en.json` is the master (key → English text), `de`, `fr`, `es`, `pt` carry the same keys. `tools/i18n_gen.py` (run by `tools/version.py` before every build and by the host tests) turns them into `include/i18n_keys.h` (`enum TextId`: `T_<key>`) and `include/i18n_table.h` (the strings in flash, a missing translation falls back to English); both are generated and not in git.
 
 - In C++: `T(T_key)` returns the text in the request's language (`selectLanguage()` in each web handler; `src/i18n.h`), `TF(T_key, a, b, …)` fills placeholders `{0}`, `{1}`, … — write whole sentences with placeholders instead of gluing fragments, so every language can use its own word order.
 - **Add a text:** add the key to `en.json` and to the four other files, use it in the code; `python3 tools/i18n_gen.py` and `node --test test/i18n.test.js` check it.
@@ -86,14 +86,14 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 │   ├── partition_check.h/.cpp  # Detects a missing "cfgdata" partition
 │   ├── globals.h            # Shared live state between the modules
 │   ├── sensors.h/.cpp       # Pins, pulse counters, ADC, sensor reads
-│   ├── board_io.h/.cpp      # PCB v2.0: revision ID, AUX inputs, heater/fan, tacho, VE.Direct
+│   ├── board_io.h/.cpp      # PCB revision ID (V4 Full / V4 Light); V4 Full: AUX inputs, heater/fan, tacho, VE.Direct
 │   ├── vedirect.h/.cpp      # Victron VE.Direct text-protocol parser (host-testable)
 │   ├── payload.h            # Measurements struct + compact binary layout
 │   ├── payload_binary.cpp   # Compact binary encoder (host-testable)
 │   ├── lora_payload.h/.cpp  # CayenneLPP encoder
-│   ├── history.h/.cpp       # In-RAM history for the dashboard
+│   ├── history.h/.cpp       # Chart history tiers in the PSRAM (history_store.cpp: saved to the history partition)
 │   ├── wind_window.h/.cpp   # Wind ring buffer, 3-s gust, per-path windows (host-tested)
-│   ├── rf_sensors.h/.cpp    # Bresser 868 MHz wireless sensors on the shared SX1262
+│   ├── rf_sensors.h/.cpp    # 868 MHz wireless sensors (Bresser, IT+, Fine Offset) on the shared SX1262
 │   ├── sources.h/.cpp       # value sources: board or wireless sensor per measured group
 │   ├── derived.h/.cpp       # dew point, feels like, cloud base, tendency, warnings, version compare (pure)
 │   ├── derived_now.h/.cpp   # snapshot of the derived values from history and daily totals
@@ -116,6 +116,7 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 ├── lib/BresserWeatherSensorReceiver/  # Fork (MIT) of the Bresser 868 MHz decoder, see FORK.md
 ├── lib/TfaWeatherSensorReceiver/     # TFA / LaCrosse IT+ 868 MHz receiver + decoder (own, MIT), see its README
 ├── lib/FineOffsetSensorReceiver/    # Fine Offset (Ecowitt / Froggit) 868 MHz receiver + decoder (own, MIT)
+├── lib/DavisSensorReceiver/         # Davis Vantage Pro2 / Vue 868 MHz receiver (own, MIT, experimental)
 ├── chirpstack/decoder.js    # Payload decoder (ChirpStack v3/v4, TTN)
 ├── test/                    # Decoder, round-trip, VE.Direct, firmware runtime, API contract and link tests
 ├── docs/api/                # OpenAPI file, JSON Schemas, generated example responses
@@ -127,9 +128,9 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 ├── partitions.csv           # Partition table (with cfgdata)
 ├── firmware/                # Release binaries (OTA)
 ├── pictures/                # Photos, screenshots, badges; overview.png is rendered from tools/overview/ (render.sh, headless Chrome)
-├── 3dprint/                 # Rev 1.2/1.3 cases + v20/ indoor case, STL/STEP/CAD and assembly guide
-├── pcb/v2.0/                # KiCad project, renders, schematic PDF; production/ = Gerber, JLCPCB BOM/CPL
-├── pcb/v1.3/                # Fritzing, schematic, layout, BOM, Gerber (Rev 1.2/1.3)
+├── 3dprint/                 # v4-full/ indoor case, minimal case; STL/STEP/CAD and assembly guide
+├── pcb/v4-full/             # V4 Full: KiCad project, renders, schematic PDF; production/ = Gerber, JLCPCB BOM/CPL
+├── pcb/v4-light/            # V4 Light (THT): KiCad project, renders, schematic PDF; production/ = Gerber, BOM
 ├── platformio.ini
 ├── docs/                    # Documentation pages (linked from the README)
 ├── CHANGELOG.md
@@ -146,7 +147,7 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 | Heltec_ESP32_LoRa_v3 | ^0.9.2 | Board support (display, temperature) |
 | LoRaWAN_ESP32 | ^1.2.0 | LoRaWAN session/nonce storage |
 | CayenneLPP | ^1.6.1 | Payload encoding |
-| WiFiManager | ^2.0.16-rc.2 | Config portal |
+| WiFiManager | ^2.0.17 | Config portal |
 | Adafruit BME280 + Unified Sensor | ^2.2.4 / ^1.1.15 | BME280 driver |
 | Adafruit BusIO | ^1.16.1 | I²C/SPI abstraction used by the sensor driver |
 | OneWire, DallasTemperature | ^2.3.8 / ^4.0.6 | DS18B20 |
@@ -155,7 +156,8 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 | BresserWeatherSensorReceiver | fork of 0.44.0 in `lib/` | Bresser 868 MHz sensor decoding (MIT, see `lib/BresserWeatherSensorReceiver/FORK.md`) |
 | TfaWeatherSensorReceiver | 0.1.0 in `lib/` (own) | TFA / LaCrosse IT+ 868 MHz sensor receiving and decoding (MIT) |
 | FineOffsetSensorReceiver | 0.1.0 in `lib/` (own) | Fine Offset (Ecowitt / Froggit) 868 MHz sensor receiving and decoding (MIT; format from the rtl_433 documentation) |
-| WiFi, WiFiClientSecure, WebServer, HTTPClient | ESP32 core | Wi-Fi, TLS, web server, uploads |
+| WiFi, WiFiClientSecure, HTTPClient | ESP32 core | Wi-Fi, TLS, uploads |
+| esp_http_server | ESP-IDF | web interface and REST API (`src/http_server.*`: the WebServer API on top; the WiFiManager portal keeps the Arduino WebServer) |
 
 ## Technical Notes
 
@@ -163,5 +165,5 @@ Versions below are the declared constraints in `platformio.ini`, not locked inst
 - **1-Wire objects are created at runtime** (`new`), because the pin depends on the PCB revision.
 - **ADC linearity:** the ESP32-S3 ADC is non-linear near its range limits. Wind-direction accuracy depends on the sensor, supply and calibration; there is no qualified universal error bound. The battery measurement uses a calibration factor.
 - **Tasks:** web serving and weather-network uploads run on core 0; sampling and LoRaWAN run on core 1. Web-server access, history, logs and upload state use mutexes; the LoRa joined flag is atomic. Some live configuration fields are `volatile`, which does not by itself provide general thread synchronization.
-- **Local access:** the web server uses unencrypted HTTP. Digest authentication protects the login password, not settings-form contents. The setup portal avoids sending secrets through your LAN, but its access point is open and HTTP is still unencrypted; configure it in a trusted local environment. MQTT TLS mode 2 verifies the broker; mode 1 only encrypts.
+- **Local access:** the web server uses unencrypted HTTP unless the optional [HTTPS](settings.md#https) is on. Digest authentication protects the login password, not settings-form contents. The config portal avoids sending secrets through your LAN, but its access point is open and HTTP is still unencrypted; configure it in a trusted local environment. MQTT TLS mode 2 verifies the broker; mode 1 only encrypts.
 - **Weather Underground uses HTTPS** without certificate verification (encrypted, not authenticated — same as MQTT TLS mode 1).

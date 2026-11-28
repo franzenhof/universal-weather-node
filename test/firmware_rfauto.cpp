@@ -48,7 +48,7 @@ int main()
     // ---- defaults of a new node: Wi-Fi + web API on, LoRaWAN/MQTT off, wireless on (Auto), no board wind/rain ----
     const Config d;
     assert(d.loraEn == 0 && d.wifiEn == 1 && d.webApiEn == 1 && d.mqttEn == 0 && d.mqttCtrlEn == 0);
-    assert(d.rfEn == RF_RADIO_SX1262 && d.rfProto == RF_PROTO_AUTO && d.rfIds[0] == '\0');
+    assert(d.rfEn == RF_RADIO_SX1262 && d.rfProto == RF_PROTO_AUTO && d.rfIgnore[0] == '\0');
     assert(d.windEn == 0 && d.rainEn == 0 && d.rainPersist == 1 && d.lowPowerEn == 0);
     for (int g = 0; g < 5; g++) assert(d.srcSel[g] == 0);   // value sources: Auto
     assert(d.provisioned == 0);                             // first boot opens the portal

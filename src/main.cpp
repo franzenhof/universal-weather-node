@@ -1,6 +1,9 @@
 #include "ota_upload.h"
 #include "davis_rx.h"
 #include "davis_diag.h"
+#include <esp_app_desc.h>
+#include <esp_partition.h>
+#include <esp_ota_ops.h>
 #include <Arduino.h>
 
 /**
@@ -12,7 +15,7 @@
  *   - BME280                (temperature, humidity, barometric pressure – I2C)
  *   - DS18B20 Bus 1         (up to 3 sensors, 1-Wire)
  *   - LiPo battery          (voltage measurement via voltage divider + ADC, optional)
- *   - PCB v2.0 only (board_io.cpp, all off by default): AUX analog + pulse
+ *   - V4 Full only (board_io.cpp, all off by default): AUX analog + pulse
  *     input, heater/fan outputs (PWM, on/auto), fan tacho, Victron VE.Direct
  *
  * Transmission: LoRaWAN (CayenneLPP or compact binary, region configurable)
@@ -33,12 +36,12 @@
  *   0x03 → open Wi-Fi config portal (takes effect after current send cycle)
  *   0x04 → enable debug mode (persistent)
  *   0x05 → disable debug mode (persistent)
- *   0x06 → reset AUX pulse total (PCB v2.0)
+ *   0x06 → reset AUX pulse total (V4 Full)
  *   0x10 → set parameter(s): [0x10, paramId, valueMSB, valueLSB, ...]
  *           paramId 1..50 (signed 16-bit values, validated — see ParamId in
  *           params.h, also reachable via MQTT and the web settings page)
- *   0xFF → factory reset: wipe all config (NVS) and restart into the
- *           first-boot config portal
+ *   0xFF → reset settings (settings_reset.h): defaults, network access,
+ *           admin password and LoRaWAN keys kept; restart
  *
  * Payload channel/field mapping: see README.md ("Payload") and
  * chirpstack/decoder.js - lora_payload.cpp is the encoder.
@@ -64,14 +67,18 @@ extern SPIClass* hspi;
 #include "radio_board.h"
 #include <pins_arduino.h>
 #include <esp_task_wdt.h>
+#include "reset_history.h"
+#include "settings_reset.h"
 #include <esp_netif.h>
 #include <esp_event.h>
 #include <WiFi.h>
 #include "config.h"
 #include "globals.h"
+#include "status_led.h"
 #include "params.h"
 #include "units.h"
 #include "wifi_mqtt.h"
+#include "wifi_ap.h"
 #include "web_api.h"
 #include "history.h"
 #include "series.h"
@@ -80,6 +87,7 @@ extern SPIClass* hspi;
 #include "portal.h"
 #include "serial_log.h"
 #include "partition_check.h"
+#include "gnss.h"
 #include "time_sync.h"
 #include "wx_upload.h"
 #include "system_restart.h"
@@ -87,6 +95,8 @@ extern SPIClass* hspi;
 #include "low_power.h"
 #include "lora_transport.h"
 #include "wind_window.h"
+#include "vs_run.h"
+#include "net_sensor.h"
 #include "rf_sensors.h"
 #include "sources.h"
 #include "calibration.h"
@@ -94,6 +104,8 @@ extern SPIClass* hspi;
 #include "astro.h"
 #include "alarms.h"
 #include "oled_screens.h"
+#include "button_logic.h"
+#include <esp_random.h>
 #include "custom_upload.h"
 #include "out_status.h"
 #include "loxone.h"
@@ -105,7 +117,6 @@ extern SPIClass* hspi;
 // ============================================================================
 // Start + duration rather than an absolute end time, so the timeout stays
 // correct across the millis() wrap (every 49.7 days).
-static constexpr int PIN_HEARTBEAT_LED = 35;   // Heltec V3 / V4 white LED
 
 static bool          displayActive    = false;
 static unsigned long displayOnSinceMs = 0;
@@ -117,15 +128,65 @@ static int           displayContrast  = -1;
 
 static void drawDisplay();
 
+// Screensaver (screensaver.h, Settings -> Display): every saverMin minutes it takes over the display
+// for saverSec seconds. Frames are rendered straight into the driver's buffer (no RAM of its own),
+// one per SAVER_FRAME_MS from the loop; any PRG press ends it.
+static bool          saverRunning = false;
+static unsigned long saverStartMs = 0, saverLastMs = 0, saverFrameMs = 0;
+static SaverScene    saverScene;
+constexpr unsigned long SAVER_FRAME_MS = 120;
+
+static void saverFrame()
+{
+    unsigned long el = millis() - saverStartMs;
+    const unsigned long dur = (unsigned long)gCfg.saverSec * 1000UL;
+    if (el > dur) el = dur;
+    saverRender(saverScene, (uint32_t)el, (uint32_t)dur, display.buffer);
+    display.display();
+    saverFrameMs = millis();
+}
+
+// Ends a takeover (time up, key press, display off); redraw = bring the normal screen back
+static void saverStop(bool redraw)
+{
+    if (!saverRunning) return;
+    saverRunning = false;
+    saverLastMs  = millis();
+    displayScreenMs = millis();   // the restored screen gets its full rotation time
+    if (redraw && displayActive) { drawDisplay(); display.display(); }
+}
+
+static void saverPoll()
+{
+    if (saverRunning) {
+        if (!displayActive || gCfg.saverMode == SV_OFF || millis() - saverStartMs >= (unsigned long)gCfg.saverSec * 1000UL) saverStop(true);
+        else if (millis() - saverFrameMs >= SAVER_FRAME_MS) saverFrame();
+        return;
+    }
+    if (gCfg.saverMode == SV_OFF || !displayActive) return;
+    if (millis() - saverLastMs < (unsigned long)gCfg.saverMin * 60000UL) return;
+    SaverInput in;
+    if (gCfg.saverMode == SV_FIGURE) oledSaverInput(in);
+    saverScene   = saverStart((uint8_t)gCfg.saverMode, in, esp_random());
+    saverRunning = true;
+    saverStartMs = millis();
+    saverFrame();
+}
+
 // Switches the display on and redraws the latest values - turning it on
 // alone would show whatever was drawn last (possibly hours-old data or the
-// "LoRaWAN Join..." screen). A PRG press: 20 s, or the configured minutes
-// in mode 2 (Settings → Display).
+// "LoRaWAN Join..." screen). A PRG press: 20 s, the configured minutes
+// in mode 2, always on in mode 1 outside the night hours (Settings → Display).
+static bool displayNight();
 static void activateDisplay(unsigned long durationMs = 20000)
 {
     if (durationMs == 20000 && gCfg.dispMode == 2) durationMs = (unsigned long)gCfg.dispMinutes * 60000UL;
-    if (!displayActive || !(gCfg.dispScreens & (1 << displayScreen)))
-        displayScreen = oledNextScreen(OS_COUNT - 1, gCfg.dispScreens);   // the first enabled screen
+    if (durationMs == 20000 && gCfg.dispMode == 1 && !displayNight()) durationMs = 0xFFFFFFFFUL;   // "always on" stays on
+    const uint16_t mask = oledScreenMask();
+    if (!displayActive || !(mask & (1 << displayScreen)))   // the first enabled screen; the Wi-Fi QR code first while the own AP runs
+        displayScreen = (mask & (1 << OS_QR)) ? (uint8_t)OS_QR : oledNextScreen(OS_COUNT - 1, mask);
+    if (!displayActive) saverLastMs = millis();   // the first takeover a full interval after switching on
+    saverRunning     = false;
     displayActive    = true;
     displayOnSinceMs = millis();
     displayOnForMs   = durationMs;
@@ -162,13 +223,14 @@ static void updateDisplayState()
     }
     if (displayActive && displayOnForMs != 0xFFFFFFFFUL && millis() - displayOnSinceMs >= displayOnForMs) {
         displayActive = false;
+        saverRunning = false;
         display.displayOff();
         return;
     }
     // rotation through the enabled screens
-    if (displayActive && millis() - displayScreenMs >= (unsigned long)gCfg.dispRotateSec * 1000UL) {
+    if (displayActive && !saverRunning && millis() - displayScreenMs >= (unsigned long)gCfg.dispRotateSec * 1000UL) {
         displayScreenMs = millis();
-        const uint8_t next = oledNextScreen(displayScreen, gCfg.dispScreens);
+        const uint8_t next = oledNextScreen(displayScreen, oledScreenMask());
         if (next != displayScreen || displayScreen != OS_CLASSIC) {   // the classic screen alone: redrawn per cycle as before
             displayScreen = next;
             drawDisplay();
@@ -177,29 +239,11 @@ static void updateDisplayState()
     }
 }
 
-// Heartbeat LED (Settings → Display): the Heltec's white LED on GPIO35
-// flashes for 40 ms every 2 s while the loop runs - a hanging loop (or a
-// crash) stops it, the display can stay off. Not on a V4-R8 (GPIO35 belongs
-// to its octal PSRAM). The PCBs do not use GPIO35.
-static void heartbeatPoll()
-{
-    static bool pinSet = false, on = false;
-    static unsigned long lastMs = 0;
-    const bool wanted = gCfg.dispLed && !boardIsR8();
-    if (!wanted) {
-        if (pinSet && on) { digitalWrite(PIN_HEARTBEAT_LED, LOW); on = false; }
-        return;
-    }
-    if (!pinSet) { pinMode(PIN_HEARTBEAT_LED, OUTPUT); pinSet = true; }
-    const unsigned long now = millis();
-    if (!on && now - lastMs >= 2000) { digitalWrite(PIN_HEARTBEAT_LED, HIGH); on = true; lastMs = now; }
-    else if (on && now - lastMs >= 40) { digitalWrite(PIN_HEARTBEAT_LED, LOW); on = false; }
-}
-
 // ============================================================================
 // BUTTON HANDLER (GPIO 0, active LOW)
-//   Short press (< 3 s, on release) → turn display on for 20 s
+//   Short press (< 3 s, on release) → next screen, or turn the display on for 20 s
 //   Long press  (≥ 3 s)            → open config portal, then restart
+//   (decision in button_logic.h)
 //
 // Note: GPIO0 must NOT be held during power-on/reset (triggers bootloader).
 //       The portal is therefore only opened via long press during operation,
@@ -278,8 +322,9 @@ static void openPortalSaveAndRestart(bool showStartScreen = true)
     // watchdog resetting the device mid-session, before saveConfig() is ever
     // reached. Since every portal exit leads to ESP.restart() regardless of
     // outcome, there's no need to re-subscribe afterward. Harmless no-op if
-    // this is the first-boot call, where the task was never subscribed yet.
-    esp_task_wdt_delete(nullptr);
+    // this is the first-boot call, where the task was never subscribed yet
+    // (checked first: ESP-IDF 5 logs an error for an unsubscribed task).
+    if (esp_task_wdt_status(nullptr) == ESP_OK) esp_task_wdt_delete(nullptr);
     runConfigPortal(gCfg);
     gCfg.provisioned = 1;
     saveConfig(gCfg);
@@ -291,57 +336,37 @@ static void openPortalSaveAndRestart(bool showStartScreen = true)
     systemRestart("config portal closed");
 }
 
+// A short press: the next screen while the display is on with several screens, else switch it on
+static void shortPress()
+{
+    const uint16_t mask = oledScreenMask();
+    if (!displayActive || !(mask & (mask - 1))) { activateDisplay(20000); return; }
+    displayScreen = oledNextScreen(displayScreen, mask);
+    displayScreenMs = millis();
+    if (displayOnForMs != 0xFFFFFFFFUL) displayOnSinceMs = millis();   // and stays on a while longer
+    drawDisplay();
+    display.display();
+}
+
 static void handleButton()
 {
-    static unsigned long pressedAtMs = 0;
-    static bool          longFired   = false;
+    static ButtonLogic button;
 
     // Take the ISR's events atomically (check-then-clear could drop an edge)
     portENTER_CRITICAL(&buttonMux);
-    bool          pressEvent   = isrPressEvent;
-    bool          releaseEvent = isrReleaseEvent;
-    unsigned long pressMs      = isrPressedAtMs;
-    unsigned long releaseMs    = isrReleasedAtMs;
-    isrPressEvent = isrReleaseEvent = false;
+    const bool          pressEvent   = isrPressEvent;
+    const bool          releaseEvent = isrReleaseEvent;
+    const unsigned long pressMs      = isrPressedAtMs;
+    const unsigned long releaseMs    = isrReleasedAtMs;
+    isrPressEvent = false;
+    isrReleaseEvent = false;
     portEXIT_CRITICAL(&buttonMux);
 
-    // Both pending: a release older than the press belongs to the previous press.
-    if (pressEvent && releaseEvent && (long)(releaseMs - pressMs) < 0) {
-        if (!longFired && (releaseMs - pressedAtMs) < 3000) {
-            // already on with several screens: the press shows the next one
-            const uint8_t mask = (uint8_t)gCfg.dispScreens;
-            if (displayActive && (mask & (mask - 1))) {
-                displayScreen = oledNextScreen(displayScreen, mask);
-                displayScreenMs = millis();
-                if (displayOnForMs != 0xFFFFFFFFUL) displayOnSinceMs = millis();   // and stays on a while longer
-                drawDisplay();
-                display.display();
-            } else {
-                activateDisplay(20000);
-            }
-        }
-        releaseEvent = false;
-    }
-
-    // Press event (falling edge)
-    if (pressEvent) {
-        pressedAtMs = pressMs;
-        longFired   = false;
-    }
-
-    // Release event (rising edge)
-    if (releaseEvent) {
-        if (!longFired && (releaseMs - pressedAtMs) < 3000) {
-            activateDisplay(20000);
-        }
-    }
-
-    // Long press: button currently held for ≥ 3 s
-    if (!longFired && pressedAtMs > 0 && (digitalRead(BUTTON) == LOW)
-            && (millis() - pressedAtMs >= 3000)) {
-        longFired = true;
-        openPortalSaveAndRestart();
-    }
+    const uint8_t act = button.step(pressEvent, pressMs, releaseEvent, releaseMs, saverRunning,
+                                    digitalRead(BUTTON) == LOW, millis());
+    if ((act & BTN_SAVER_STOP) || ((act & BTN_SHORT) && saverRunning)) saverStop(true);   // a press during a takeover only ends it
+    else if (act & BTN_SHORT) shortPress();
+    if (act & BTN_LONG) openPortalSaveAndRestart();
 }
 
 // ============================================================================
@@ -422,7 +447,7 @@ static void resetPath(int idx, unsigned long now)
 }
 
 // One wind sample (every sampleSec). Also collects the rain pulses and
-// runs the PCB v2.0 I/O sampling (AUX analog, 2nd anemometer, outputs).
+// runs the V4 Full I/O sampling (AUX analog, 2nd anemometer, outputs).
 static void takeWindSample()
 {
     PulseSample ps = readPulseCounters();   // also adds rain to rainMMSinceStart
@@ -432,7 +457,7 @@ static void takeWindSample()
         // filter (330R + 10k + up to 5k wiper, 1 uF: tau ~15 ms) starts fully
         // discharged and needs ~6 tau for < 0.3 % error (spent in light sleep).
         // Otherwise the supply stays on (also after leaving low-power mode).
-        bool vaneSwitched = lowPowerActive() && ioV2() && gCfg.vanePowerSave;
+        bool vaneSwitched = lowPowerActive() && boardPcbAllowed() && gCfg.vanePowerSave;
         if (vaneSwitched) { windVaneSupply(true); lowPowerSleep(100); }
         else windVaneSupply(true);
         uint16_t dir = readWindDirection();
@@ -442,7 +467,7 @@ static void takeWindSample()
             for (int i = 0; i < PATH_COUNT; i++) windAcc[i].add(ps.windPulses, ps.elapsedMs, dir, true, gust);
         }
     }
-    ioSample();   // PCB v2.0: AUX analog input, 2nd anemometer, fan state for the stall check
+    ioSample();   // V4 Full: AUX analog input, 2nd anemometer, fan state for the stall check
     windSampleCount++;
 }
 
@@ -659,6 +684,8 @@ static bool sendLoRa()
     if (clockWrapped) loRaNode->setDutyCycle(false);
     int16_t state = loRaNode->sendReceive(txBuf, txLen, txPort, downlinkData, &lenDown, false, &evUp, &evDown);
     if (clockWrapped) loRaNode->setDutyCycle(true);
+    // the same 1 % band as the virtual sensors (vsensor.h): they only use what is left
+    if (state != RADIOLIB_ERR_UPLINK_UNAVAILABLE) vsNoteLoraAirtime((uint32_t)loRaNode->getLastToA());
 
     if (state == RADIOLIB_ERR_UPLINK_UNAVAILABLE) {
         unsigned long waitS = (unsigned long)(loRaNode->timeUntilUplink() / 1000);
@@ -683,6 +710,15 @@ static bool sendLoRa()
         gLoraDiag.txPowerDbm = evUp.power;
         gLoraDiag.fCntUp     = loRaNode->getFCntUp();
         gLoraDiag.devAddr    = loRaNode->getDevAddr();
+    }
+    if (state > 0) {
+        // DeviceTimeAns, if this downlink has one (the request may have
+        // waited several uplinks for a downlink). RadioLib: Unix seconds
+        // (GPS epoch + 315964800 - 18 leap seconds) + ms, already advanced
+        // from the end of the uplink to now; it clears the buffer per uplink.
+        uint32_t unixSec = 0;
+        uint16_t ms = 0;
+        if (loRaNode->getMacDeviceTimeAns(&unixSec, &ms, true) == RADIOLIB_ERR_NONE) loraTimeAnswer(unixSec, ms);
     }
     if (state > 0) {
         gLoraDiag.haveDownlink   = true;
@@ -736,11 +772,12 @@ static bool sendLoRa()
 // ============================================================================
 static void drawDisplay()
 {
+    if (saverRunning) return;   // the screensaver owns the buffer
     char buf[64];
     display.clear();
     if (displayScreen != OS_CLASSIC) {
         oledDrawScreen(display, displayScreen);
-        if (gCfg.dispBattery) {   // top right, over the end of the title line
+        if (gCfg.dispBattery && displayScreen != OS_QR) {   // top right, over the end of the title line (the QR screen has none: the SSID)
             if (batteryVolt < BATTERY_PRESENT_V) snprintf(buf, sizeof(buf), "USB");
             else                                 snprintf(buf, sizeof(buf), "%.2fV", batteryVolt);
             display.setFont(ArialMT_Plain_10);
@@ -771,16 +808,14 @@ static void drawDisplay()
         snprintf(buf, sizeof(buf), "#%d", loopCount);
     display.drawString(0, OLED_ROW[1], buf);
 
-    if (gSrc.tempValid && gSrc.pressValid)
-        snprintf(buf, sizeof(buf), "%.1f%s  %.1f%%rH  %.0f%s",
-                 temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg),
-                 gSrc.humidity,
-                 pressureForOutput(gSrc.pressAbsHpa, gCfg), pressureUnitLabel(gCfg));
-    else if (gSrc.tempValid)
-        snprintf(buf, sizeof(buf), "%.1f%s  %.1f%%rH (radio)",
-                 temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg), gSrc.humidity);
-    else
+    if (gSrc.tempValid) {   // humidity only when its source has a fresh value (temperature-only sensors)
+        int n = snprintf(buf, sizeof(buf), "%.1f%s", temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg));
+        if (gSrc.humValid) n += snprintf(buf + n, sizeof(buf) - n, "  %.1f%%rH", gSrc.humidity);
+        if (gSrc.pressValid) snprintf(buf + n, sizeof(buf) - n, "  %.0f%s", pressureForOutput(gSrc.pressAbsHpa, gCfg), pressureUnitLabel(gCfg));
+        else                 snprintf(buf + n, sizeof(buf) - n, " (radio)");
+    } else {
         snprintf(buf, sizeof(buf), "no BME280");
+    }
     display.drawString(0, OLED_ROW[2], buf);
 
     if (gIo.veValid && !isnan(gIo.ve.battV)) {
@@ -803,6 +838,7 @@ static void drawDisplay()
     if (!gCfg.loraEn) {
         if (!gCfg.wifiEn)               snprintf(buf, sizeof(buf), "WiFi off");
         else if (wifiIsConnected())     snprintf(buf, sizeof(buf), "http://%s", WiFi.localIP().toString().c_str());
+        else if (apIsActive())          snprintf(buf, sizeof(buf), "AP http://%s", AP_IP_TEXT);
         else                            snprintf(buf, sizeof(buf), "WiFi: connecting...");
         display.drawString(0, OLED_ROW[4], buf);
         if (gCfg.rfEn) {
@@ -849,8 +885,24 @@ static const char* resetReasonText(esp_reset_reason_t r)
         case ESP_RST_DEEPSLEEP: return "deep-sleep wake";
         case ESP_RST_BROWNOUT:  return "brownout (supply voltage dip)";
         case ESP_RST_SDIO:      return "SDIO reset";
+        case ESP_RST_USB:       return "USB reset (e.g. after flashing)";
+        case ESP_RST_JTAG:      return "JTAG reset";
+        case ESP_RST_PWR_GLITCH: return "power glitch";
+        case ESP_RST_CPU_LOCKUP: return "CPU lockup";
         default:                return "unknown";
     }
+}
+
+// Makes the firmware in the other OTA slot the one to boot: only if it is a
+// valid image of the 2.x line (its app descriptor carries the Arduino core's
+// project name, ours our own - so two copies of this firmware never alternate).
+static bool selectPreviousFirmware()
+{
+    const esp_partition_t* other = esp_ota_get_next_update_partition(nullptr);
+    esp_app_desc_t desc;
+    if (!other || other == esp_ota_get_running_partition() || esp_ota_get_partition_description(other, &desc) != ESP_OK) return false;
+    if (!strncmp(desc.project_name, esp_app_get_description()->project_name, sizeof(desc.project_name))) return false;
+    return esp_ota_set_boot_partition(other) == ESP_OK;   // verifies the image
 }
 
 void setup()
@@ -859,28 +911,63 @@ void setup()
     // Heltec V3 / V4 by flash size (heltec_board.h); applied after loadConfig()
     boardDetectHardware();
     // Watchdog: 120 s timeout – catches hanging joins and blocked sends
-    esp_task_wdt_init(120, true);
+    // (ESP-IDF 5: the core already started it with 5 s - reconfigure; the
+    // idle tasks stay watched as configured in the core's sdkconfig)
+    {
+        esp_task_wdt_config_t wdt = {};
+        wdt.timeout_ms = 120000;
+        wdt.trigger_panic = true;
+#if CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0
+        wdt.idle_core_mask |= 1u << 0;
+#endif
+#if CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1
+        wdt.idle_core_mask |= 1u << 1;
+#endif
+        if (esp_task_wdt_reconfigure(&wdt) == ESP_ERR_INVALID_STATE) esp_task_wdt_init(&wdt);
+    }
 
     // Enable VEXT (GPIO36, active-LOW) before heltec_setup() so the display
     // already has power when the RST pulse is issued.
     heltec_ve(true);
 
-    // heltec_setup() begins UART0 (Serial.begin) - only on a V3. On a V4 the
-    // same steps without it, and the log over the native USB (heltec_board.h
-    // boardUseUart0(): GPIO43/44 are 1-Wire / wind speed on PCB v2.0).
-    if (boardUseUart0(gBoard.detected)) {
-        heltec_setup();
-    } else {
-        serialLogUseUsb();
-        hspi->begin(SCK, MISO, MOSI, SS);
-        heltec_display_power(true);
-        display.init();
-        display.setContrast(255);
-        display.flipScreenVertically();
+    // The steps of heltec_setup() without its Serial.begin() on UART0: the
+    // V4 logs over its native USB (GPIO43/44 are 1-Wire / wind speed on
+    // the V4 Full / V4 Light).
+    serialLogUseUsb();
+    hspi->begin(SCK, MISO, MOSI, SS);
+    heltec_display_power(true);
+    display.init();
+    display.setContrast(255);
+    display.flipScreenVertically();
+
+    // Heltec V4 with this line's partition table only (heltec_board.h): on a V3,
+    // a V4-R8 or a node with the 2.x table (the .bin uploaded over the air in
+    // 2.x) a clear message - no radio, no Wi-Fi, no settings written - and back
+    // to the 2.x firmware in the other slot.
+    boardLog();
+    const bool tableOk = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "history") != nullptr;
+    if (!boardSupported() || !tableOk) {
+        const bool back = selectPreviousFirmware();
+        display.clear();
+        display.setFont(ArialMT_Plain_10);
+        display.drawString(0, 0, boardSupported() ? "USB installation needed" : "Heltec V4 needed");
+        display.drawString(0, 12, boardSupported() ? "use the -factory.bin" : boardIsR8() ? "V4-R8: not supported" : "V3: use firmware 2.x");
+        display.drawString(0, 24, "github.com/franzenhof/");
+        display.drawString(0, 36, "universal-weather-node");
+        if (back) display.drawString(0, 48, "-> back to firmware 2.x");
+        display.display();
+        for (;;) {
+            dbgSerial.println(boardSupported() ? "This node has the 2.x partition table: install this firmware over USB with the -factory.bin."
+                                               : "This firmware needs a Heltec WiFi LoRa 32 V4 (ESP32-S3R2). A V3 runs firmware 2.x.");
+            if (back) dbgSerial.println("Restarting with the previous firmware.");
+            delay(10000);
+            if (back) ESP.restart();
+        }
     }
 
-    // PSRAM (V4) or not - the log line, and the large buffers go there if it runs
+    // PSRAM: the log line, the log ring moves there (64 KB), the large buffers follow
     psramLogStatus(gBoard.psramCap);
+    if (!serialLogUsePsram()) dbgSerial.println("Log: no PSRAM for the 64-KB log - 4 KB in internal RAM");
     {
         void* w = bigAlloc(sizeof(WindRing));
         if (!w) abort();   // ~5 KB right after the start: cannot fail on a working board
@@ -923,28 +1010,29 @@ void setup()
     // Foreign data in cfgdata (another firmware flashed before, factory image
     // without erasing the chip): erase that partition, start like a new node.
     cfgdataPrepare();
+    // Reset history (reset_history.h): this start's cause, the uptime before
+    // it, and for a crash the core dump's summary - one NVS write
+    resetHistoryBoot();
 
     // Load config and set CPU frequency
     loadConfigInto(gCfg);   // straight into gCfg (still the defaults here): no 7-KB temporary on the stack
+    lsLoad();               // the logical sensor table (lsensors.h, ★ sensors)
+    seriesLoad();           // the custom series (series.h; PSRAM known by now)
+    vsSettingsLoad();       // the virtual sensors (vs_store.h, PSRAM)
     setCpuFrequencyMhz(gCfg.cpuFreqMhz);
-    historySeriesConfigure(gCfg.series, seriesLimit());   // custom series rings (PSRAM known by now)
+    historySeriesConfigure(seriesDefs(), seriesLimit());   // custom series rings
 
-    // Board in effect (setting or detection) and, on a V4, its RF front end -
-    // before anything uses the radio.
-    boardApply(gCfg.boardSel);
+    // The RF front end - before anything uses the radio.
     femInit();
 
-    // PCB v2.0 revision ID (ADC2: before WiFi/the portal) - V3 GPIO20, V4
-    // GPIO15 (its V4 sockets). A v2.0 board always runs as v2.0; without an
-    // ID the stored revision applies on a V3 (2.0 can also be set manually),
-    // a V4 without it runs the PCB-less build: its wind/rain inputs would
-    // collide with the FEM pins, they stay off in RAM (the stored settings
-    // are not changed here).
-    if (detectPcbV2() && boardPcbAllowed()) gCfg.pcbVersion = PCB_REV_2_0;
-    else if (gCfg.pcbVersion == PCB_REV_2_0 && !boardIsV4())
-        dbgSerial.println("PCB v2.0 set manually (no revision ID read).");
+    // PCB revision ID on GPIO15 (ADC2: before WiFi/the portal): V4 Full or
+    // V4 Light. Without it the node runs as a wireless station: the PCB
+    // inputs would collide with the FEM pins, they stay off in RAM (the
+    // stored settings are not changed here). The V4 Light has no I/O block:
+    // board_io ignores those settings (ioFull()).
+    gCfg.pcbVersion = detectPcb();
     if (!boardPcbAllowed()) { gCfg.windEn = 0; gCfg.rainEn = 0; }
-    // v2.0: R38 holds the vane supply off until the firmware switches it on -
+    // V4 Full / Light: the gate pull-up holds the vane supply off until the firmware switches it on -
     // before the first-boot portal, whose calibration wizard reads the vane.
     windVaneSupply(true);
 
@@ -977,16 +1065,18 @@ void setup()
     }
 
     // Revision-dependent pins
-    PinSet pins = getPins(gCfg.pcbVersion);
+    PinSet pins = getPins();
     if (boardPcbAllowed())
-        dbgSerial.printf("Heltec %s on PCB rev %d: Wind=GPIO%d, Rain=GPIO%d, 1-Wire=GPIO%d, wind direction=GPIO%d\n",
-                      boardName(gBoard.kind), gCfg.pcbVersion, pins.windSpeed, pins.rain, pins.oneWire, windDirPin());
+        dbgSerial.printf("Heltec V4 on PCB %s: Wind=GPIO%d, Rain=GPIO%d, 1-Wire=GPIO%d, wind direction=GPIO%d%s\n",
+                      boardPcbName(), pins.windSpeed, pins.rain, pins.oneWire, windDirPin(),
+                      boardPcbFull() ? "" : " - no I/O block (heater, fan, AUX, UV, VE.Direct)");
     else
-        dbgSerial.println("Heltec V4 without PCB (no revision ID on GPIO15): wireless build - PCB inputs (wind, rain, 1-Wire, I/O block) disabled.");
+        dbgSerial.println("Heltec V4 without PCB (no revision ID on GPIO15): wireless station - PCB inputs (wind, rain, 1-Wire, I/O block) disabled.");
 
     // BME280, 1-Wire, PCNT counters, bus1Temps[] init
     sensorsInit(pins);
-    ioInit();   // PCB v2.0 I/O block (outputs off, enabled inputs started)
+    gnssSetup();   // V4 without PCB, GNSS on: module supply, UART1, PPS (after the BME280 probe: 41/42)
+    ioInit();   // V4 Full I/O block (outputs off, enabled inputs started)
 
     {
         unsigned long t = millis();
@@ -1025,11 +1115,16 @@ void setup()
 void loop()
 {
     esp_task_wdt_reset();
+    resetHistoryLoop();   // heartbeat in RTC RAM: uptime / time before a reset
+    crashTestPoll();      // deliberate crash (admin, Settings -> System -> Diagnostics)
+    storageResetPoll();   // reset settings / erase everything (Settings -> System, downlink 0xFF, MQTT), ends in a restart
     handleButton();
     updateDisplayState();
-    heartbeatPoll();
+    saverPoll();
+    statusLedPoll();
     wifiMqttPoll();   // non-blocking; no-op unless wifiEn is set
-    ioPoll();         // PCB v2.0: VE.Direct, pulse counters, outputs
+    ioPoll();         // V4 Full: VE.Direct, pulse counters, outputs
+    gnssPoll();       // GNSS module: NMEA from UART1 (no-op unless on)
     timeSyncPoll();   // starts SNTP once WiFi is first up
     loxonePoll();     // Loxone host name: asynchronous DNS, no waiting
     alarmsPoll();     // alarm rules, every 30 s (alarms.h)
@@ -1111,7 +1206,9 @@ void loop()
     if (sendPending && pollOneWireConversion()) {
         sendPending = false;
         const unsigned long cycleEnd = lastSendMs;
+        seriesCycle();   // the custom series' values of this cycle (series.h): for the outputs below and the history
 
+        oledSaverNoteCycle();
         if (displayActive) drawDisplay();
 
         // LoRaWAN: its own window, values as configured (interval / 10 min)
@@ -1121,6 +1218,10 @@ void loop()
         if (gCfg.loraEn && !davisLoraPaused() && !otaUploadActive() && pathDue(PATH_LORA, cycleEnd, loraEffMs, baseMs)) {
             if (loraReady()) {
                 PathValues lv = pathValues(PATH_LORA, gCfg.loraWindAgg, cycleEnd);
+                // Network time (LoRaWAN 1.0.3 DeviceTimeReq, 1 byte in FOpts)
+                // when due (time_sync.h); before the size limit, which counts
+                // the FOpts. RadioLib keeps it queued until a downlink comes.
+                if (loraTimeRequestDue()) loRaNode->sendMacCommandReq(RADIOLIB_LORAWAN_MAC_DEVICE_TIME);
                 // Largest payload the current data rate allows (ADR can switch to
                 // SF12 = 51 bytes on EU868); the builders leave out the least
                 // important fields until the packet fits.
@@ -1138,7 +1239,7 @@ void loop()
             // the next uplink - RadioLib wakes it again on the next command.
             if (lowPowerActive()) loraSleep();
         }
-        if (displayActive) {
+        if (displayActive && !saverRunning) {   // during a takeover the uplink lines stay out of its frame (the next frame overwrites them)
             if (displayScreen != OS_CLASSIC) drawDisplay();   // the uplink lines belong to the classic screen only
             display.display();
         }
@@ -1163,16 +1264,11 @@ void loop()
         if (!loxOn)       resetPath(PATH_LOX, cycleEnd);
 
         historyStoreCycle();   // restore after the clock sync / save every 24 h (history.h)
-        {   // base cycle values for the dashboard history, with the custom series (series.h)
-            float sv[SERIES_MAX];
-            bool  sok[SERIES_MAX];
-            seriesCycleValues(sv, sok);
-            pushHistorySample(sv, sok);
-        }
-        recordsCycle();        // extremes (records.h)
+        pushHistorySample(seriesNowValues(), seriesNowOk());   // base cycle values for the dashboard history, with the custom series
         astroCycle();          // sun / moon times of the day (astro.h)
         wxUploadPushCycle(calWind(srcIsRadio(SG_WIND) ? srcRfWind(PATH_BASE, true)
                                                       : windRing->stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps)));
+        recordsCycle();        // extremes (records.h); after the cycle's rain is in "rain today"
         resetPath(PATH_BASE, cycleEnd);
         loopCount++;
 
@@ -1188,6 +1284,11 @@ void loop()
     // Wireless sensors: restart FSK reception after LoRaWAN used the SX1262,
     // decode received packets (non-blocking; no-op unless rfEn).
     rfSensorsLoop();
+    // Network sensors (net_sensor.h): values received over MQTT / REST into the sensor table
+    netLoop();
+    // Virtual sensors (vs_run.h): own values as Fine Offset frames, between
+    // the receive phases, never during an uplink (same task).
+    vsLoop();
 
     // Low-power mode: light sleep until the next sub-sample / uplink (VE.Direct
     // needs ~2.5 s awake before an uplink to catch a frame); otherwise a short yield.

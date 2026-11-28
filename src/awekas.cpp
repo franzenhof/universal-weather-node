@@ -40,7 +40,7 @@ size_t awekasVal(const AwekasData& d, char* out, size_t len)
     num(d.hasPress, "%.1f", d.pressureHpa);                           // 7
     num(d.hasRain,  "%.2f", d.dailyRainMm);                           // 8
     num(d.hasWind,  "%.1f", d.windKmh);                               // 9
-    num(d.hasWind,  "%.0f", (double)d.dirDeg);                        // 10
+    num(d.hasWind && d.hasDir, "%.0f", (double)d.dirDeg);             // 10
     b.add(";;;");                                                     // 11 condition, 12 warning text, 13 snow height
     b.add("en;");                                                     // 14 language
     num(d.hasTendency, "%.0f", (double)d.tendency);                   // 15

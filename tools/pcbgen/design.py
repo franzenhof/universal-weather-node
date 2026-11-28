@@ -1,9 +1,9 @@
-# universal-weather-node hardware v2.0: KiCad/SMD design data, derived from the
+# Weather Node V4 Full (formerly hardware v2.0): KiCad/SMD design data, derived from the
 # Rev 1.3 Fritzing netlist (pcblayout/universal-weather-node-pcb.fzz) - same GPIOs,
 # same signal conditioning - plus wide-range input, parallel screw terminals,
 # AUX inputs, HW revision ID, test points and expansion header.
-# Double socket: Heltec WiFi LoRa 32 V3 (J1/J2) or V4 (J19/J20 + P4 socket J21);
-# every function net reaches its GPIO on both socket sets, only one set is populated.
+# Weather Node V4 Full Rev 1.0: Heltec WiFi LoRa 32 V4 only (J19/J20 + P4 socket J21). The V3
+# socket set J1/J2 of v2.0 was removed (V3 builds: v2.0 files in the 2.x branch / release 2.0.0).
 # Each part: ref, (lib, symbol), value, footprint, {pin: net|None}, placement key, block
 R0805 = "Resistor_SMD:R_0805_2012Metric"
 R2512 = "Resistor_SMD:R_2512_6332Metric"
@@ -29,34 +29,22 @@ def P(ref, sym, value, fp, pins, place, block, desc="", lcsc_key=None, dnp=False
     PARTS.append(dict(ref=ref, sym=sym, value=value, fp=fp, pins=pins, place=place,
                       block=block, desc=desc, lcsc_key=lcsc_key or value, dnp=dnp))
 
-# ---------------- Heltec WiFi LoRa 32 V3 (GPIOs as on Rev 1.3) -------------------
-j1 = {str(i): None for i in range(1, 19)}
-j1.update({"1": "GND", "2": "+5V", "11": "VE_TX_MCU", "12": "VE_RX_MCU", "13": "GPIO47", "14": "PULSE_OUT", "17": "HW_ID", "18": "VANE_EN"})
-P("J1", conn(18), "Heltec V3 header (5V side)", SOCK18, j1, None, "MCU",
-  "V3 socket set only. Heltec V3 pins: 1 GND, 2 5V, 11 GPIO34, 12 GPIO33, 13 GPIO47, 14 GPIO48, 17 GPIO20, 18 GPIO19", lcsc_key="SOCK18")
-j2 = {str(i): None for i in range(1, 19)}
-j2.update({"1": "GND", "2": "3V3_HELTEC", "3": "3V3_HELTEC", "7": "SCL", "8": "SDA", "9": "TACH_OUT", "10": "FAN_PWM", "11": "HEAT_PWM", "13": "WDIR_ADC", "14": "UV_ADC",
-           "15": "AIN_ADC", "16": "ONEWIRE_IO", "17": "WSPD_OUT", "18": "RAIN_OUT"})
-P("J2", conn(18), "Heltec V3 header (3V3 side)", SOCK18, j2, None, "MCU",
-  "V3 socket set only. Heltec V3 pins: 1 GND, 2/3 3V3, 7 GPIO42, 8 GPIO41, 9 GPIO40, 10 GPIO39, 11 GPIO38, 13 GPIO2, 14 GPIO3, 15 GPIO4, 16 GPIO5, 17 GPIO6, 18 GPIO7",
-  lcsc_key="SOCK18")
-
-# ---------------- Heltec WiFi LoRa 32 V4 (V4.2 / V4.3): second socket set ------------
-# Rows 2.54 mm towards J1 (5V-side row outside J1, 3V3-side row inside J2); the V4's
+# ---------------- Heltec WiFi LoRa 32 V4 (V4.2 / V4.3) ----------------------------------
+# Rows at the former V4 position of v2.0 (2.54 mm off the old V3 rows); the V4's
 # extra pins P4 (GPIO15/16) get a 1x2 socket one pitch beyond pin 18 (STEP position).
 # Left unconnected on purpose: 2/7 (+5/46) RF front end, 19/20 native USB, 26 PSRAM,
-# 0/1/21/35/36/37 module functions (as on the V3).
+# 0/1/21/35/36/37 module functions.
 j19 = {str(i): None for i in range(1, 19)}
 j19.update({"1": "GND", "2": "+5V_V4", "5": "WSPD_OUT", "6": "ONEWIRE_IO", "11": "VANE_EN", "12": "VE_RX_MCU",
             "13": "GPIO47", "14": "PULSE_OUT"})
 P("J19", conn(18), "Heltec V4 header (5V side)", SOCK18, j19, None, "V4",
-  "V4 socket set only. Heltec V4 pins: 1 GND, 2 VBUS (via U8/U9), 5 GPIO44, 6 GPIO43, 11 GPIO34, 12 GPIO33, 13 GPIO47, 14 GPIO48; 17/18 = USB D+/D- stay open",
+  "Heltec V4 pins: 1 GND, 2 VBUS (via U8/U9), 5 GPIO44, 6 GPIO43, 11 GPIO34, 12 GPIO33, 13 GPIO47, 14 GPIO48; 17/18 = USB D+/D- stay open",
   lcsc_key="SOCK18")
 j20 = {str(i): None for i in range(1, 19)}
 j20.update({"1": "GND", "2": "3V3_HELTEC", "3": "3V3_HELTEC", "6": "VE_TX_MCU", "7": "SCL", "8": "SDA", "9": "TACH_OUT",
             "10": "FAN_PWM", "11": "HEAT_PWM", "14": "UV_ADC", "15": "AIN_ADC", "17": "WDIR_ADC"})
 P("J20", conn(18), "Heltec V4 header (3V3 side)", SOCK18, j20, None, "V4",
-  "V4 socket set only. Heltec V4 pins: 1 GND, 2/3 3V3, 6 GPIO45, 7 GPIO42, 8 GPIO41, 9 GPIO40, 10 GPIO39, 11 GPIO38, 14 GPIO3, 15 GPIO4, 17 GPIO6; 5/13/16/18 (GPIO46/2/5/7) stay open",
+  "Heltec V4 pins: 1 GND, 2/3 3V3, 6 GPIO45, 7 GPIO42, 8 GPIO41, 9 GPIO40, 10 GPIO39, 11 GPIO38, 14 GPIO3, 15 GPIO4, 17 GPIO6; 5/13/16/18 (GPIO46/2/5/7) stay open",
   lcsc_key="SOCK18")
 P("J21", conn(2), "Heltec V4 P4 (GPIO15/16)", "Connector_PinSocket_2.54mm:PinSocket_1x02_P2.54mm_Vertical",
   {"1": "HW_ID", "2": "RAIN_OUT"}, None, "V4",
@@ -142,11 +130,11 @@ P("C9", ("Device", "C"), "100nF", C0805, {"1": "+3V3", "2": "GND"}, None, "Power
 P("D5", ("Device", "D_Zener"), "SMLVT3V3", SMB, {"1": "+3V3", "2": "GND"}, None, "Power", "TVS 3.3V on the sensor rail")
 
 # ---------------- hardware revision ID: divider on GPIO20 (ADC2, read before WiFi) ---
-# v1.x: pin open, v2.0: 1M/1M -> 0.50 * 3V3 (1.65 uA, always-on rail)
+# no PCB: pin open; V4 Full: 1M/1M -> 0.50 * 3V3 (1.65 uA, always-on rail); V4 Light: 1M/470k
 P("R1", ("Device", "R"), "1M", R0805, {"1": "3V3_HELTEC", "2": "HW_ID"}, None, "MCU", "HW revision ID (top)")
 P("C37", ("Device", "C"), "22uF 25V", C1210, {"1": "3V3_HELTEC", "2": "GND"}, None, "MCU",
-  "extra bulk on the Heltec 3.3 V pins J2.2/3 (Murata X7R); the module keeps its own regulator", lcsc_key="22uF 25V Murata")
-P("R2", ("Device", "R"), "1M", R0805, {"1": "HW_ID", "2": "GND"}, None, "MCU", "HW revision ID (bottom), v2.0: 0.50 * 3V3")
+  "extra bulk on the Heltec 3.3 V pins J20.2/3 (Murata X7R); the module keeps its own regulator", lcsc_key="22uF 25V Murata")
+P("R2", ("Device", "R"), "1M", R0805, {"1": "HW_ID", "2": "GND"}, None, "MCU", "HW revision ID (bottom), V4 Full: 0.50 * 3V3")
 P("C10", ("Device", "C"), "100nF", C0805, {"1": "HW_ID", "2": "GND"}, None, "MCU", "low source impedance for the ADC")
 
 # ---------------- test points and expansion header (not populated) ---------------
@@ -159,7 +147,7 @@ for ref, net, lab, blk, d in (("TP6", "3V3_HELTEC", "3V3H", "MCU", "1.5"), ("TP7
     P(ref, ("Connector", "TestPoint"), lab, f"TestPoint:TestPoint_Pad_D{d}mm", {"1": net}, None, blk,
       "probe pad (not populated)", lcsc_key="-")
 P("J16", conn(6), "Expansion", HDR.format(n=6), {"1": "GND", "2": "+3V3", "3": "SDA", "4": "SCL", "5": "VANE_EN", "6": "+5V"},
-  None, "MCU", "I2C + VANE_EN (V3 GPIO19 / V4 GPIO34; also switches the vane supply; 3.3 V logic, unprotected), not populated", lcsc_key="HDR6", dnp=True)
+  None, "MCU", "I2C + VANE_EN (GPIO34; also switches the vane supply; 3.3 V logic, unprotected), not populated", lcsc_key="HDR6", dnp=True)
 
 # ---------------- Davis anemometer: RJ11 + screw terminal in parallel ---------------
 P("J4", conn(6), "Davis wind (RJ11)", RJ11, {"1": None, "2": "WDIR_VCC", "3": "WDIR", "4": "GND", "5": "WSPD", "6": None},
@@ -168,14 +156,14 @@ P("J5", conn(4), "Wind", TB.format(n=4), {"1": "GND", "2": "WSPD", "3": "WDIR", 
   "right edge below the RJ11 jack, read top->bottom: 3V3 | DIR | SPD | GND", lcsc_key="TB4")
 P("D6", ("Device", "D_Zener"), "SMLVT3V3", SMB, {"1": "WDIR", "2": "GND"}, None, "Wind", "TVS wind direction (at J5, jack J4 next to it)")
 P("D7", ("Device", "D_Zener"), "SMLVT3V3", SMB, {"1": "WSPD", "2": "GND"}, None, "Wind", "TVS wind speed (at J5, jack J4 next to it)")
-# wind speed: 330R -> pull-up/clamp -> RC 4.7k/100nF -> Schmitt -> 1k -> GPIO6
+# wind speed: 330R -> pull-up/clamp -> RC 4.7k/100nF -> Schmitt -> 1k -> GPIO44
 P("R3", ("Device", "R"), "330", R1206, {"1": "WSPD", "2": "WSPD_A"}, None, "Wind", "surge series resistor", lcsc_key="330R1206")
 P("R4", ("Device", "R"), "4.7k", R0805, {"1": "+3V3", "2": "WSPD_A"}, None, "Wind", "reed-switch pull-up")
 P("D8", ("Diode", "BAT54S"), "BAT54S", SOT23, {"1": "GND", "2": "+3V3", "3": "WSPD_A"}, None, "Wind", "clamp (was BAT43 pair)")
 P("R5", ("Device", "R"), "4.7k", R0805, {"1": "WSPD_A", "2": "WSPD_B"}, None, "Wind", "RC low-pass")
 P("C11", ("Device", "C"), "100nF", C0805, {"1": "WSPD_B", "2": "GND"}, None, "Wind", "RC low-pass")
-P("R6", ("Device", "R"), "1k", R0805, {"1": "WSPD_SCH", "2": "WSPD_OUT"}, None, "Wind", "series to GPIO6")
-# wind direction: 330R -> clamp (+ optional pull-up for non-Davis vanes) -> 10k/1uF -> 1k -> GPIO2
+P("R6", ("Device", "R"), "1k", R0805, {"1": "WSPD_SCH", "2": "WSPD_OUT"}, None, "Wind", "series to GPIO44 (wind speed)")
+# wind direction: 330R -> clamp (+ optional pull-up for non-Davis vanes) -> 10k/1uF -> 1k -> GPIO6
 P("R7", ("Device", "R"), "330", R1206, {"1": "WDIR", "2": "WDIR_A"}, None, "Wind", "surge series resistor", lcsc_key="330R1206")
 P("D9", ("Diode", "BAT54S"), "BAT54S", SOT23, {"1": "GND", "2": "+3V3", "3": "WDIR_A"}, None, "Wind", "clamp (was BAT43 pair)")
 P("R8", ("Device", "R"), "4.7k", R0805, {"1": "WDIR_VCC", "2": "WDIR_PU"}, None, "Wind",
@@ -184,12 +172,12 @@ P("JP2", conn(2), "Vane pull-up", HDR.format(n=2), {"1": "WDIR_PU", "2": "WDIR_A
   "jumper on = 4.7k pull-up for reed-switch vanes, off = Davis potentiometer", lcsc_key="HDR2")
 P("R9", ("Device", "R"), "10k", R0805, {"1": "WDIR_A", "2": "WDIR_B"}, None, "Wind", "RC low-pass")
 P("C12", ("Device", "C"), "1uF 50V", C0805, {"1": "WDIR_B", "2": "GND"}, None, "Wind", "RC low-pass", lcsc_key="1uF")
-P("R10", ("Device", "R"), "1k", R0805, {"1": "WDIR_B", "2": "WDIR_ADC"}, None, "Wind", "series to GPIO2")
+P("R10", ("Device", "R"), "1k", R0805, {"1": "WDIR_B", "2": "WDIR_ADC"}, None, "Wind", "series to GPIO6 (wind direction, ADC1)")
 # switched supply of the wind-vane potentiometer (J4 pin 2 / J5 3V3): VANE_EN LOW = on
-# (V3 GPIO19, V4 GPIO34).
+# (GPIO34).
 # Off between samples in low-power mode (the Davis pot draws ~165 uA continuously).
 P("Q6", ("Transistor_FET", "AO3401A"), "AO3401A", SOT23, {"1": "VANE_EN", "2": "+3V3", "3": "WDIR_VCC"}, None, "Wind",
-  "high-side switch of the wind-vane supply, VANE_EN LOW = on (V3 GPIO19, V4 GPIO34)")
+  "high-side switch of the wind-vane supply, VANE_EN LOW = on (GPIO34)")
 P("R38", ("Device", "R"), "100k", R0805, {"1": "+3V3", "2": "VANE_EN"}, None, "Wind", "keeps the vane supply off without firmware")
 P("C23", ("Device", "C"), "100nF", C0805, {"1": "WDIR_VCC", "2": "GND"}, None, "Wind", "decoupling vane supply")
 P("D29", ("Device", "D_Zener"), "SMLVT3V3", SMB, {"1": "WDIR_VCC", "2": "GND"}, None, "Wind", "TVS switched vane supply (J5 3V3 / J4.2)")
@@ -205,10 +193,10 @@ P("R12", ("Device", "R"), "4.7k", R0805, {"1": "+3V3", "2": "RAIN_A"}, None, "Ra
 P("D11", ("Diode", "BAT54S"), "BAT54S", SOT23, {"1": "GND", "2": "+3V3", "3": "RAIN_A"}, None, "Rain", "clamp (was BAT43 pair)")
 P("R13", ("Device", "R"), "10k", R0805, {"1": "RAIN_A", "2": "RAIN_B"}, None, "Rain", "RC low-pass (tau ~10 ms)")
 P("C13", ("Device", "C"), "1uF 50V", C0805, {"1": "RAIN_B", "2": "GND"}, None, "Rain", "RC low-pass", lcsc_key="1uF")
-P("R14", ("Device", "R"), "1k", R0805, {"1": "RAIN_SCH", "2": "RAIN_OUT"}, None, "Rain", "series to GPIO7")
+P("R14", ("Device", "R"), "1k", R0805, {"1": "RAIN_SCH", "2": "RAIN_OUT"}, None, "Rain", "series to GPIO16 (rain)")
 P("U2", ("74xGxx", "74LVC2G14"), "SN74LVC2G14DBVR", "Package_TO_SOT_SMD:SOT-23-6",
   {"1": "RAIN_B", "6": "RAIN_SCH", "3": "WSPD_B", "4": "WSPD_SCH", "5": "+3V3", "2": "GND"}, None, "Rain",
-  "dual Schmitt trigger (inverting): rain -> GPIO7, wind speed -> GPIO6", lcsc_key="LVC2G14")
+  "dual Schmitt trigger (inverting): rain -> GPIO16, wind speed -> GPIO44", lcsc_key="LVC2G14")
 PARTS[-1]["units"] = 3
 P("C14", ("Device", "C"), "100nF", C0805, {"1": "+3V3", "2": "GND"}, None, "Rain", "decoupling U2")
 
@@ -339,7 +327,7 @@ P("R36", ("Device", "R"), "1k", R0805, {"1": "TACH_SCH", "2": "TACH_OUT"}, None,
 # VE.Direct GND is the charge controller's battery minus -> galvanic isolation (ADuM121N)
 P("U4", ("Isolator", "ADuM121N"), "ADuM121N1BRZ", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
   {"1": "3V3_HELTEC", "2": "VE_RX_MCU", "3": "VE_TX_MCU", "4": "GND", "5": "GND_VICTRON", "6": "VE_TX", "7": "VE_RX", "8": "VDD_VICTRON"},
-  None, "Victron", "VE.Direct TX -> GPIO33, node TX (V3 GPIO34 / V4 GPIO45) -> VE.Direct RX; side 2 powered by the Victron", lcsc_key="ADUM121N")
+  None, "Victron", "VE.Direct TX -> GPIO33, node TX (GPIO45) -> VE.Direct RX; side 2 powered by the Victron", lcsc_key="ADUM121N")
 P("R65", ("Device", "R"), "100k", R0805, {"1": "VE_TX_MCU", "2": "GND"}, None, "Victron",
   "VE.Direct TX pull-down: V4 GPIO45 is a strapping pin (must be LOW at reset); firmware drives TX HIGH when idle")
 P("C21", ("Device", "C"), "100nF", C0805, {"1": "3V3_HELTEC", "2": "GND"}, None, "Victron",

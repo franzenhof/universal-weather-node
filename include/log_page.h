@@ -29,13 +29,16 @@ document.getElementById('toggle').addEventListener('click', function (e) {
 document.getElementById('clear').addEventListener('click', function () {
   fetch('/api/log/clear', { method: 'POST' }).then(refresh);
 });
+var busy = false;
 function refresh() {
-  if (paused) return;
+  if (paused || busy || document.hidden) return;   // no overlapping requests, none from a background tab
+  busy = true;
   fetch('/api/log/raw').then(function (r) { return r.text(); }).then(function (t) {
     logEl.textContent = t;
     if (atBottom) logEl.scrollTop = logEl.scrollHeight;
-  }).catch(function (e) { logEl.textContent = L.failed + ' ' + e; });
+  }).catch(function (e) { logEl.textContent = L.failed + ' ' + e; }).then(function () { busy = false; });
 }
 refresh();
 setInterval(refresh, 1000);
+document.addEventListener('visibilitychange', refresh);
 </script>)HTML";

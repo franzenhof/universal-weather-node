@@ -38,6 +38,7 @@ int main()
     outSnapshot(all);
     assert(all[OUT_MQTT].fails == 1 && all[OUT_MQTT].code == -2 && !all[OUT_LORAWAN].hasErr);
     assert(std::string(outStatusKey(OUT_HA)) == "haDiscovery" && std::string(outStatusKey(OUT_WX_FIRST + 5)) == "opensensemap");
+    assert(std::string(outStatusKey(OUT_INFLUX)) == "influxdb" && OUT_INFLUX == OUT_COUNT - 1);
 
     puts("outstatus ok");
     return 0;

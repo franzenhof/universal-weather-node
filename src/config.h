@@ -3,7 +3,8 @@
 #include <Arduino.h>
 #include <stdint.h>
 #include "oled_custom.h"
-#include "series_def.h"
+#include "vsensor.h"
+#include "net_sensor.h"
 
 // MQTT transport security. Standard broker ports: 1883 = plain (no TLS),
 // 8883 = TLS — but the broker's actual configuration is what matters, not
@@ -17,16 +18,13 @@ enum MqttTlsMode {
     MQTT_TLS_VERIFY   = 2,  // TLS, server certificate verified against mqttCaCert
 };
 
-// Custom PCB hardware revision, stored in Config::pcbVersion below — see
-// README.md "PCB Revisions" for the full pin-mapping differences between
-// them (getPins() in sensors.cpp, plus the Schmitt-trigger-related PCNT edge
-// polarity in configureWindPcnt()/configureRainPcnt()).
-constexpr int PCB_REV_1_2 = 12;
-constexpr int PCB_REV_1_3 = 13;
-// v2.0 (KiCad/SMD): same pins as Rev 1.3 plus the I/O block (board_io.cpp).
-// Detected at boot via the revision ID divider on GPIO20, so the stored value
-// only matters as a manual override when the ID can't be read.
-constexpr int PCB_REV_2_0 = 20;
+// Custom PCBs for the Heltec V4. Config::pcbVersion is set at boot from the
+// revision ID on GPIO15 (PCB_REV_V4_FULL, PCB_REV_V4_LIGHT, or 0 = no PCB:
+// wireless station) and never stored. The numbers are the pcbRev of the API,
+// MQTT and LoRaWAN payload (20 was "PCB v2.0", kept for the V4 Full). Rev 1.2 /
+// 1.3 are V3-only boards (firmware 2.x).
+constexpr int PCB_REV_V4_FULL  = 20;
+constexpr int PCB_REV_V4_LIGHT = 21;
 
 // ============================================================================
 // CONFIGURATION (persistent via NVS / Preferences)
@@ -65,8 +63,7 @@ struct Config {
     uint64_t devEui            = 0;
     uint8_t  appKey[16]        = {};
     char     region[8]         = "EU868"; // LoRaWAN region (default)
-    int      pcbVersion        = PCB_REV_1_3;   // ignored on a Heltec V4 (no PCB support there)
-    int      boardSel          = 0;   // Heltec board: 0 = auto (by flash size), 3 = V3, 4 = V4 (heltec_board.h)
+    int      pcbVersion        = 0;   // runtime only: PCB_REV_V4_FULL / PCB_REV_V4_LIGHT from the revision ID on GPIO15, else 0 (no PCB)
     int      altitudeM         = 560; // default altitude above sea level (m)
     // volatile: written by applyParam() (params.cpp), which now runs
     // from either the main loop task (LoRaWAN downlink, MQTT command) or the
@@ -95,7 +92,7 @@ struct Config {
     volatile int rainPersist       = 1;   // 1 = rain statistics (daily + week/month/year) saved to flash (cfgdata, "rainstat") at most hourly + before restarts
     volatile int lipoEn            = 0;   // 1 = LiPo measurement enabled (saves 4 LPP bytes when 0)
     volatile int debugMode         = 0;   // 1 = include debug telemetry in payload
-    volatile int cpuFreqMhz        = 80;  // 80 or 240 MHz; below 80 not allowed (PCNT-APB)
+    volatile int cpuFreqMhz        = 240; // 80 or 240 MHz (240: the web UI is noticeably faster; 80 saves power); below 80 not allowed (PCNT-APB)
     volatile int payloadFormat     = 1;   // 1 = compact binary (FPort 3, default), 0 = CayenneLPP (FPort 1, ~2x larger)
     volatile int unitSystem        = 0;   // 0 = Metric (°C, mm, hPa, wind per windUnitMs), 1 = Imperial (°F, in, inHg, mph)
 
@@ -117,8 +114,11 @@ struct Config {
     volatile int calRainPermil = 1000;  // rain factor x1000 (500..2000)
     volatile int calWindPermil = 1000;  // wind speed / gust factor x1000 (500..2000)
     // Per wireless sensor: "ID:t:h,..." offsets in 0.1 K / 0.1 % (calibration.h)
-    // Per wireless sensor: "ID:name|..." (rf_names.h)
+    // Per received-only wireless sensor: "ID:name|..." (rf_names.h); a ★ sensor's
+    // name and minimum signal are in its logical sensor entry (lsensors.h)
     char     rfNames[1024]     = "";
+    // Per wireless sensor minimum signal: "ID:dBm|..." (rf_minrssi.h), "" = every packet
+    char     rfMinRssi[256]    = "";
     char     rfCal[1024]       = "";      // stored "A1B2C3D4:5:-20[:gains]" (calibration.h), ~15-40 bytes per sensor
     // Sunshine detection (derived.h): 0 = illuminance threshold, 1 = solar
     // radiation >= 0.4 x clear-sky maximum (needs a W/m2 source and lat/lon)
@@ -127,7 +127,7 @@ struct Config {
     // before), 1 = always on, 2 = on for dispMinutes after a PRG press
     volatile int dispMode      = 0;
     volatile int dispMinutes   = 5;     // 1-120
-    volatile int dispScreens   = 1;     // bit n = screen n (0 classic, 1 temperature, 2 wind, 3 rain, 4 pressure, 5 status)
+    volatile int dispScreens   = 1 | (1 << 8);   // bit n = screen n (0 classic, 1 temperature, 2 wind, 3 rain, 4 pressure, 5 status, 6-7 custom, 8 Wi-Fi QR while the own AP runs)
     volatile int dispRotateSec = 5;     // 2-60
     volatile int dispContrast  = 200;   // 1-255
     volatile int dispNightFrom = 0;     // night off [from, to) local hours; equal = never
@@ -135,9 +135,11 @@ struct Config {
     volatile int measureSec    = 30;    // measurement cycle (s), 10-600: values, display, chart, records; the outputs send on their own intervals
     volatile int dispFlip      = 0;     // 1 = rotated by 180° (0 = the orientation of older firmware)
     volatile int dispBattery   = 0;     // 1 = battery voltage top right on every screen (measures even with lipoEn off)
-    volatile int dispLed       = 0;     // 1 = heartbeat: the Heltec's white LED (GPIO35) flashes every 2 s
+    volatile int saverMode     = 0;     // screensaver (screensaver.h): 0 off, 1 blank, 2 dot, 3 walking figure, 4 weather icons
+    volatile int saverMin      = 5;     // minutes between takeovers, 1-60
+    volatile int saverSec      = 8;     // duration of a takeover, 3-30 s
+    volatile int dispLed       = 0;     // status LED (status_led.h): 0 off, 1 heartbeat (2 s), 2 packets of my sensors, 3 every packet
     OledCustom   dispCustom[OLED_CUSTOM_COUNT];
-    SeriesDef    series[SERIES_MAX];               // custom series (series_def.h): own charts, Settings -> Sensors   // custom screens 1-2 (oled_custom.h), dispScreens bits 6-7
     volatile int windDirSensorType = 0;     // 0 = continuous potentiometer (linear map), 1 = calibrated lookup table (e.g. reed-switch/resistor-ladder vanes)
     int      windDirCalCount   = 0;         // number of valid entries in the calibration table below (0 = not calibrated)
     uint16_t windDirCalAdc[16] = {};        // raw ADC reading captured per calibration position
@@ -148,17 +150,27 @@ struct Config {
     // ------------------------------------------------------------------
     int      loraEn            = 0;   // 1 = LoRaWAN transport enabled (optional; needs keys)
     volatile int lowPowerEn    = 0;   // 1 = light sleep between sub-samples (LoRa-only operation, see low_power.cpp)
-    volatile int vanePowerSave = 1;   // 1 = low-power mode also switches the wind-vane supply off between readings (PCB v2.0)
+    volatile int vanePowerSave = 1;   // 1 = low-power mode also switches the wind-vane supply off between readings (V4 Full / V4 Light)
     int      wifiEn            = 1;   // 1 = WiFi STA enabled (master switch for mqttEn/webApiEn)
     int      mqttEn            = 0;   // 1 = MQTT publish/control enabled (requires wifiEn; needs a broker)
     int      webApiEn          = 1;   // 1 = REST API + settings page enabled (requires wifiEn)
     int      mqttCtrlEn        = 0;   // 1 = MQTT command topic enabled (requires mqttEn)
+    // HTTPS on port 443 with the admin's certificate or a generated
+    // self-signed one (https_cert.h; the pairs are the NVS blobs "https" /
+    // "httpsgen", not in Config). Read at the server start.
+    int      httpsEn           = 0;
+    int      httpPortMode      = 0;   // port 80 while HTTPS runs: 0 stays available, 1 redirects browser pages, 2 HTTPS only (HttpPortMode)
     char     deviceName[33]    = "";  // freely chosen; WiFi hostname, MQTT client id, default topic prefix
     int      staticIpEn        = 0;   // 0 = DHCP (default), 1 = static IP below
     char     staticIp[16]      = "";
     char     staticGateway[16] = "";
     char     staticSubnet[16]  = "255.255.255.0";
     char     staticDns[16]     = "";  // optional; falls back to staticGateway if empty
+    // Own access point (wifi_ap.h): 0 off, 1 fallback (station unreachable for 2 min), 2 always
+    int      apMode            = 0;
+    char     apSsid[33]        = "";  // empty = "WeatherNode-<last 4 MAC hex digits>"
+    char     apPass[64]        = "";  // WPA2, 8-63 characters; the AP does not start without one
+    int      apChannel         = 0;   // 0 = auto (the station's channel, else 1), 1-13
     char     mqttHost[65]      = "";
     int      mqttPort          = 1883;  // matches the mqttTlsMode default (plain); TLS brokers usually listen on 8883
     char     mqttUser[33]      = "";
@@ -185,19 +197,18 @@ struct Config {
     volatile int davisRxBw     = 938;    // receiver bandwidth, kHz x 10 (davisRxBwValid())
     uint8_t  srcSel[6]         = { 0, 0, 0, 0, 0, 0 };   // value sources (sources.h SrcGroup): air, wind, rain, UV, light, pressure; 0 = auto
                                                       // (keys src0..src5; a config without src5 = Auto, i.e. the BME280 as before)
-    // Wireless sensor IDs "Mine" (hex, comma-separated, max RF_MAX_SENSORS = 32;
-    // 32 x 8 hex digits + 31 ", " separators = 318 characters). With
-    // rfOnlyMine only these are accepted (empty list = any sensor).
-    // Stored as the NVS string "rfids": a list saved by an older firmware
-    // (buffer 48) loads unchanged into the larger buffer, no migration needed.
-    char     rfIds[320]        = "";  // "Mine" (settings: star): order = wireless 1..n, HA device per ID
+    // The logical sensor (lsensors.h, internal ID "L3F9A2C") a wireless source is
+    // bound to ("" = auto/board/off, or a "Wireless n" set by number for a
+    // received-only sensor: then by slot). Keeps the source on the chosen
+    // sensor when the ★ order changes or its radio ID is re-bound (keys srciid0..srciid5).
+    char     sourceInternalId[6][8]      = { "", "", "", "", "", "" };
+    // The ★ sensors ("Mine") are the logical sensor table (lsensors.h, gLogicalSensors,
+    // NVS blob "lsens"); their order = wireless 1..n, HA device per sensor.
     // Hidden sensors (settings: cross): never stored in the sensor table, no
-    // slot, not output anywhere. Same format and size as rfIds. NVS "rfignore".
+    // slot, not output anywhere. Hex IDs, comma-separated (max RF_MAX_SENSORS). NVS "rfignore".
     char     rfIgnore[320]     = "";
-    // 1 = accept only the IDs in rfIds (the behaviour of every firmware before
-    // this setting while a list was set); 0 = also the other received sensors
-    // (they follow the listed ones in reception order). NVS "rfonly"; missing
-    // key (older firmware): 1 with a non-empty rfIds, else 0 - same behaviour.
+    // 1 = accept only the ★ sensors (no effect while there is none); 0 = also
+    // the other received sensors (they follow the ★ ones in reception order). NVS "rfonly".
     int      rfOnlyMine        = 0;
     // Web interface / portal language (i18n.h): 0 = Auto (browser), 1 en, 2 de,
     // 3 fr, 4 es, 5 pt. NVS "uilang"; missing key = Auto.
@@ -228,6 +239,14 @@ struct Config {
     // value stays distinguishable from a real 0.0. Only sent to AWEKAS.
     char     latitude[12]      = "";
     char     longitude[12]     = "";
+    // GNSS module on a V4 without PCB (gnss.h): on / off, rate (0 = search
+    // 9600 / 115200 / 38400), and what it takes over: the clock, latitude /
+    // longitude, the station altitude (sea-level pressure)
+    int      gnssEn            = 0;
+    int      gnssBaud          = 0;
+    int      gnssTime          = 1;
+    int      gnssPos           = 1;
+    int      gnssAlt           = 1;
     // Each network is enabled by a non-empty station ID/user (same rule as
     // weather-data-bridge's env vars), interval in seconds per network.
     char     awekasUser[33]    = "";
@@ -256,11 +275,30 @@ struct Config {
     int      cwopPasscode      = -1;   // -1 for CWOP IDs, the APRS-IS passcode for a callsign
     int      cwopIntervalSec   = 600;
     bool     updateCheckEn     = false;   // daily check for newer firmware (tags/releases API)
+    // Web UI (dashboard, include/chart_page.h; read via /api/info "ui"): both off by default
+    bool     uiFlashEn         = false;   // a dashboard tile flashes briefly when its value changes
+    bool     uiAgeEn           = false;   // a dashboard tile shows how old its value is (3 s ago)
     char     updateUrl[161]    = "https://api.github.com/repos/franzenhof/universal-weather-node/releases";
 
+    // InfluxDB / VictoriaMetrics push (influx.cpp, wx_upload.cpp): line protocol
+    // over HTTP, timestamp in the packet. The full write URL is given so v1
+    // (/write?db=), v2 (/api/v2/write?org=&bucket=) and VictoriaMetrics all work.
+    int      influxEn          = 0;    // 1 = push enabled (requires wifiEn + a write URL)
+    char     influxUrl[256]    = "";   // e.g. https://host:8086/api/v2/write?org=home&bucket=weather
+    char     influxToken[256]  = "";   // Authorization header value (v2: "Token xx␣"); empty = no auth (e.g. VictoriaMetrics)
+    char     influxMeasurement[33] = "weather";   // measurement name (per-sensor lines use <name>_rf)
+    int      influxIntervalSec = 60;
+
+    // Virtual sensors (vsensor.h): not here - own store (vs_store.h, NVS "vsens").
+
+    // Network sensors (net_sensor.h, docs/network-sensors.md): values from an
+    // MQTT topic on the broker above or a polled JSON URL, in the sensor table
+    // as E1000001 .. E1000004. All off by default. Written under netLock().
+    NetSlotCfg net[NET_SLOTS];
+
     // ------------------------------------------------------------------
-    // PCB v2.0 I/O block (board_io.cpp) - all off by default, ignored on
-    // Rev 1.2/1.3. Written by applyParam() like the fields above (volatile).
+    // V4 Full I/O block (board_io.cpp) - all off by default, ignored on
+    // the V4 Light and without a PCB. Written by applyParam() like the fields above (volatile).
     // Temperatures in 0.1 °C, independent of unitSystem.
     // ------------------------------------------------------------------
     volatile int   auxAinEn       = 0;     // 1 = AUX analog input (GPIO4)
@@ -280,10 +318,10 @@ struct Config {
     volatile int   fanMinPvW      = 0;     // auto: requires valid VE.Direct PV >= limit; 0 = ignore
     volatile int   tachoEn        = 0;     // 1 = fan tacho (GPIO40)
     volatile int   tachoPpr       = 2;     // tacho pulses per revolution (PC fans: 2)
-    volatile int   veDirectEn     = 0;     // 1 = Victron VE.Direct (GPIO33 RX / GPIO34 TX)
+    volatile int   veDirectEn     = 0;     // 1 = Victron VE.Direct (GPIO33 RX / GPIO45 TX)
     volatile int   outMinBattDv   = 0;     // heater/fan locked out below this battery voltage
                                            // or without valid VE.Direct (0.1 V); 0 = no limit
-    volatile int   uvEn           = 0;     // 1 = UV sensor analog voltage on GPIO3 (PCB v2.0 only)
+    volatile int   uvEn           = 0;     // 1 = UV sensor analog voltage on GPIO3 (V4 Full only)
     volatile float uvAinScale     = 1.1f;     // terminal V per ADC V; JP10 1-2: 1.1, 2-3: 1.66534
     volatile int   uvIndexEn      = 0;     // 1 = publish calculated UV index; requires explicit calibration flag
     volatile int   uvCalibrated   = 0;     // explicit user confirmation that slope/offset are calibrated
@@ -300,17 +338,45 @@ struct ConfigLegacyDefaults {
     int loraEn = 1, wifiEn = 0, webApiEn = 0, rfEn = RF_RADIO_OFF, rfProto = RF_PROTO_BRESSER, windEn = 1, rainEn = 1;
 };
 
-// "Only my sensors" for a config stored before the setting existed: on
-// exactly when an ID list is set (= the old filter behaviour).
-inline int rfOnlyMineDefault(const char* rfIds) { return rfIds && rfIds[0] ? 1 : 0; }
-
 Config loadConfig();
 // The same into an existing Config that holds the defaults (a fresh Config,
 // e.g. on the heap): Config is ~7 KB, too big for the 8 KB web task stack.
 void loadConfigInto(Config& c);
+// Loaded values outside what the settings form / applyParam() accept (a
+// damaged NVS entry, another firmware's limits) back into range: choices to
+// their default, ranges clamped. Called by loadConfigInto().
+void sanitizeConfig(Config& c);
+// A decimal-degree coordinate typed in a form (latitude: limit 90, longitude
+// 180): "49.88", also with the decimal comma "49,88"; empty = not set. Writes
+// the value with a point to out; false (out untouched) for anything else.
+bool coordParse(const char* in, float limit, char* out, size_t outLen);
+// Every key of c to NVS. Skipped (logged) once configHoldForRestart() ran.
 void   saveConfig(const Config& c);
+// A save stored settings that take effect only at the restart that follows
+// (the web settings' restart fields, which gCfg does not take until then).
+// From now until that restart saveConfig() writes nothing: another caller
+// (★ button, downlink, MQTT command) would save gCfg and so put the old
+// restart fields back. Its change stays in RAM until the restart - the
+// restart fields win over a small change made in the last moments.
+void   configHoldForRestart();
+bool   configHeldForRestart();
+// The whole key set of saveConfig() (with the ★ table, series and virtual
+// sensors from RAM) into a namespace "config" the caller opened for writing:
+// the settings reset writes the kept settings this way after sealing the
+// storage (settings_reset.h). false = a write failed.
+class Preferences;
+bool   saveConfigKeys(Preferences& prefs, const Config& c);
 // Writes only the "rfproto" key (wireless auto search locked: one NVS write).
 void   saveRfProto(int proto);
+// Writes only "lat" / "lon" (pos) and "altitude" (alt): GNSS take-over (gnss.cpp).
+void   saveStationPosition(const Config& c, bool pos, bool alt);
+// The logical sensor table gLogicalSensors (lsensors.h) from NVS ("lsens"); empty when
+// none is stored. saveConfig() writes it back (only when it changed).
+void   lsLoad();
+void   seriesLoad();   // the custom series (series.h), not part of Config
+// The virtual sensor settings (vs_store.h) from NVS ("vsens"); defaults (off)
+// when none are stored. saveConfig() writes them back (only when changed).
+void   vsSettingsLoad();
 
 // ============================================================================
 // NVS UTILITY FUNCTIONS (shared with the Wi-Fi config portal)

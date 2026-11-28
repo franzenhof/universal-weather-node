@@ -54,6 +54,18 @@ int main()
     blob[10] ^= 1;
     assert(!recordsDecode(blob, sizeof(blob), back));
     assert(!recordsDecode(blob, sizeof(blob) - 1, back));
+    // a newer firmware's blob ("REC2", other size): recognised, so the store keeps it
+    {
+        uint8_t newer[RECORDS_BLOB_SIZE + 16] = {};
+        recordsEncode(r, newer);
+        assert(!recordsBlobIsNewer(newer, RECORDS_BLOB_SIZE));   // this version
+        newer[0] = '2';                                           // magic "REC2", little-endian: '2' first
+        assert(recordsBlobIsNewer(newer, sizeof(newer)) && !recordsDecode(newer, sizeof(newer), back));
+        newer[0] = '0';                                           // an older one: not "newer"
+        assert(!recordsBlobIsNewer(newer, sizeof(newer)));
+        newer[0] = '2'; newer[2] = 'X';                           // not a records blob at all
+        assert(!recordsBlobIsNewer(newer, sizeof(newer)) && !recordsBlobIsNewer(newer, 3) && !recordsBlobIsNewer(nullptr, 8));
+    }
 
     // JSON: units, entries only where recorded, rainDayMax date
     JsonDocument doc;
@@ -78,5 +90,16 @@ int main()
     assert(r.mx[RQ_TEMP][RP_ALL].t == 0 && r.rainDay[2].t == 0 && r.ymd == 20270102);
 
     puts("records ok");
+    {   // the clock steps back over midnight (a better time source): today stays, yesterday is not overwritten
+        Records b;
+        recordsRoll(b, day(2027, 1, 1));
+        recordsUpdate(b, RQ_TEMP, 7.0f, 1000);
+        assert(recordsRoll(b, day(2027, 1, 2)));
+        recordsUpdate(b, RQ_TEMP, 4.0f, 2000);
+        assert(!recordsRoll(b, day(2027, 1, 1)) && b.ymd == 20270102);
+        assert(b.mx[RQ_TEMP][RP_TODAY].v == 4.0f && b.mx[RQ_TEMP][RP_YESTERDAY].v == 7.0f);
+        assert(!recordsRoll(b, day(2027, 1, 2)));
+        assert(recordsRoll(b, day(2026, 12, 30)) && b.ymd == 20261230);   // further back: a real date change
+    }
     return 0;
 }

@@ -6,7 +6,10 @@
 #include "time_sync.h"
 #include "wx_upload.h"
 #include "serial_log.h"
+#include "storage_layout.h"
+#include "storage_write.h"
 #include <Preferences.h>
+#include <stdlib.h>
 #include <freertos/FreeRTOS.h>
 
 namespace {
@@ -15,19 +18,22 @@ portMUX_TYPE  mux = portMUX_INITIALIZER_UNLOCKED;
 bool          dirty = false;
 unsigned long lastSaveMs = 0;
 volatile int  resetReq = 0;   // 1 = periods, 2 = all (from the web / downlink task)
+// The stored records are a newer firmware's (a downgrade): kept untouched in
+// flash until the user resets the records; this firmware's stay in RAM.
+bool          newerRecordsKept = false;
 constexpr unsigned long SAVE_EVERY_MS = 3600000UL;
 
 void save()
 {
+    if (newerRecordsKept) { dirty = false; lastSaveMs = millis(); return; }
     uint8_t blob[RECORDS_BLOB_SIZE];
     portENTER_CRITICAL(&mux);
     recordsEncode(rec, blob);
     dirty = false;
     portEXIT_CRITICAL(&mux);
-    Preferences prefs;
-    if (!prefs.begin("records", false, "cfgdata")) return;
-    if (prefs.putBytes("v1", blob, sizeof(blob)) != sizeof(blob)) dbgSerial.println("Records: NVS write failed.");
-    prefs.end();
+    StorageWrite w("records");   // storage_write.h: refused once a reset sealed the storage
+    if (!w.ok()) return;
+    if (w.prefs().putBytes("v1", blob, sizeof(blob)) != sizeof(blob)) dbgSerial.println("Records: NVS write failed.");
     lastSaveMs = millis();
 }
 } // namespace
@@ -36,14 +42,21 @@ void recordsSetup()
 {
     Preferences prefs;
     if (!prefs.begin("records", true, "cfgdata")) return;   // never written
-    uint8_t blob[RECORDS_BLOB_SIZE];
-    size_t n = prefs.getBytesLength("v1");
+    const size_t n = prefs.getBytesLength("v1");
+    uint8_t* blob = storedBlobLengthReadable(n) ? (uint8_t*)malloc(n) : nullptr;   // any length: a newer one too
     Records r;
-    if (n == sizeof(blob) && prefs.getBytes("v1", blob, n) == n && recordsDecode(blob, n, r)) {
-        portENTER_CRITICAL(&mux);
-        rec = r;
-        portEXIT_CRITICAL(&mux);
+    if (blob && prefs.getBytes("v1", blob, n) == n) {
+        if (recordsDecode(blob, n, r)) {
+            portENTER_CRITICAL(&mux);
+            rec = r;
+            portEXIT_CRITICAL(&mux);
+        } else if (recordsBlobIsNewer(blob, n)) {
+            newerRecordsKept = true;
+            dbgSerial.println("Records: stored by a newer firmware - kept untouched, not saved by this one "
+                              "(Settings -> System -> reset all records to save again).");
+        }
     }
+    free(blob);
     prefs.end();
     lastSaveMs = millis();
 }
@@ -54,10 +67,12 @@ void recordsCycle()
 {
     if (resetReq) {
         portENTER_CRITICAL(&mux);
-        recordsReset(rec, resetReq == 2);
+        const bool allTime = resetReq == 2;
+        recordsReset(rec, allTime);
         resetReq = 0;
         dirty = true;
         portEXIT_CRITICAL(&mux);
+        if (allTime) newerRecordsKept = false;   // the user reset all of them: the newer firmware's are replaced from now on
         save();
     }
     struct tm lt;

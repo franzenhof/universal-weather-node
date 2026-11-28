@@ -1,5 +1,7 @@
-// LaCrosse / TFA IT+ frame decoder (src/itplus.cpp).
+// LaCrosse / TFA IT+ frame decoder and encoder (lib/TfaWeatherSensorReceiver).
 #include "ItPlusDecoder.h"
+#include "ItPlusEncoder.h"
+#include <cstring>
 #include <cassert>
 #include <cmath>
 
@@ -23,6 +25,16 @@ int main()
     assert(f.sensorId == 0x2B && f.newBattery && f.weakBattery);
     assert(near(f.tempC, -5.3f) && f.hasHumidity && f.humidity == 87);
 
+    // -2.4 C (37.6 -> BCD 3 7 6): exactly the float nearest -2.4, no residue
+    uint8_t m24[5] = {0x92, 0x83, 0x76, 0x6A, 0};
+    m24[4] = itPlusCrc8(m24, 4);
+    assert(itPlusDecode(m24, f) && f.tempC == -2.4f);
+    for (int t = 0; t <= 999; t++) {   // every BCD value: the nearest float of (t - 400) / 10
+        uint8_t b[5] = {0x92, (uint8_t)(0x80 | (t / 100)), (uint8_t)((((t / 10) % 10) << 4) | (t % 10)), 0x6A, 0};
+        b[4] = itPlusCrc8(b, 4);
+        assert(itPlusDecode(b, f) && f.tempC == (float)((t - 400) / 10.0));
+    }
+
     // Second probe channel: ID + 64, no humidity
     uint8_t pr[5] = {0x92, 0x84, 0x48, ITPLUS_PROBE_FLAG, 0};
     pr[4] = itPlusCrc8(pr, 4);
@@ -37,5 +49,35 @@ int main()
     assert(!itPlusDecode(bcd, f));
     uint8_t hum[5] = {0x92, 0x84, 0x48, 101, 0}; hum[4] = itPlusCrc8(hum, 4);
     assert(!itPlusDecode(hum, f));
+
+    // ---- encoder (virtual sensors): round trip through itPlusDecode ----
+    uint8_t e[ITPLUS_FRAME_LEN];
+    assert(itPlusEncode(e, 10, false, 4.8f, false, 0) == ITPLUS_FRAME_LEN);
+    assert(!memcmp(e, tx29, sizeof(tx29)));                    // the published example, byte for byte
+    for (int t = 0; t <= 999; t++) {                           // every BCD temperature, both flags, all IDs
+        const float c = (float)((t - 400) / 10.0);
+        const uint8_t id = (uint8_t)(t % 64);
+        const bool nb = t & 1;
+        assert(itPlusEncode(e, id, nb, c, false, 0) == ITPLUS_FRAME_LEN);
+        assert(itPlusDecode(e, f) && f.tempC == c && f.sensorId == id && f.newBattery == nb && !f.weakBattery && !f.hasHumidity);
+        assert(e[3] == ITPLUS_NO_HUMIDITY);
+    }
+    for (int h = 0; h <= 255; h++) {                           // humidity 1..99, never the 0x6A / 0x7D codes
+        assert(itPlusEncode(e, 63, true, 21.4f, true, (uint8_t)h) == ITPLUS_FRAME_LEN);
+        assert(itPlusDecode(e, f) && f.hasHumidity && f.sensorId == 63 && near(f.tempC, 21.4f));
+        assert(f.humidity == (h < 1 ? 1 : h > 99 ? 99 : h));
+    }
+    // range of the originals, rounding to 0.1
+    assert(itPlusEncode(e, 1, false, -55.0f, false, 0) && itPlusDecode(e, f) && f.tempC == -40.0f);
+    assert(itPlusEncode(e, 1, false, 80.0f, false, 0) && itPlusDecode(e, f) && f.tempC == 59.9f);
+    assert(itPlusEncode(e, 1, false, ITPLUS_TEMP_MIN, false, 0) && itPlusDecode(e, f) && f.tempC == -40.0f);
+    assert(itPlusEncode(e, 1, false, ITPLUS_TEMP_MAX, false, 0) && itPlusDecode(e, f) && f.tempC == 59.9f);
+    assert(itPlusEncode(e, 1, false, 21.36f, false, 0) && itPlusDecode(e, f) && f.tempC == 21.4f);
+    assert(itPlusEncode(e, 1, false, -0.04f, false, 0) && itPlusDecode(e, f) && f.tempC == 0.0f);
+    // invalid input: no frame
+    assert(itPlusEncode(e, 64, false, 20.0f, false, 0) == 0);
+    assert(itPlusEncode(e, 1, false, NAN, false, 0) == 0);
+    assert(itPlusEncode(e, 1, false, INFINITY, false, 0) == 0);
+    assert(itPlusEncode(nullptr, 1, false, 20.0f, false, 0) == 0);
     return 0;
 }

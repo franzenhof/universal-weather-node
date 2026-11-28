@@ -9,13 +9,13 @@ from pathlib import Path
 spec = importlib.util.spec_from_file_location("cpl", "tools/pcbgen/jlcpcb_cpl.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-base = Path("pcb/v2.0/production")
-with (base / "universal-weather-node-v2.0-cpl-jlcpcb.csv").open() as f:
+base = Path("pcb/v4-full/production")
+with (base / "universal-weather-node-v4-full-cpl-jlcpcb.csv").open() as f:
     final = list(csv.DictReader(f))
 parser_spec = importlib.util.spec_from_file_location("sexp", "tools/pcbgen/sexp.py")
 parser = importlib.util.module_from_spec(parser_spec)
 parser_spec.loader.exec_module(parser)
-board = parser.parse(Path("pcb/v2.0/universal-weather-node.kicad_pcb").read_text())[0]
+board = parser.parse(Path("pcb/v4-full/universal-weather-node-v4-full.kicad_pcb").read_text())[0]
 angles = {}
 for footprint in parser.find(board, "footprint"):
     ref = next(p[2] for p in parser.find(footprint, "property") if p[1] == "Reference")
@@ -25,7 +25,7 @@ raw = [dict(row, Rotation=f"{angles[row['Designator']]:.6f}") for row in final]
 # undo the Q7 centroid shift: raw KiCad Y = CPL Y + 1.4 mm
 raw = [dict(r, **{"Mid Y": f"{float(r['Mid Y'][:-2]) + module.Q7_LEAD_SHIFT:.6f}mm"})
        if r["Designator"] == "Q7" else r for r in raw]
-with (base / "universal-weather-node-v2.0-bom-jlcpcb.csv").open() as f:
+with (base / "universal-weather-node-v4-full-bom-jlcpcb.csv").open() as f:
     bom = list(csv.DictReader(f))
 candidate, review = module.build(raw, bom)
 assert len(candidate) == len(review) == len(raw) == 139   # +U8, U9, C39, R65 (Heltec V4 socket set)
@@ -50,7 +50,7 @@ assert by_ref["Q6"]["Rotation"] == "0.000000"
 assert by_ref["D27"]["Rotation"] == "270.000000"
 assert by_ref["Q3"]["Rotation"] == "180.000000"
 assert next(r for r in review if r["Designator"] == "Q3")["Status"] == "PREVIEW_MATCHED_DFN"
-with (base / "universal-weather-node-v2.0-cpl-jlcpcb.csv").open() as f:
+with (base / "universal-weather-node-v4-full-cpl-jlcpcb.csv").open() as f:
     assert list(csv.DictReader(f)) == candidate
 assert all(r["Status"] != "MANUAL_CHECK" for r in review)
 assert next(r for r in review if r["Designator"] == "C31")["Status"] == "PREVIEW_MATCHED_POLARITY"

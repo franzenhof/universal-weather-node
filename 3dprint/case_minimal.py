@@ -1,7 +1,9 @@
-"""Generate the enclosure for the minimal wireless build (bare Heltec V3 + BME280 module).
+"""Generate the enclosure for the minimal wireless build (bare Heltec V4 + BME280 module, optional GNSS module).
 
-Two chambers, wall-mounted: the Heltec electronics chamber on top and a louvred BME280
-chamber below it, separated by a double wall with a ventilated air gap. Dimensions in mm.
+Two chambers, wall-mounted: the electronics chamber on top (Heltec V4 at the bottom of it, an
+optional GNSS module in a bay above the board, patch antenna facing the lid) and a louvred BME280
+chamber below it, separated by a double wall with a ventilated air gap. The top wall carries a
+knock-out for an optional R-SMA bulkhead (WiFi antenna). Dimensions in mm.
 
 Assembly frame (= body print frame): X right, Y up (when wall-mounted), Z out of the wall.
 The back of the case lies on the wall at Z = 0.
@@ -24,14 +26,17 @@ LID_T = 2.4
 LIP_H, LIP_T, LIP_GAP = 2.0, 1.6, 0.3
 CORNER_R = 2.0
 
-# --- Heltec WiFi LoRa 32 V3 (board, USB-C end on the left, 3V3 header J3 on top) ---------
-# Outline 50.2 x 25.5 mm (Heltec spec). Header pitch, row spacing (22.86 mm) and pin-1 offset
-# (2.7 mm from the USB end) as in the J1/J2 Heltec sockets of pcb/v2.0 (case_v20.py).
-# Button / USB / OLED positions: Heltec V3 pin map + v20 case constants (estimates).
-HL, HW = 50.2, 25.5
+# --- Heltec WiFi LoRa 32 V4 (board, USB-C end on the left, 3V3 header J3 on top) ----------
+# Outline 51.69 x 25.4 mm, sockets 22.86 mm apart, pin 1 3.43 mm from the USB end: the Heltec V4
+# STEP model as used in case_v4_full.py (module X -1.27..50.42 around the rows, pin 1 at 2.16).
+# Header naming follows the V3 layout of this file: "J3" = 3V3 header (GND, 3V3, ..., display and
+# PRG side), "J2" = 5V header (GPIO47 / 48 = pins 13 / 14).
+# PRG button: V4 STEP model (3.43 from the USB end, 7.91 from the module axis = 4.79 from the edge).
+# Everything marked TODO is not in the repo and must be measured on a real V4.
+HL, HW = 51.69, 25.4
 HT = 1.2            # Heltec PCB thickness (assumed; 1.0-1.6 fits)
-PIN1_X = 2.7        # pin 1 centre from the USB end of the board
-ROW_IN = 1.32       # pin row centre from the long board edge
+PIN1_X = 3.43       # pin 1 centre from the USB end of the board
+ROW_IN = 1.27       # pin row centre from the long board edge
 PITCH = 2.54
 HDR_PLASTIC = 2.5   # pin header plastic below the board (pins point down, to the wall)
 PIN_LONG = 6.0      # header pin below the plastic
@@ -41,19 +46,20 @@ USB_GAP = 1.3       # board USB end to inner left wall
 RIGHT_GAP = 8.0     # board antenna end to inner right wall (IPEX pigtail)
 SIDE_GAP = 1.5      # long board edges to inner walls
 ABOVE = 8.0         # PCB top to lid inner face (OLED ~3.5, USB 3.3, WiFi spring antenna)
-WIRED = (1, 2, 7, 8)                 # J3 pins with jumper wires: GND, 3V3, GPIO42, GPIO41
-SADDLES = (("J2", 1, 3), ("J2", 15, 17), ("J3", 11, 13), ("J3", 15, 17))
+WIRED = (("J3", 1), ("J3", 2), ("J2", 13), ("J2", 14))   # GND, 3V3 (3V3 header), GPIO47 SDA, GPIO48 SCL (5V header)
+SADDLES = (("J2", 1, 3), ("J2", 7, 9), ("J2", 16, 18), ("J3", 5, 7), ("J3", 11, 13), ("J3", 16, 18))
 SLOT_W, SLOT_CLEAR, CAP = 1.3, 0.72, 1.2
 SADDLE_W = 3.2
 RIB_GAP = 2.2       # lid hold-down ribs above the PCB top (above the soldered pin tips)
 # from USB end, from long edge, header side, pusher protrusion at rest (RST nearly flush:
 # no accidental resets, press it with a pen tip)
-BUTTONS = {"PRG": (2.8, 4.9, "J3", 1.8), "RST": (2.8, 4.9, "J2", 0.3)}
+# RST position on the V4: TODO - not in the repo, assumed mirrored to PRG on the 5V header side
+BUTTONS = {"PRG": (3.43, 4.79, "J3", 1.8), "RST": (3.43, 4.79, "J2", 0.3)}
 BTN_H = 2.5         # tact switch top above PCB top (estimate)
 BTN_REST = 0.5      # pusher foot above the switch
 PIN_D, PIN_HOLE, FOOT_D, FOOT_H = 3.2, 3.8, 5.6, 1.0
 GUIDE_OD, GUIDE_H = 6.4, 2.0
-WINDOW = (31.5, 12.0, 28.0, 17.0)    # OLED window centre (from USB end, from J3 edge), size
+WINDOW = (30.73, 12.7, 33.0, 18.0)   # OLED window centre (from USB end, from J3 edge), size: as in the V4 Full case
 WINDOW_CHAMFER = 1.2
 COVER_POCKET = (1.5, 0.8)            # inside recess for an optional 1 mm clear sheet
 USB_OPEN = (13.5, 9.0)               # Y x Z, room for a typical USB-C plug overmould
@@ -62,6 +68,26 @@ USB_Z_ABOVE = 1.6                    # USB-C axis above PCB top
 # --- SMA bulkhead (IPEX -> SMA pigtail) in the right wall --------------------------------
 SMA_D, SMA_Z = 6.5, 11.0
 SMA_NUT = 11.0      # nut + washer clearance diameter
+IPEX_END = (5.0, 1.0)   # TODO: V4 u.FL position not in the repo; envelope only (distance from the antenna end, size)
+
+# --- optional R-SMA bulkhead for the WiFi antenna (u.FL -> R-SMA pigtail inside) --------------
+# Round knock-out in the top wall, closed by a thin outer skin; a groove marks the ring outside.
+# 1/4"-36 thread -> 6.4 mm hole; the nut / washer sit on the flat inner wall. The antenna screws on
+# outside, pointing up. TODO: the V4's WiFi u.FL position is unknown (pigtail length is free).
+WIFI_HOLE_D, WIFI_SKIN = 6.4, 0.6
+WIFI_RING = (9.6, 10.4, 0.3)       # marking groove: inner D, outer D, depth
+WIFI_X_FROM_RIGHT, WIFI_Z = 10.0, 14.0
+WIFI_NUT = 11.0                    # nut + washer clearance diameter
+
+# --- optional Heltec GNSS module (patch antenna up, only plastic above) -----------------------
+# TODO: dimensions of the Heltec GNSS module are not in the repo (docs only name UC6580 / L76K).
+# Placeholders - measure the module you have: footprint, thickness incl. patch, cable to the V4's
+# GNSS connector (position on the V4 also unknown; the cable is free-hanging).
+GNSS_L, GNSS_W, GNSS_T = 25.0, 25.0, 8.0   # X, Y, height incl. patch antenna (TODO)
+GNSS_X0 = 4.0                              # module left edge from the inner left wall
+GNSS_LID_GAP = 1.0                         # patch top to the lid inner face
+BAY_PAD = 1.5                              # bay clearance around the module
+POST_R, POST_INSET = 1.8, 3.0              # support posts under the module corners
 
 # --- air gap / BME280 chamber -------------------------------------------------------------
 GAP = 8.0           # ventilated air gap between the two chamber walls
@@ -69,10 +95,10 @@ POD_H = 30.0        # BME chamber inner height
 # Cable slot through the double wall (stadium shape along X): a 1x4 Dupont housing
 # (10.2 x 2.5 mm) or four single housings (2.54 x 2.54 mm, 3.6 mm across the corners)
 # pass one after another next to the wires already threaded. Seal with hot glue.
-CONDUIT_X, CONDUIT_Z = 16.0, 6.8
+CONDUIT_X, CONDUIT_Z = 20.0, 6.8   # between the 3V3-header wires (x 3-6) and 47/48 (x 34-36)
 CONDUIT_W, CONDUIT_H = 12.5, 4.5     # inner slot
 CONDUIT_WALL = 2.0                   # tube wall in the air gap
-BRIDGES = ((-WALL, 4.0), (11.0, 21.0), (55.5, None))   # back plate strips across the gap
+BRIDGES = ((-WALL, 4.0), (15.0, 25.0), (55.5, None))   # back plate strips across the gap
 BME_W, BME_L, BME_T = 10.5, 13.0, 1.6   # GY-BME280: header edge (X) x depth (Z) x PCB
 BME_Y = 6.0         # board underside above the chamber floor
 BME_STOP_Z = 9.0    # board rear edge (header side) stop: sensor ~mid-depth, away from the back
@@ -90,7 +116,10 @@ KEY_HEAD, KEY_SHANK, KEY_SLIDE = 8.5, 4.4, 6.0
 
 # --- derived ------------------------------------------------------------------------------
 EW = USB_GAP + HL + RIGHT_GAP            # electronics chamber inner width
-EH = HW + 2 * SIDE_GAP                   # electronics chamber inner height
+EH0 = HW + 2 * SIDE_GAP                  # Heltec section inner height
+GY0 = EH0 + BAY_PAD                      # GNSS module Y range
+GY1 = GY0 + GNSS_W
+EH = GY1 + BAY_PAD                       # electronics chamber inner height (Heltec + GNSS bay)
 HZ = WALL + HDR_PLASTIC + DUPONT + BEND  # Heltec PCB underside
 D = HZ + HT + ABOVE                      # body depth = lid inner face
 BX0, BX1 = USB_GAP, USB_GAP + HL
@@ -104,7 +133,10 @@ E_OUT = (-WALL, EW + WALL, -WALL, EH + WALL)
 P_OUT = (-WALL, EW + WALL, PY0 - WALL, PY1 + WALL)
 USB_Y = (BY0 + BY1) / 2
 USB_ZC = HZ + HT + USB_Z_ABOVE
-SMA_Y = EH / 2
+SMA_Y = EH0 / 2
+WIFI_X = EW - WIFI_X_FROM_RIGHT
+GNSS_TOP = D - GNSS_LID_GAP
+GNSS_BOT = GNSS_TOP - GNSS_T
 FOOT_Z = HZ + HT + BTN_H + BTN_REST
 PIN_LEN = {name: D + LID_T + spec[3] - FOOT_Z for name, spec in BUTTONS.items()}
 
@@ -212,12 +244,25 @@ def generate(output, picture):
     body += hood
     # SMA bulkhead (right wall)
     body -= xcyl(EW - 1, EW + WALL + 1, SMA_Y, SMA_Z, SMA_D / 2)
+    # WiFi R-SMA knock-out (top wall): hole from the inside up to WIFI_SKIN below the outer face
+    body -= ycyl(EH - 1, EH + WALL - WIFI_SKIN, WIFI_X, WIFI_Z, WIFI_HOLE_D / 2)
+    ring = ycyl(EH + WALL - WIFI_RING[2], EH + WALL + 0.1, WIFI_X, WIFI_Z, WIFI_RING[1] / 2)
+    ring -= ycyl(EH + WALL - WIFI_RING[2] - 0.1, EH + WALL + 0.2, WIFI_X, WIFI_Z, WIFI_RING[0] / 2)
+    body -= ring
+    # GNSS module: four posts carry it under the lid (patch up)
+    for px in (GNSS_X0 + POST_INSET, GNSS_X0 + GNSS_L - POST_INSET):
+        for py in (GY0 + POST_INSET, GY1 - POST_INSET):
+            body += zcyl(px, py, POST_R, WALL - 0.01, GNSS_BOT)
 
     # electronics chamber louvres: low and deep on the left (inlet, below USB),
     # high on the right (outlet, above the SMA nut); none towards the BME chamber
     for y in LOUVRE_Y:
         body -= side_louvre(0, -1, y, 5.0, 16.0)
         body -= side_louvre(EW, 1, y, 19.5, D - LIP_H - 0.5)
+    for k in range(4):    # GNSS bay: same styling, inlet low on the left, outlet high on the right
+        y_in = GY0 + 4.5 + 4.5 * k
+        body -= side_louvre(0, -1, y_in, 5.0, 16.0)
+        body -= side_louvre(EW, 1, y_in, 19.5, D - LIP_H - 0.5)
     # BME chamber louvres: both side walls + straight slots in the floor
     for y in LOUVRE_Y:
         for wall_x, out in ((0, -1), (EW, 1)):
@@ -286,6 +331,10 @@ def generate(output, picture):
             rib -= zcyl(*button_xy(name), FOOT_D / 2 + 0.6, HZ, D + 1)
         lid_e += rib
 
+    for px in (GNSS_X0 + 1.5, GNSS_X0 + GNSS_L - 3.5):   # hold-down ribs on the module corners
+        for py in (GY0 + 1.5, GY1 - 3.5):
+            lid_e += block(px, px + 2.0, py, py + 2.0, GNSS_TOP + 0.3, D + 0.01)
+
     lid_p = lid_plate(P_OUT, PY0, PY1, 0, EW, PY0, PY1)
     finger_y = BME_YB + BME_T / 2
     lid_p += block(BME_CX - 2, BME_CX + 2, finger_y - 2, finger_y + 2,
@@ -308,10 +357,10 @@ def generate(output, picture):
     # ---------------------------------------------------------------- envelopes (not printed)
     top = HZ + HT
     heltec = {"heltec-pcb": block(BX0, BX1, BY0, BY1, HZ, top)}
-    heltec["oled"] = block(BX0 + 15, BX0 + 47, BY1 - 21.5, BY1 - 2.5, top, top + 3.8)
+    heltec["oled"] = block(BX0 + 14.23, BX0 + 47.23, BY1 - 12.7 - 9, BY1 - 12.7 + 9, top, top + 3.8)
     heltec["usb-c"] = block(BX0 - 0.8, BX0 + 6.8, USB_Y - 4.5, USB_Y + 4.5, top, top + 3.3)
     heltec["wifi-spring"] = zcyl(BX0 + 10, BY1 - 5, 1.8, top, top + 5.5)
-    heltec["ipex"] = block(BX1 - 5, BX1 - 1, USB_Y - 2, USB_Y + 2, top, top + 2.5)
+    heltec["ipex"] = block(BX1 - IPEX_END[0], BX1 - IPEX_END[1], USB_Y - 2, USB_Y + 2, top, top + 2.5)
     for name in BUTTONS:
         bx, by = button_xy(name)
         heltec[f"switch-{name}"] = block(bx - 2, bx + 2, by - 1.75, by + 1.75, top, top + BTN_H)
@@ -321,14 +370,17 @@ def generate(output, picture):
         for n in range(1, 19):
             x = pin_x(n)
             heltec[f"pintip-{row}-{n}"] = block(x - 0.5, x + 0.5, y - 0.5, y + 0.5, top, top + 1.5)
-            if row == "J3" and n in WIRED:
-                heltec[f"dupont-{n}"] = block(x - 1.27, x + 1.27, y - 1.27, y + 1.27,
+            if (row, n) in WIRED:
+                heltec[f"dupont-{row}-{n}"] = block(x - 1.27, x + 1.27, y - 1.27, y + 1.27,
                                               HZ - HDR_PLASTIC - DUPONT, HZ - HDR_PLASTIC)
             else:
                 heltec[f"pin-{row}-{n}"] = block(x - 0.32, x + 0.32, y - 0.32, y + 0.32,
                                                  HZ - HDR_PLASTIC - PIN_LONG, HZ - HDR_PLASTIC)
     plug = block(-WALL - 25, BX0 - 0.8 - 0.4, USB_Y - 6.1, USB_Y + 6.1, USB_ZC - 3.3, USB_ZC + 3.3)
     sma_in = xcyl(EW - 11, EW, SMA_Y, SMA_Z, SMA_NUT / 2)
+    wifi_in = ycyl(EH - 4, EH, WIFI_X, WIFI_Z, WIFI_NUT / 2)
+    gnss = {"gnss-pcb": block(GNSS_X0, GNSS_X0 + GNSS_L, GY0, GY1, GNSS_BOT, GNSS_BOT + 1.6),
+            "gnss-patch": block(GNSS_X0 + 3, GNSS_X0 + GNSS_L - 3, GY0 + 3, GY1 - 3, GNSS_BOT + 1.6, GNSS_TOP)}
     bme = {"bme-pcb": block(BME_CX - BME_W / 2, BME_CX + BME_W / 2, BME_YB, BME_YB + BME_T,
                             BME_STOP_Z, BME_STOP_Z + BME_L)}
     hz = BME_STOP_Z + 1.27
@@ -351,7 +403,7 @@ def generate(output, picture):
             overlap = (parts[a] & parts[b]).volume
             if overlap > 0.001:
                 raise ValueError(f"Collision {a}/{b}: {overlap:.3f} mm3")
-    envelopes = {**heltec, **bme, "usb-plug": plug, "sma-inside": sma_in}
+    envelopes = {**heltec, **bme, **gnss, "usb-plug": plug, "sma-inside": sma_in, "wifi-inside": wifi_in}
     for env_name, env in envelopes.items():
         for name, shape in parts.items():
             if (shape & env).volume > 0.001:
@@ -381,8 +433,8 @@ def generate(output, picture):
     separation["material_in_air_gap_mm3"] = round(in_gap, 1)
     separation["conduit_tube_mm3"] = round(tube, 1)
     # the Dupont housings of the wired pins leave room for the wire bend above the back plate
-    for n in WIRED:
-        if heltec[f"dupont-{n}"].bounding_box().min.Z - WALL < BEND - 0.01:
+    for row, n in WIRED:
+        if heltec[f"dupont-{row}-{n}"].bounding_box().min.Z - WALL < BEND - 0.01:
             raise ValueError("No bend room below the Dupont housings")
     # pins sit in the saddle slots (X/Y location)
     for row, first, last in SADDLES:
@@ -405,8 +457,12 @@ def generate(output, picture):
               "saddles": saddle_info, "button_pin_length_mm": {n: round(v, 2) for n, v in PIN_LEN.items()},
               "usb_opening": {"y": USB_Y, "z": USB_ZC, "size_yz": list(USB_OPEN)},
               "sma": {"y": SMA_Y, "z": SMA_Z, "d": SMA_D},
+              "wifi_rsma_knockout": {"x": WIFI_X, "z": WIFI_Z, "hole_d": WIFI_HOLE_D, "skin": WIFI_SKIN,
+                                     "ring_d": list(WIFI_RING[:2])},
+              "gnss_bay": {"module_mm": [GNSS_L, GNSS_W, GNSS_T], "x0": GNSS_X0, "y": [GY0, GY1],
+                           "top_z": GNSS_TOP, "estimated": "module size is a placeholder (TODO)"},
               "separation": separation, "parts": {},
-              "qualification": "CAD checks only; Heltec/BME heights are estimates, not measured"}
+              "qualification": "CAD checks only; Heltec/BME/GNSS heights and sizes are estimates, not measured"}
     for name, shape in printable.items():
         if not shape.is_valid or len(shape.solids()) != 1:
             raise ValueError(f"Invalid printable {name}")
@@ -439,13 +495,15 @@ def generate(output, picture):
     shown = [(heltec["heltec-pcb"], "#2f7a4a"), (heltec["oled"], "#1d1d1d"),
              (heltec["usb-c"], "#b9b9b9")]
     shown += [(heltec[k], "#2a2a2a") for k in ("header-J3", "header-J2")]
-    shown += [(heltec[f"dupont-{n}"], "#1d1d1d") for n in WIRED]
+    shown += [(heltec[f"dupont-{r}-{n}"], "#1d1d1d") for r, n in WIRED]
+    shown += [(gnss["gnss-pcb"], "#2f7a4a"), (gnss["gnss-patch"], "#c9c9a8")]
     shown += [(heltec[k], "#c8a24a") for k in heltec if k.startswith("pin-")]
     shown += [(bme["bme-pcb"], "#7b46a8"), (bme["bme-header"], "#2a2a2a"), (bme["bme-dupont"], "#1d1d1d")]
     shown += [(sma_in, "#c8a24a")]
     sma_x = EW + WALL
     antenna = [xcyl(sma_x, sma_x + 9, SMA_Y, SMA_Z, 4.0), xcyl(sma_x + 9, sma_x + 16, SMA_Y, SMA_Z, 5.0),
                ycyl(SMA_Y - 5, SMA_Y + 70, sma_x + 21, SMA_Z, 5.0)]
+    antenna.append(ycyl(EH + WALL, EH + WALL + 60, WIFI_X, WIFI_Z, 4.5))
     preview(output, picture, parts, shown, antenna, CONDUIT_X)
 
 
@@ -546,13 +604,13 @@ def preview(output, picture, parts, inner, antenna, section_x):
     section = [(shape, colour) for shape, colour in section if shape.volume > 0.01]
     fig, axes = plt.subplots(1, 3, figsize=(15, 7.2), gridspec_kw={"width_ratios": (1.05, 0.9, 0.9)})
     views = (("Closed, wall-mounted (antenna illustrative)", closed, (-0.55, 0.42, 0.85)),
-             ("Lids removed: Heltec V3, Dupont wires, BME280", opened, (-0.55, 0.42, 0.85)),
+             ("Lids removed: Heltec V4, GNSS, Dupont wires, BME280", opened, (-0.55, 0.42, 0.85)),
              (f"Section X = {section_x:g} mm through the cable conduit", section, (0.93, 0.18, 0.32)))
     for ax, (title, items, camera) in zip(axes, views):
         ax.imshow(render(items, camera))
         ax.set_title(title, fontsize=10)
         ax.set_axis_off()
-    fig.suptitle("Universal Weather Node - minimal wireless build enclosure: Heltec V3 chamber on top, "
+    fig.suptitle("Universal Weather Node - minimal wireless build enclosure: Heltec V4 + GNSS chamber on top, "
                  "ventilated air gap, louvred BME280 chamber below")
     fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.9, wspace=0.03)
     fig.savefig(output / "preview.png", dpi=130)

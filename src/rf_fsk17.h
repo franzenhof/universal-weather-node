@@ -66,4 +66,6 @@ inline void rfFineOffsetExtras(RfSensorReading& r, const FoFrame& f)
     }
     if (f.hasLeafWetness)  { r.hasLeafWetness = true;  r.leafWetnessPct = f.leafWetnessPct; }
     if (f.hasConductivity) { r.hasConductivity = true; r.conductivityUsCm = f.conductivityUsCm; }
+    if (f.hasDistance)  { r.hasDistance = true;  r.distanceMm = f.distanceMm; }
+    if (f.hasHeatCount) { r.hasHeatCount = true; r.heatCount = f.heatCount; }
 }

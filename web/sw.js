@@ -9,7 +9,7 @@
 const CACHE = 'uwn-@@VERSION@@';
 const STATIC = ['/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/apple-touch-icon.png', '/favicon-32.png',
                 '/manifest.webmanifest'];
-const NEVER = /^\/(api\/settings|api\/log|api\/alarms\/|api\/rf\/|setup|update|u$|api\/davis)/;
+const NEVER = /^\/(api\/settings|api\/log|api\/events|api\/alarms\/|api\/rf\/|setup|update|u$|api\/davis)/;
 
 self.addEventListener('install', (e) => { self.skipWaiting(); });
 self.addEventListener('activate', (e) => {
@@ -32,8 +32,10 @@ self.addEventListener('fetch', (e) => {
   const page = req.mode === 'navigate' && url.pathname === '/';
   const data = url.pathname === '/api/data' || url.pathname === '/api/history';
   if (!page && !data) return;
-  // the cache key without the query (history: ?range=7d kept apart)
-  const key = page ? '/' : url.pathname + (url.searchParams.get('range') === '7d' ? '?range=7d' : '');
+  // History: only the current windows (?range=...) are cached, one entry per range. Past windows and compare
+  // (end=, res=) go to the network only, or they would replace the entry offline shows as "now".
+  if (url.pathname === '/api/history' && (url.searchParams.has('end') || url.searchParams.has('res'))) return;
+  const key = page ? '/' : url.pathname + (url.pathname === '/api/history' ? '?range=' + (url.searchParams.get('range') || '24h') : '');
   e.respondWith(fetch(req).then((r) => {                                 // network first
     if (r.ok) {
       const c = r.clone();

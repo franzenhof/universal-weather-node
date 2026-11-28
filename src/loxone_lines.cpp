@@ -1,7 +1,6 @@
 // Loxone UDP lines from the telemetry JsonDocument (see loxone.h). Pure: no
 // Arduino/network dependency, host-tested (test/firmware_loxone.cpp).
 #include "loxone.h"
-#include "rf_sensors.h"   // RF_MAX_SENSORS
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -151,13 +150,21 @@ const char* staleGroup(const char* key)
     return nullptr;
 }
 
-// One wireless sensor: rf<slot>_temp, rf<slot>_humidity, rf<slot>_battery,
-// rf<slot>_rssi, rf<slot>_age, and its other numeric values under their keys.
-// slot = rfSensors[].slot, 1..RF_MAX_SENSORS (32).
+// One wireless sensor: <sensor>_temp, <sensor>_humidity, <sensor>_battery,
+// <sensor>_rssi, <sensor>_age, and its other numeric values under their keys.
+// <sensor> = the custom ID of a ★ sensor (rfSensors[].customId, lsensors.h), else
+// "rf" + its radio ID (rfSensors[].id, 8 hex digits: rf17000023) - lsCustomIdProblem()
+// refuses that shape as a custom ID, so it never collides with a ★ sensor. Custom IDs are a-z A-Z 0-9 _ -
+// (lsCustomIdProblem()), fine for a Loxone command recognition.
 void emitRfSensor(Walk& w, JsonObjectConst o)
 {
-    long slot = o["slot"] | 0L;
-    if (slot < 1 || slot > RF_MAX_SENSORS) return;   // no slot: not sent
+    const char* sensor = o["customId"] | (const char*)nullptr;
+    char rfId[16];
+    if (!sensor || !sensor[0]) {   // received only: "rf" + radio ID, never equal to a custom ID
+        snprintf(rfId, sizeof(rfId), "rf%s", o["id"] | "");
+        sensor = rfId;
+        if (!(o["id"] | "")[0]) return;   // no name to send it under
+    }
     JsonArrayConst stale = o["stale"];
     for (JsonPairConst kv : o) {
         const char* key = kv.key().c_str();
@@ -169,7 +176,7 @@ void emitRfSensor(Walk& w, JsonObjectConst o)
         const char* out = !strcmp(key, "humidityPct") ? "humidity" : !strcmp(key, "batteryOk") ? "battery"
                         : !strcmp(key, "ageSec") ? "age" : key;
         char name[64];
-        snprintf(name, sizeof(name), "rf%ld_%s", slot, out);
+        snprintf(name, sizeof(name), "%s_%s", sensor, out);
         emit(w, name, kv.value(), key);
     }
 }

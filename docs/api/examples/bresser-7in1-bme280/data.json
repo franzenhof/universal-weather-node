@@ -76,8 +76,8 @@
     "bme280Present": true,
     "bus1Present": false,
     "sendFailCount": 0,
-    "pcbRev": 13,
-    "board": "V3",
+    "pcbRev": 0,
+    "board": "V4",
     "uvEnabled": false,
     "uvIndexCalibrated": false
   },

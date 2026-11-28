@@ -1,5 +1,5 @@
 #!/bin/bash
-# export.sh <gen dir> <repo pcb/v2.0 dir> <name>
+# export.sh <gen dir> <repo pcb dir, e.g. pcb/v4-full> <name, e.g. universal-weather-node-v4-full>
 set -e
 G=$1; T=$2; N=$3
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -15,7 +15,7 @@ cd $T
 rm -rf production/gerber; mkdir -p production/gerber
 $K pcb export gerbers --layers F.Cu,B.Cu,F.Paste,B.Paste,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts -o production/gerber/ $N.kicad_pcb >/dev/null 2>&1
 $K pcb export drill --format excellon --drill-origin absolute --excellon-units mm -o production/gerber/ $N.kicad_pcb >/dev/null 2>&1
-rm -f production/$N-v2.0-gerber.zip; (cd production/gerber && zip -q -r ../$N-v2.0-gerber.zip .); rm -r production/gerber
+rm -f production/$N-gerber.zip; (cd production/gerber && zip -q -r ../$N-gerber.zip .); rm -r production/gerber
 $K pcb export pos --format csv --units mm --side front --exclude-dnp -o "$WORK/export-pos-$N.csv" $N.kicad_pcb >/dev/null 2>&1
 $PY - "$WORK/export-pos-$N.csv" $N "$WORK/export-raw-$N.csv" <<'PYEOF'
 import csv, sys, re, pcbnew
@@ -39,11 +39,11 @@ for r,v in info.items():
     if r in smd: groups.setdefault(v,[]).append(r)
     else: tht.setdefault(v[1:],[]).append(r)
 order=lambda g: sorted(g.items(), key=lambda kv: key(sorted(kv[1],key=key)[0]))
-with open(f'production/{N}-v2.0-bom-jlcpcb.csv','w',newline='') as fh:
+with open(f'production/{N}-bom-jlcpcb.csv','w',newline='') as fh:
     w=csv.writer(fh, quoting=csv.QUOTE_ALL); w.writerow(["Comment","Designator","Footprint","LCSC Part #","MPN"])
     for (v,fp,lc,mpn),refs in order(groups):
         w.writerow([v, ",".join(sorted(refs,key=key)), fp, lc, mpn])
-with open(f'production/{N}-v2.0-tht-lcsc.csv','w',newline='') as fh:
+with open(f'production/{N}-tht-lcsc.csv','w',newline='') as fh:
     w=csv.writer(fh, quoting=csv.QUOTE_ALL); w.writerow(["LCSC Part #","MPN","Qty per board","Designator","Use","Footprint"])
     for (fp,lc,mpn),refs in order(tht):
         refs=sorted(refs,key=key)
@@ -53,14 +53,14 @@ print('CPL SMD placements', n, 'BOM lines', len(groups), 'THT lines (LCSC list)'
 PYEOF
 $PY -B "$HERE/jlcpcb_cpl.py" \
     "$WORK/export-raw-$N.csv" \
-    "production/$N-v2.0-bom-jlcpcb.csv" \
-    "production/$N-v2.0-cpl-jlcpcb.csv"
+    "production/$N-bom-jlcpcb.csv" \
+    "production/$N-cpl-jlcpcb.csv"
 rm -f "$WORK/export-raw-$N.csv"
 rm -f "$WORK/export-pos-$N.csv"
 $PY $HERE/models3d.py $N.kicad_pcb 2>/dev/null | grep '^3D models' || true
-$K sch export pdf -o $N-v2.0-schematic.pdf $N.kicad_sch >/dev/null 2>&1
-for side in top bottom; do $K pcb render --side $side --width 1800 --height 1450 --quality high --zoom 0.92 -o $N-v2.0-$side.png $N.kicad_pcb >/dev/null 2>&1; done
-$K pcb render --width 1800 --height 1350 --quality high --rotate '-50,0,-30' --zoom 0.90 -o $N-v2.0-3d.png $N.kicad_pcb >/dev/null 2>&1
+$K sch export pdf -o $N-schematic.pdf $N.kicad_sch >/dev/null 2>&1
+for side in top bottom; do $K pcb render --side $side --width 1800 --height 1450 --quality high --zoom 0.92 -o $N-$side.png $N.kicad_pcb >/dev/null 2>&1; done
+$K pcb render --width 1800 --height 1350 --quality high --rotate '-50,0,-30' --zoom 0.90 -o $N-3d.png $N.kicad_pcb >/dev/null 2>&1
 $K pcb drc --schematic-parity --severity-all --format json -o "$WORK/export-drc-$N.json" $N.kicad_pcb >/dev/null 2>&1
 python3 -I -c "
 import json;d=json.load(open('$WORK/export-drc-$N.json'))

@@ -20,12 +20,28 @@ constexpr uint32_t RF_SCHED_MIN_GAP_MS = 2000;     // shorter gaps: repeats, not
 constexpr uint32_t RF_SCHED_MAX_GAP_MS = 1200000;  // 20 min
 constexpr uint32_t RF_SCHED_MAX_MISSED = 8;        // intervals without a packet: no longer predicted
 
+// A sensor with a fixed send interval never sends two transmissions closer
+// than this share of it (jitter is a few per cent): a shorter gap is a second
+// transmitter with the same ID, or noise - never the interval.
+constexpr uint32_t RF_SCHED_MIN_INTERVAL_NUM = 3, RF_SCHED_MIN_INTERVAL_DEN = 4;   // 0.75 x the fixed interval
+
 // Interval learned from the gap between two packets of one sensor.
-// periodMs: learned so far (0 = none), nominalMs: from the type (0 = unknown,
-// e.g. Bresser). A gap that holds several intervals (missed packets) is
-// divided by their number; a clearly shorter interval replaces the guess (the
-// first gap of a sensor without a nominal interval may hold two).
-uint32_t rfLearnPeriod(uint32_t periodMs, uint32_t nominalMs, uint32_t gapMs);
+// periodMs: learned so far (0 = none), fixedIntervalMs: the type's fixed send
+// interval (rfFixedIntervalMs(); 0 = unknown, e.g. Bresser). A gap that holds
+// several intervals (missed packets) is divided by their number; a clearly
+// shorter interval replaces the guess (the first gap of a sensor without a
+// fixed interval may hold two). With a fixed interval nothing below 0.75 x it
+// is ever learned (two transmitters on one ID would otherwise trap the period
+// at a fraction of the real one).
+uint32_t rfLearnPeriod(uint32_t periodMs, uint32_t fixedIntervalMs, uint32_t gapMs);
+
+// A packet gapMs after the previous one of the same ID that one sensor with
+// this fixed interval cannot have sent: shorter than 0.75 x the interval and
+// either at least RF_SCHED_MIN_GAP_MS (not a repeat) or a closer "repeat"
+// whose values differ from the previous packet (a real repeat carries the same
+// values). Evidence of an ID collision (reception_window.h). Always false
+// without a fixed interval.
+bool rfGapImpossible(uint32_t gapMs, uint32_t fixedIntervalMs, bool valuesDiffer);
 
 // One tracked sensor: its receive phase (RF_PROTO_BRESSER / _ITPLUS17 /
 // _ITPLUS9), last packet and learned interval.
@@ -40,3 +56,12 @@ struct RfSchedEntry {
 // that sensor's window closes and the next one is served); at the same
 // expected time the sensor that missed more intervals.
 int rfSchedDuePhase(const RfSchedEntry* e, int n, uint32_t nowMs);
+
+// Receive watchdog (rf_sensors.cpp): the receivers re-arm reception after each
+// frame without checking the result, so one lost restart (SPI / BUSY timeout)
+// would leave a receiver that is never switched (one phase, no LoRaWAN, no
+// virtual sensors) deaf until a reboot. A receiver that has neither delivered
+// a frame of any kind nor been (re)started for RF_RECEIVE_WATCHDOG_MS is
+// restarted. Wrap-safe (unsigned difference).
+constexpr uint32_t RF_RECEIVE_WATCHDOG_MS = 600000;   // 10 min
+bool rfReceiverSilentTooLong(uint32_t nowMs, uint32_t lastLifeSignMs);

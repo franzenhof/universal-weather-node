@@ -1,4 +1,5 @@
 #include "psram.h"
+#include "psram_json.h"
 #include "serial_log.h"
 
 #include <Arduino.h>
@@ -85,6 +86,22 @@ void* bigAlloc(size_t bytes)
 {
     void* p = psramActive() ? heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : nullptr;
     return p ? p : heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+namespace {
+struct PsramFirstJsonAllocator : ArduinoJson::Allocator {
+    static constexpr uint32_t PSRAM_CAPS    = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    static constexpr uint32_t INTERNAL_CAPS = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    void* allocate(size_t n) override { return heap_caps_malloc_prefer(n, 2, PSRAM_CAPS, INTERNAL_CAPS); }
+    void  deallocate(void* p) override { heap_caps_free(p); }
+    void* reallocate(void* p, size_t n) override { return heap_caps_realloc_prefer(p, n, 2, PSRAM_CAPS, INTERNAL_CAPS); }
+};
+} // namespace
+
+ArduinoJson::Allocator* psramJsonAllocator()
+{
+    static PsramFirstJsonAllocator allocator;
+    return &allocator;
 }
 
 size_t bigAllocLargest()

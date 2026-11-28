@@ -13,6 +13,7 @@ OtaOutcome            outcome  = OTA_OUT_NONE;
 const char*           error    = "";
 bool                  factory  = false;
 bool                  writing  = false;    // Update.begin() succeeded, not yet ended / aborted
+bool                  checked  = false;    // the whole image passed the filter: otaUploadCommit() may end the Update
 bool                  writeErr = false;    // the last ops->write() failed (flash, not the file)
 std::atomic<bool>     active{false};
 std::atomic<uint32_t> lastMs{0};
@@ -31,6 +32,7 @@ void refuse(OtaOutcome o, const char* why)
     if (outcome == OTA_OUT_REFUSED || outcome == OTA_OUT_FAILED) return;   // the first reason counts
     outcome = o;
     error   = why ? why : "";
+    checked = false;
     if (writing) { ops->abort(); writing = false; }
     log(why);
     release();
@@ -49,7 +51,7 @@ void otaUploadStart(const OtaUpdateOps& o, bool authorized, const char* t)
     if (writing && ops) ops->abort();   // a previous upload that never ended
     release();
     ops = &o; tag = t ? t : "OTA";
-    outcome = OTA_OUT_NONE; error = ""; factory = false; writing = false;
+    outcome = OTA_OUT_NONE; error = ""; factory = false; writing = false; checked = false;
     if (!authorized) { outcome = OTA_OUT_NOT_AUTHORIZED; log("upload refused (not authenticated)"); return; }
 
     active.store(true);
@@ -83,7 +85,15 @@ void otaUploadFinish()
     if (!writing || !filter) { release(); return; }
     if (!filter->finish()) { refuse(OTA_OUT_REFUSED, filter->error()); return; }
     factory = filter->isFactory();
-    writing = false;
+    checked = true;   // Update still open: the boot partition is switched by otaUploadCommit()
+    log(factory ? "application part of the factory image received" : "application image received");
+    release();
+}
+
+void otaUploadCommit()
+{
+    if (!checked || !writing) return;
+    checked = writing = false;
     if (ops->end()) {
         outcome = OTA_OUT_OK;
         log(factory ? "application part of the factory image written" : "application image written");
@@ -92,11 +102,11 @@ void otaUploadFinish()
         error   = ops->error();
         log(error);
     }
-    release();
 }
 
 void otaUploadAbort()
 {
+    checked = false;
     if (writing && ops) { ops->abort(); writing = false; }
     if (outcome == OTA_OUT_NONE) { outcome = OTA_OUT_FAILED; error = "upload aborted"; log(error); }
     release();

@@ -3,7 +3,7 @@
 //
 // ALARM_RULES fixed slots. A rule watches one value - a main value, a
 // derived value, one of the built-in warnings or a value of a wireless
-// sensor (by ID) - and raises when it is above / below the raise threshold
+// sensor (a logical sensor, lsensors.h, by its internal ID) - and raises when it is above / below the raise threshold
 // for the minimum duration; it clears at the clear threshold (hysteresis).
 // While raised, the notification repeats after the repeat interval (0 =
 // once). Values that are not available (stale sensor, no source) never raise
@@ -26,7 +26,9 @@ enum AlarmSrc : uint8_t {
 // value of a wireless sensor (AS_RF)
 enum AlarmRfField : uint8_t {
     AF_TEMP = 0, AF_HUM, AF_WIND, AF_GUST, AF_UV, AF_LUX, AF_LEAK, AF_LIGHTNING_KM, AF_MOISTURE,
-    AF_CO2, AF_PM25, AF_SILENT_MIN, AF_BATTERY_LOW, AF_COUNT
+    AF_CO2, AF_PM25, AF_SILENT_MIN, AF_BATTERY_LOW,
+    AF_RECEPTION_PCT,   // reception watchdog (reception_window.h): % of the expected packets, last hour
+    AF_COUNT
 };
 // notification channels (bit numbers of AlarmRule::channels)
 enum AlarmChannel : uint8_t { AC_NTFY = 0, AC_PUSHOVER, AC_TELEGRAM, AC_MQTT, AC_WEBHOOK, AC_COUNT };
@@ -40,7 +42,7 @@ struct AlarmRule {
     uint8_t  channels = 0;          // bit AC_*
     uint8_t  allClear = 0;          // 1 = notify when it clears
     uint8_t  reserved = 0;
-    uint32_t rfId = 0;
+    char     sensorInternalId[8] = "";         // AS_RF: internal ID of the logical sensor ("L3F9A2C")
     float    raise = 0.0f, clear = 0.0f;   // metric (°C, %, hPa, m/s, mm, mm/h, ...)
     uint16_t minDurationMin = 0;    // condition must hold this long before raising
     uint16_t repeatMin = 0;         // re-notify while raised (0 = once)
@@ -60,7 +62,13 @@ struct AlarmState {
 
 enum AlarmEvent : uint8_t { AE_NONE = 0, AE_RAISE, AE_REPEAT, AE_CLEAR };
 
-// One evaluation at time now (s, monotonic). valid = value available.
+// The alarm clock: seconds since boot from the 64-bit microsecond timer
+// (esp_timer_get_time()). Never millis() / 1000: that wraps at 4294967 s
+// (49.7 days), not at 2^32, so the unsigned deltas below would break there.
+inline uint32_t alarmClockSecFrom(int64_t uptimeUs) { return (uint32_t)(uptimeUs / 1000000LL); }
+uint32_t alarmClockSec();   // device: alarmClockSecFrom(esp_timer_get_time())
+
+// One evaluation at time now (s, monotonic: alarmClockSec()). valid = value available.
 AlarmEvent alarmStep(const AlarmRule& r, AlarmState& s, bool valid, float v, uint32_t now);
 
 // Unit kind of a rule's value (placeholders.h): temperature, speed, ...
@@ -71,9 +79,9 @@ const char* alarmRfFieldKey(uint8_t f);
 const char* alarmChannelKey(uint8_t c);   // "ntfy", "pushover", "telegram", "mqtt", "webhook"
 
 // Which measurements (AlarmRfField) a wireless sensor provides: bit f set =
-// available. "Silent for" and "battery low" are always available.
+// available. "Silent for" and "battery low" are always available, "reception" for radio sensors.
 uint16_t alarmCapMask(bool temp, bool hum, bool wind, bool uv, bool light, bool leak, bool lightning, bool moisture,
-                      bool co2, bool pm25);
+                      bool co2, bool pm25, bool radio);
 inline bool alarmFieldAvailable(uint8_t f, uint16_t mask) { return f < AF_COUNT && (mask >> f) & 1; }
 
 // Ready-made rules: 0 frost, 1 fog / dew, 2 sultry, 3 storm (pressure
@@ -86,7 +94,9 @@ float alarmToDisplay(PhKind k, float metric, const Config& c);
 float alarmFromDisplay(PhKind k, float display, const Config& c);
 const char* alarmUnitLabel(PhKind k, uint8_t src, uint8_t rfField, const Config& c);
 
-// NVS blob of all rules (version byte + rules + check)
+// NVS blob of all rules (magic + rules + check). alarmsDecode() also takes the
+// layout before A5c (radio ID instead of the internal ID): every rule is kept,
+// a wireless rule loses its sensor (not converted; it must be chosen again).
 constexpr size_t ALARM_BLOB_SIZE = 4 + sizeof(AlarmRule) * ALARM_RULES + 4;
 void alarmsEncode(const AlarmRule* rules, uint8_t* out);
 bool alarmsDecode(const uint8_t* in, size_t len, AlarmRule* rules);
@@ -108,9 +118,11 @@ struct AlarmChannels {
     char    whBody[256] = "";
 };
 
-// GET /api/alarms (docs/api/schemas/alarms.schema.json): no secrets
+// GET /api/alarms (docs/api/schemas/alarms.schema.json): no secrets.
+// sensorOf(internalId, customId): the current radio ID of a logical sensor (0 = none) for
+// "sensorId", and its custom ID (lsensors.h) into customId[17] for "customId"; nullptr = none known.
 void alarmsJson(JsonDocument& doc, const AlarmRule* rules, const AlarmState* states, const AlarmChannels& ch,
-                const Config& c, uint32_t nowSec);
+                const Config& c, uint32_t nowSec, uint32_t (*sensorOf)(const char* internalId, char* customId) = nullptr);
 
 // ---- device part (alarms_run.cpp) ----
 struct NotifyReq;

@@ -1,7 +1,7 @@
-# pcbgen – KiCad generator for hardware v2.0
+# pcbgen – KiCad generator for the Weather Node V4 Full (formerly v2.0) and V4 Light
 
-Scripts that produced `pcb/v2.0/` (schematic, placement, routing, silkscreen, production files).
-The KiCad files in `pcb/v2.0/` are the reference; use this generator to rebuild them after a
+Scripts that produced `pcb/v4-full/` and `pcb/v4-light/` (schematic, placement, routing, silkscreen, production files).
+The KiCad files in `pcb/v4-full/` and `pcb/v4-light/` are the reference; use this generator to rebuild them after a
 circuit or layout change (or edit the board directly in KiCad for small changes).
 
 | File | Purpose |
@@ -19,20 +19,23 @@ circuit or layout change (or edit the board directly in KiCad for small changes)
 | `dual_socket.py`, `dual_socket.sh` | in-place edit of the routed board: Heltec V4 socket set J19/J20 + P4 socket J21, ideal diodes U8/U9 (LM66100) + C39, R65, parts and moat moved out of the way, local rip-up, re-route, silkscreen (see below) |
 | `route_grid.py` | small two-layer grid router (A*, 0.025 mm grid, 45° segments) for the connections a local edit opens; needs numpy, scipy, pillow |
 | `refplace.py` | silkscreen readability check / fix: reference texts over part bodies (F.Fab extent, +0.3 mm for headers and sockets), pads, own outline, other texts, holes or the edge are moved to the nearest free spot (`PREFERRED` spots first; `FORCE` also avoids via rings); JP2's pin labels move left of the header; board texts are only reported. Run by `dual_socket.sh` |
-| `heltec_sockets.kicad_dru` | custom DRC rule: the alternative V3 / V4 socket courtyards may overlap |
-| `checknet.py`, `domaincheck.py`, `drc.py` | checks: netlist vs. design, Heltec V3/V4 pin map (every function on its V3 and V4 GPIO, V4 RF/USB pins open), isolation, DRC summary |
+| `heltec_sockets.kicad_dru` | custom DRC rule of the former V3 / V4 double socket (v2.0, no longer used) |
+| `remove_v3.py`, `remove_v3.sh` | V4 Full Rev 1.0: in-place removal of the V3 socket set J1/J2 from the routed board (see below) |
+| `checknet.py`, `domaincheck.py`, `drc.py` | checks: netlist vs. design, Heltec V4 pin map (every function on its V4 GPIO, RF/USB pins open; the Light design brings its own map), isolation, DRC summary |
 | `build2.sh` | full flow: schematic → ERC → netlist → placement → parallel Freerouting attempts → best board |
 | `export.sh` | Gerber/drill ZIP, JLCPCB BOM/CPL, schematic PDF, renders, final DRC |
 | `jlcpcb_cpl.py` | Corrected JLCPCB CPL from temporary raw positions, with article/angle guards |
+| `design_light.py`, `schem_light.py`, `layout_light.py`, `bom_light.py`, `export_light.sh` | V4 Light (`pcb/v4-light/`, Heltec V4, THT): netlist, schematic placement, layout, hand-assembly BOM, export. Build with `DESIGN=design_light SCHEM=schem_light LAYOUT=layout_light N=universal-weather-node-v4-light` (`OUT=` sets the work directory), verbose silkscreen with `light_silk.py <board>` (values on the front, BOM + pinouts on the back; run once on a fresh build), export with `bash tools/pcbgen/export_light.sh pcb/v4-light` |
 | `simulate_fan_pwm.py` | Bounded Q4 PWM subcircuit regression with an externally downloaded vendor model |
 
 Requirements: KiCad 10 (`kicad-cli` and its bundled Python with `pcbnew`), Java and
 [Freerouting](https://github.com/freerouting/freerouting) 2.5 (`FREEROUTING_JAR=/path/freerouting-2.5.0.jar`).
 
 ```bash
-mkdir -p tools/pcbgen/proj && cp pcb/v2.0/*.kicad_pro tools/pcbgen/proj/
+mkdir -p tools/pcbgen/proj && cp pcb/v4-full/universal-weather-node-v4-full.kicad_pro tools/pcbgen/proj/universal-weather-node.kicad_pro
 FREEROUTING_JAR=~/freerouting-2.5.0.jar ATTEMPTS=12 PARALLEL=4 bash tools/pcbgen/build2.sh tools/pcbgen/proj
-bash tools/pcbgen/export.sh tools/pcbgen pcb/v2.0 universal-weather-node
+# rename proj/universal-weather-node.* to universal-weather-node-v4-full.*, then
+bash tools/pcbgen/export.sh tools/pcbgen pcb/v4-full universal-weather-node-v4-full
 ```
 
 Routing: every attempt gets a slightly varied placement (`JITTER=1`), ground is routed as a normal
@@ -54,9 +57,9 @@ removed. JP8 is a two-pin buck disconnect: fit for VIN operation, **remove
 before USB** and disconnect VIN. There is no automatic source isolation.
 USB powers logic and sensors; a 5 V fan shares the Heltec/USB current budget.
 Heater and VIN-mode fan loads require VIN.
-The [USB-C/VIN function matrix](../../docs/pcb.md#functions-by-power-source-v20)
+The [USB-C/VIN function matrix](../../docs/pcb.md#functions-by-power-source-v4-full)
 lists supported interfaces, jumper settings, firmware-update modes and shared
-current limits. The [bring-up checklist](../../pcb/v2.0/CHECKLIST.md#b-bring-up-of-the-first-boards)
+current limits. The [bring-up checklist](../../pcb/v4-full/CHECKLIST.md#b-bring-up-of-the-first-boards)
 includes the corresponding prototype checks for both power modes.
 
 ## JLCPCB orientation review
@@ -97,8 +100,8 @@ All positions, sides and references remain unchanged.
 ```bash
 python3 -B tools/pcbgen/jlcpcb_cpl.py \
   /path/to/temporary-raw-cpl.csv \
-  pcb/v2.0/production/universal-weather-node-v2.0-bom-jlcpcb.csv \
-  pcb/v2.0/production/universal-weather-node-v2.0-cpl-jlcpcb.csv
+  pcb/v4-full/production/universal-weather-node-v4-full-bom-jlcpcb.csv \
+  pcb/v4-full/production/universal-weather-node-v4-full-cpl-jlcpcb.csv
 node --test test/pcb_cpl.test.js
 ```
 
@@ -178,7 +181,7 @@ article as C33; C4/C5 and USB-side C6 remain. The original C1/C2 hot loop
 stays front-only; C33's reservoir branch has a short back-layer link.
 Keep the added ground stitch near board-local (48.5, 37) mm, the readable
 JP2 note and C31's reference outside its body after manual touch-ups.
-See the [capacitor evidence and qualification limits](../../pcb/v2.0/CHECKLIST.md#electrical-stability-improvements).
+See the [capacitor evidence and qualification limits](../../pcb/v4-full/CHECKLIST.md#electrical-stability-improvements).
 
 Reproduce the fan check on macOS with KiCad's ngspice shared library:
 
@@ -191,7 +194,7 @@ python3 -B tools/pcbgen/simulate_fan_pwm.py
 ```
 
 The third-party model is cached under ignored `out/`, not redistributed in
-the sources. Results go to `pcb/v2.0/fan-pwm-stability.json`, outside the
+the sources. Results go to `pcb/v4-full/fan-pwm-stability.json`, outside the
 three manufacturing order files. The check covers a resistive fan substitute,
 an ideal Q5 and an approximate zener; it does not qualify thermal, transient,
 EMI or real-fan behavior. The maximum simulated turn-off delay is 864 us
@@ -263,9 +266,9 @@ land-pattern/orientation have not been physically validated. The protection desi
 selected with ratings above that clamp, but fuse/PPTC derating under combined load and
 ambient temperature still requires prototype validation.
 
-## Heltec V3 / V4 double socket
+## Heltec V3 / V4 double socket (v2.0, history)
 
-v2.0 takes a Heltec V3 (J1/J2, unchanged) or V4 (J19/J20 2.54 mm towards J1, plus the 1×2
+v2.0 took a Heltec V3 (J1/J2, unchanged) or V4 (J19/J20 2.54 mm towards J1, plus the 1×2
 socket J21 for the V4's P4 pins GPIO15/16 at the position of Heltec's V4 STEP model).
 The other shift direction would put V4 pin 1 2.97 mm from the H1 screw and over F3/C9/D5/J16.
 The change was made on the finished board, not by a full rebuild (which would lose the hand
@@ -288,9 +291,26 @@ Run it once on the original board; it refuses a board that already has J19.
 
 `layout_w1.py` contains the new positions, so a full rebuild places them too.
 
+## V4 Full Rev 1.0: V3 socket set removed
+
+`design.py` no longer has J1/J2 (Heltec V3). The routed board was edited in place again:
+
+```bash
+NPY=/path/to/python-with-numpy-scipy-pillow OUT=/tmp/rv3 bash tools/pcbgen/remove_v3.sh <project dir>
+```
+
+`remove_v3.py prepare` deletes J1/J2, applies the regenerated netlist and schematic UUIDs to
+every footprint, moves the J19/J20 outlines back to the silkscreen, deletes the V3 labels and
+renames the board texts; the rest is the `dual_socket.sh` flow (`geometry` / `route_grid.py` /
+`apply` for the opened connections, guarded `prune`, `finish.py fix`, `backdoc.py`, `refplace.py`).
+Stubs that KiCad still reported at the old V3 pads were deleted one by one afterwards, each
+deletion kept only if DRC still showed 0 unconnected items. Use `board.Delete()` (not
+`Remove()`) for footprints / drawings in KiCad 10's Python: a removed object that Python later
+frees crashes the interpreter.
+
 ## 3D models
 
-`models3d.py` (called by `export.sh`) writes simple VRML models into `pcb/v2.0/3dmodels/` for footprints without a usable KiCad library model (Amphenol RJ12/RJ45 jacks, SMD fuses and the LMR36520 SOIC-8 PowerPAD) and points them there via `${KIPRJMOD}`. F5/F7 have separate approximate SCT6125/NANO2 bodies matching their nominal outer dimensions rather than invisible bare pads. These shapes are approximate visual models, not manufacturing drawings. The Heltec module itself is not modelled — the renders show its sockets and the silkscreen underneath.
+`models3d.py` (called by `export.sh`) writes simple VRML models into `pcb/v4-full/3dmodels/` for footprints without a usable KiCad library model (Amphenol RJ12/RJ45 jacks, SMD fuses and the LMR36520 SOIC-8 PowerPAD) and points them there via `${KIPRJMOD}`. F5/F7 have separate approximate SCT6125/NANO2 bodies matching their nominal outer dimensions rather than invisible bare pads. These shapes are approximate visual models, not manufacturing drawings. The Heltec module itself is not modelled — the renders show its sockets and the silkscreen underneath.
 
 ## Pre-routed surge paths
 

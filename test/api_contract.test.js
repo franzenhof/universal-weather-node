@@ -21,7 +21,8 @@ const root = path.join(__dirname, '..');
 const examplesDir = path.join(root, 'docs/api/examples');
 const schemas = new SchemaSet(path.join(root, 'docs/api/schemas'));
 const FIXTURES = ['bresser-7in1-bme280', 'ecowitt-ws90-wh31-wh51-wh57', 'pcb-v2-full', 'pcb-v2-imperial', 'heltec-v4-wireless', 'davis-vantage-pro2'];
-const DOCS = {data: 'data.schema.json', 'history-24h': 'history.schema.json', 'history-7d': 'history.schema.json', info: 'info.schema.json',
+const DOCS = {data: 'data.schema.json', 'history-24h': 'history.schema.json', 'history-7d': 'history.schema.json',
+  'history-30d': 'history.schema.json', 'history-1y': 'history.schema.json', info: 'info.schema.json',
   records: 'records.schema.json', alarms: 'alarms.schema.json'};
 const UPDATE = process.env.UPDATE_API_EXAMPLES === '1';
 const REGEN = 'UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js';
@@ -33,19 +34,21 @@ function build() {
     execFileSync(process.env.CXX || 'c++', [
       '-std=c++11', '-Wall', '-Wextra', '-Werror', '-ffp-contract=off', '-DFIRMWARE_VERSION="2.0.0"',
       '-I', 'test/host', '-I', 'src', '-I', 'lib/TfaWeatherSensorReceiver/src', '-I', 'lib/FineOffsetSensorReceiver/src',
-      '-I', '.pio/libdeps/heltec_wifi_lora_32_V3/ArduinoJson/src',
-      'src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp',
-      'src/derived.cpp', 'src/derived_now.cpp', 'src/units.cpp', 'src/json_payload.cpp', 'src/api_info.cpp',
-      'src/calibration.cpp', 'src/records.cpp', 'src/out_status.cpp', 'src/astro.cpp', 'src/astro_store.cpp', 'src/alarms.cpp', 'src/series_def.cpp',
-      'test/firmware_api.cpp', '-o', exe,
+      '-I', '.pio/libdeps/heltec_wifi_lora_32_V4/ArduinoJson/src',
+      'src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/reception_window.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp', 'src/rf_minrssi.cpp', 'src/lsensors.cpp',
+      'src/derived.cpp', 'src/derived_now.cpp', 'src/units.cpp', 'src/json_payload.cpp', 'src/api_info.cpp', 'src/https_cert.cpp',
+      'src/calibration.cpp', 'src/records.cpp', 'src/out_status.cpp', 'src/astro.cpp', 'src/astro_store.cpp', 'src/alarms.cpp', 'src/series_def.cpp', 'src/series_store.cpp', 'src/placeholders.cpp',
+      'src/time_source.cpp', 'src/wifi_ap_logic.cpp', 'src/vsensor.cpp', 'src/vs_store.cpp', 'src/storage_migrate.cpp', 'src/reset_history.cpp', 'lib/FineOffsetSensorReceiver/src/FineOffsetEncoder.cpp', 'lib/TfaWeatherSensorReceiver/src/ItPlusEncoder.cpp', 'lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp',
+      'lib/FineOffsetSensorReceiver/src/FineOffsetDecoder.cpp', 'test/firmware_api.cpp', '-o', exe,
     ], {cwd: root, stdio: 'pipe'});
   } catch (error) {
     if (error.stderr) process.stderr.write(error.stderr);
     throw error;
   }
   execFileSync(exe, ['hostname'], {stdio: 'inherit'});   // hostname sanitiser asserts (throws on failure)
+  execFileSync(exe, ['gnssprivacy'], {stdio: 'inherit'});   // /api/info position only with an admin login
   const out = {};
-  for (const f of FIXTURES) {
+  for (const f of [...FIXTURES, 'v4-light']) {   // v4-light: gating check only, no docs example
     out[f] = {};
     for (const line of execFileSync(exe, [f], {encoding: 'utf8'}).trim().split('\n')) {
       const sp = line.indexOf(' ');
@@ -134,11 +137,12 @@ test('documents are consistent and contain no secrets', () => {
   for (const f of FIXTURES) {
     const all = JSON.stringify(output[f]);
     assert.ok(!/secret/i.test(all), `${f}: a configured secret leaked into the API`);
-    for (const doc of ['data', 'history-24h', 'history-7d', 'info']) assert.strictEqual(output[f][doc].apiVersion, 1, `${f}/${doc}`);
-    for (const range of ['history-24h', 'history-7d']) {
+    for (const doc of ['data', 'history-24h', 'history-7d', 'history-30d', 'history-1y', 'info']) assert.strictEqual(output[f][doc].apiVersion, 1, `${f}/${doc}`);
+    for (const range of ['history-24h', 'history-7d', 'history-30d', 'history-1y']) {
       const h = output[f][range];
       for (const [k, v] of Object.entries(h))
-        if (Array.isArray(v)) assert.strictEqual(v.length, h.ageSec.length, `${f}/${range}: ${k} length`);
+        if (Array.isArray(v) && k !== 'series') assert.strictEqual(v.length, h.ageSec.length, `${f}/${range}: ${k} length`);
+      for (const s of h.series || []) assert.strictEqual(s.values.length, h.ageSec.length, `${f}/${range}: series ${s.slot} length`);
       for (let i = 1; i < h.ageSec.length; i++) assert.ok(h.ageSec[i] < h.ageSec[i - 1], `${f}/${range}: ageSec not oldest-first`);
     }
     const {data, info} = output[f];
@@ -151,6 +155,25 @@ test('documents are consistent and contain no secrets', () => {
       if (data[unitKey]) assert.strictEqual(info.units[k], data[unitKey], `${f}: units.${k}`);
     if (data.sources) assert.deepStrictEqual(info.sources, data.sources, `${f}: sources`);
   }
+});
+
+test('V4 Light (pcbRev 21): no I/O block in /api/data and /api/info', () => {
+  const doc = output['v4-light'];
+  const {data, info} = doc;
+  for (const [d, schema] of Object.entries(DOCS))
+    assert.deepStrictEqual(schemas.validate(doc[d], schema), [], `v4-light/${d}`);
+  assert.strictEqual(data.status.pcbRev, 21);
+  assert.strictEqual(info.hardware.pcbRev, 21);
+  assert.strictEqual(data.status.uvEnabled, false);
+  assert.strictEqual(data.status.uvIndexCalibrated, false);
+  for (const k of ['uvSensorVolts', 'uvIndex', 'auxAnalogV', 'auxPulses', 'auxPulsesTotal', 'wind2', 'heater', 'fan', 'victron', 'ioStatus'])
+    assert.ok(!(k in data), `v4-light: ${k} must not be in /api/data`);
+  for (const k of ['uvSensorVolts', 'wind2', 'auxAnalog', 'auxPulses', 'heater', 'fan', 'victron'])
+    assert.strictEqual(info.available[k], false, `v4-light: available.${k}`);
+  assert.strictEqual(info.available.wind, true);
+  assert.strictEqual(info.available.rain, true);
+  assert.strictEqual(info.available.ds18b20Probes, 1);
+  for (const k of ['uvSensorVolts', 'uvIndex']) assert.ok(!(k in doc['history-24h']) || doc['history-24h'][k].every((v) => v === null), `v4-light: history ${k}`);
 });
 
 test('schema coverage', (t) => {

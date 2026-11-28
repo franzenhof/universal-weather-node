@@ -1,4 +1,5 @@
 // Radio trace (see rf_trace.h).
+#include "lsensors.h"
 #include "rf_trace.h"
 #include "globals.h"
 #include "rf_sensors.h"
@@ -75,12 +76,25 @@ portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 const char* const PHASES[RF_TP_COUNT] = { "BRESSER", "IT+17", "IT+9", "FSK17", "DAVIS" };
 const char* const RESULTS[RF_TR_RESULTS] = { "OK", "IGNORED", "FAILED", "UNKNOWN", "EVENT" };
 
+// Match a sensor ID against the one-ID filter. The full on-air ID carries a
+// family byte on top (e.g. 0x54 = LDS01, so 54802801), while the sensor table
+// and the Ecowitt app often show only the lower part (2801 / 802801). Accept a
+// short ID the user typed by matching as many low bytes as were entered, so a
+// capture of e.g. the LDS01 is not left empty because of a too-short filter ID.
+inline bool idMatchesFilter(uint32_t id, uint32_t filterId)
+{
+    if (id == filterId) return true;
+    if (filterId <= 0xFFFFFFUL && (id & 0xFFFFFFUL) == filterId) return true;   // low 3 bytes (24-bit ID without family)
+    if (filterId <= 0xFFFFUL   && (id & 0xFFFFUL)   == filterId) return true;   // low 2 bytes
+    return false;
+}
+
 bool wantsLocked(const Trace& t, RfTraceResult r, bool hasId, uint32_t id)
 {
     if (!t.running) return false;
     switch (t.filter) {
         case RF_TRACE_PROBLEMS: return r == RF_TR_FAILED || r == RF_TR_UNKNOWN;
-        case RF_TRACE_ONE_ID:   return hasId && id == t.filterId;
+        case RF_TRACE_ONE_ID:   return hasId && idMatchesFilter(id, t.filterId);
         default:                return true;
     }
 }
@@ -288,9 +302,9 @@ void rfTracePacket(const RfTracePacket& p)
 {
     if (!rfTraceRunning()) return;
     // formatted outside the lock
-    char line[320], ts[32], raw[2 * 40 + 1];
+    char line[384], ts[32], raw[2 * RF_TRACE_FRAME_LEN + 1];
     timeStamp(ts, sizeof(ts));
-    hex(raw, sizeof(raw), p.raw, p.rawLen < 40 ? p.rawLen : 40);
+    hex(raw, sizeof(raw), p.raw, p.rawLen < RF_TRACE_FRAME_LEN ? p.rawLen : RF_TRACE_FRAME_LEN);
     int n = snprintf(line, sizeof(line), "%s %-7s %4.0f dBm", ts, rfTracePhaseName(p.phase), p.rssi);
     if (p.hasFreqErr) n += snprintf(line + n, sizeof(line) - n, " fe %+.1fk", p.freqErrKhz);
     n += snprintf(line + n, sizeof(line) - n, " %-7s", rfTraceResultName(p.result));
@@ -343,7 +357,9 @@ void rfTraceClassifyItPlus(const uint8_t* b, RfTracePacket& p, char* check, size
         snprintf(check, checkLen, crc ? "CRC ok, values invalid" : "CRC fail");
         p.result = RF_TR_FAILED;
         p.protocol = "IT+";
-        p.id = (p.phase == RF_TP_ITPLUS9 ? RF_ID_ITPLUS9 : RF_ID_ITPLUS17) | (uint32_t)(((b[0] & 0x0F) << 2) | (b[1] >> 6));
+        const uint8_t h = b[3] & 0x7F;   // humidity byte: 0x6A none, 0x7D second probe (rf_sensors.h: rfItPlusId)
+        const uint8_t sid = (uint8_t)((((b[0] & 0x0F) << 2) | (b[1] >> 6)) + (h == ITPLUS_PROBE_FLAG ? 64 : 0));
+        p.id = rfItPlusId(p.phase != RF_TP_ITPLUS9, sid, h != ITPLUS_NO_HUMIDITY && h != ITPLUS_PROBE_FLAG);
         p.hasId = crc;   // without a valid CRC the ID bits are not trustworthy
     } else {
         snprintf(check, checkLen, "no known format (model nibble %X, IT+ needs 9)", b[0] >> 4);
@@ -415,9 +431,12 @@ void rfTraceFoValues(const FoFrame& f, char* out, size_t len)
     if (f.hasLeak)      addf(out, len, n, "leak %s ", f.leak ? "YES" : "no");
     if (f.hasLeafWetness)  addf(out, len, n, "leaf %u%% ", f.leafWetnessPct);
     if (f.hasConductivity) addf(out, len, n, "EC %.0fuS/cm ", f.conductivityUsCm);
+    if (f.hasDistance)  addf(out, len, n, "dist %umm%s ", f.distanceMm, f.fastTx ? " fast" : "");
+    if (f.hasHeatCount) addf(out, len, n, "HoC %u ", f.heatCount);
     if (f.hasSupercap)  addf(out, len, n, "cap %.2fV ", f.supercapV);
     if (f.batteryMv)    addf(out, len, n, "bat %umV ", f.batteryMv);
-    if (!f.batteryKnown) addf(out, len, n, "values not decoded yet (raw bytes below)");
+    // a radio-clock frame carries only the time; an LDS01 carries distance but no battery field
+    if (!f.batteryKnown) { if (!f.hasClock && !f.hasDistance) addf(out, len, n, "values not decoded yet (raw bytes below)"); }
     else                 addf(out, len, n, "%s", f.batteryOk ? "bat ok" : "BAT LOW");
 }
 
@@ -440,7 +459,7 @@ void rfTraceFileName(char* out, size_t len, const char* hostname)
     if (start) {
         time_t tt = (time_t)start;
         struct tm tm;
-        localtime_r(&tt, &tm);
+        localTimeOf(tt, tm);
         snprintf(out, len, "uwn-rftrace-%s-%04d%02d%02d-%02d%02d.txt", h, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                  tm.tm_hour, tm.tm_min);
     } else {
@@ -457,9 +476,9 @@ void rfTraceWriteFile(RfTraceWriter w, void* ctx, const char* hostname, const ch
           "# including your neighbours'. It contains no passwords, keys or network credentials.\n#\n");
     o.fmt("# Firmware:        %s\n", FIRMWARE_VERSION);
     o.fmt("# Host name:       %s\n", hostname && hostname[0] ? hostname : "-");
-    o.fmt("# Board:           Heltec WiFi LoRa 32 %s, front end %s, %lu MB flash\n", boardName(gBoard.kind),
+    o.fmt("# Board:           Heltec WiFi LoRa 32 %s, front end %s, %lu MB flash\n", "V4",
           femName(gBoard.fem), (unsigned long)(gBoard.flashBytes >> 20));
-    o.fmt("# PCB:             %s\n", boardPcbAllowed() ? (gCfg.pcbVersion == 20 ? "v2.0" : gCfg.pcbVersion == 12 ? "Rev 1.2" : "Rev 1.3")
+    o.fmt("# PCB:             %s\n", boardPcbAllowed() ? boardPcbName()
                                                           : "none (Heltec V4)");
     uint32_t ms = millis();
     o.fmt("# Uptime:          %lu s\n", (unsigned long)(ms / 1000));
@@ -489,12 +508,24 @@ void rfTraceWriteFile(RfTraceWriter w, void* ctx, const char* hostname, const ch
     if (pt) o.fmt("#   wireless:      %s, sensor type %s\n", gCfg.rfEn ? "on" : "off", pt);
     else    o.fmt("#   wireless:      %s, sensor type bit mask %d (1 Bresser, 2 IT+ 17.241k, 4 IT+ 9.579k, 8 Fine Offset)\n",
                   gCfg.rfEn ? "on" : "off", gCfg.rfProto);
-    o.fmt("#   Mine:          %s\n", gCfg.rfIds[0] ? gCfg.rfIds : "(none)");
+    {
+        char mine[RF_MAX_SENSORS * 10 + 1];
+        rfFormatIds(lsMineIds(), mine, sizeof(mine));
+        o.fmt("#   Mine:          %s\n", mine[0] ? mine : "(none)");
+    }
     o.fmt("#   hidden:        %s\n", gCfg.rfIgnore[0] ? gCfg.rfIgnore : "(none)");
     o.fmt("#   only mine:     %s\n", rfOnlyMineActive() ? "on (other sensors are dropped: IGNORED)" : "off");
     o.fmt("#   LoRaWAN:       %s (shares the radio: no reception during uplinks)\n", gCfg.loraEn ? "on" : "off");
-    o.fmt("#   sources:       air %u, wind %u, rain %u, UV %u, light %u, pressure %u (0 auto, 1 board, 2-5 wireless 1-4, 6 off)\n",
-          gCfg.srcSel[0], gCfg.srcSel[1], gCfg.srcSel[2], gCfg.srcSel[3], gCfg.srcSel[4], gCfg.srcSel[5]);
+    {
+        static const char* const sgName[6] = { "air", "wind", "rain", "UV", "light", "pressure" };
+        o.str("#   sources:       ");
+        for (int g = 0; g < 6; g++) {
+            o.fmt("%s%s %u", g ? ", " : "", sgName[g], gCfg.srcSel[g]);
+            LogicalSensor e;
+            if (gCfg.sourceInternalId[g][0]) o.fmt(" (%s = %08lX)", gCfg.sourceInternalId[g], lsCopyByInternalId(gCfg.sourceInternalId[g], e) ? (unsigned long)e.radioId : 0UL);
+        }
+        o.str(" (0 auto, 1 board, 2-33 wireless 1-32, 34 off; () = bound logical sensor = radio ID)\n");
+    }
     o.fmt("#   units:         %s, wind %s\n", gCfg.unitSystem == 1 ? "imperial" : "metric", gCfg.windUnitMs ? "m/s" : "km/h");
     if (gCfg.rfProto == RF_PROTO_DAVIS)
         o.fmt("#   Davis:         ID %d, offset %d Hz, window %d / guard %d ms, scan %d kHz, AFC %d, table %d, bw %d, "

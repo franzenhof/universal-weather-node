@@ -7,6 +7,7 @@ struct WxObs {
     bool  hasTemp = false, hasHum = false, hasPress = false, hasWind = false, hasRain = false;
     float tempC = 0, humidity = 0, qnhHpa = 0;
     float windMs = 0, gustMs = 0;
+    bool  hasDir = false;     // with hasWind: the direction is known (else left out / dots)
     int   dirDeg = 0;
     float rain1hMm = 0, rain24hMm = 0, rainDayMm = 0;
 };

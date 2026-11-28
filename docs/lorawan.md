@@ -83,8 +83,8 @@ Single-byte commands:
 | `0x03` | Open the config portal (after the current cycle) |
 | `0x04` | Debug mode on (saved) |
 | `0x05` | Debug mode off (saved) |
-| `0x06` | Reset the AUX pulse total (PCB v2.0) |
-| `0xFF` | Clear project settings in `cfgdata`, restart into the first-boot portal; not a full flash erase or a guarantee of cleared Wi-Fi/LoRaWAN persistence |
+| `0x06` | Reset the AUX pulse total (V4 Full) |
+| `0xFF` | [Reset settings](settings.md#reset): every setting to its default, but Wi-Fi, static IP, device name, own access point, admin password, language and the LoRaWAN keys / session stay (the node stays reachable); measurement data stays. Erasing everything is only on the settings page |
 
 ## Payload Formats
 
@@ -123,7 +123,7 @@ New nodes start with the binary format; nodes that already have a stored setting
 | Ch 2 | Baro. Pressure | Pressure absolute (station pressure of the selected source) | hPa / inHg ×10 | source delivers pressure |
 | Ch 1 | Temperature | Temperature (selected source: BME280 or wireless) | °C / °F | source delivers temperature |
 | Ch 2–4 | Temperature | DS18B20 probe 0–2 | °C / °F | probe found |
-| Ch 3 | Digital Input | I/O status bits (see below) | bitfield | any v2.0 function on |
+| Ch 3 | Digital Input | I/O status bits (see below) | bitfield | any V4 Full I/O function on |
 | Ch 5 | Analog Input | AUX analog input | V | AUX analog on |
 | Ch 10 / 11 | Generic Sensor | AUX pulses this cycle / since power-on | count | AUX pulse on |
 | Ch 2 | Direction | 2nd wind vane | ° | 2nd wind sensor, mode 2 |
@@ -148,7 +148,7 @@ New nodes start with the binary format; nodes that already have a stored setting
 - In imperial mode the pressure field carries inHg ×10 (0.01 inHg resolution); the decoder divides by 10 again.
 - The decoder keeps the field names `bme280_pressure_qnh_hpa` / `bme280_pressure_abs_hpa` (and `bme280_temperature_c` …) for compatibility; the values come from the selected [pressure source](wireless-sensors.md#value-sources), which may be a wireless sensor (`sources.pressure`).
 - All values are rounded and clamped to the field's range (never wrapped). Analog Input covers ±327.67.
-- Sizes: minimal 7–15 bytes, full 62 bytes, full with debug 84 bytes. The v2.0 I/O block adds up to 62 bytes (every function on, all Victron fields), wireless sensors add up to 12 bytes (Ch 15 light, Ch 16 sources) — use the binary format on slow data rates.
+- Sizes: minimal 7–15 bytes, full 62 bytes, full with debug 84 bytes. The V4 Full I/O block adds up to 62 bytes (every function on, all Victron fields), wireless sensors add up to 12 bytes (Ch 15 light, Ch 16 sources) — use the binary format on slow data rates.
 - **I/O status bits** (Ch 3 / binary bit 20): bit 0 heater on, bit 1 fan on, bit 2 fan stalled, bit 3 battery lockout active, bit 4 VE.Direct on but no data. The decoder returns them as `io_status.*`; the Victron charge state additionally as text (`victron_charge_state_text`: off, fault, bulk, absorption, float, …).
 
 ### Compact Binary Format
@@ -175,7 +175,7 @@ Layout (version 4): `[version: 1 byte][presence mask: 1–6 bytes][fields...]`. 
 | 17 | Send failure counter | `u8` | debug |
 | 18 | Free heap | `u16`, KiB | debug |
 | 19 | Uptime | `u16`, ×10, hours | debug |
-| 20 | I/O status | `u8`, bits as Ch 3 | any v2.0 function on |
+| 20 | I/O status | `u8`, bits as Ch 3 | any V4 Full I/O function on |
 | 21 | AUX analog | `u16`, ×1000, V | AUX analog on |
 | 22 | AUX pulses (cycle) | `u16`, clamped at 65535 | AUX pulse on |
 | 23 | AUX pulses total | `u32` | AUX pulse on |
@@ -195,11 +195,30 @@ Layout (version 4): `[version: 1 byte][presence mask: 1–6 bytes][fields...]`. 
 | 40 | Victron yield today | `u16`, ×100, kWh | VE.Direct data |
 | 41 | Victron state of charge | `u16`, ×10, % | BMV / SmartShunt |
 
-Typical sizes: wind + rain + BME280 + 3 × DS18B20 + LiPo 34 bytes; everything incl. debug, the v2.0 I/O block, all Victron values, UV, light and sources at most 90 bytes (encoder buffer 96).
+Typical sizes: wind + rain + BME280 + 3 × DS18B20 + LiPo 34 bytes; everything incl. debug, the V4 Full I/O block, all Victron values, UV, light and sources at most 90 bytes (encoder buffer 96).
 
 **Older versions** (firmware up to 2.0.0-beta.1), still read by the [decoder](../chirpstack/decoder.js): a fixed 4-byte little-endian mask; bit 26 was one 14-byte VE.Direct block (battery V/A, PV V/W, charge state, error, yield, SOC; missing values `0xFFFF` / `0x8000` / `0xFF`); **version 3** added a 5-byte UV group at bit 31 (voltage, index, flags), packets without UV stayed **version 2**. Update the decoder on ChirpStack/TTN **before** installing firmware that sends version 4.
 
 > **Version 1** (firmware ≤ 1.0.4) used ×10 for imperial rain/pressure too (a 0.2 mm tip became 0) and `u16` for rain since start. The decoder still reads version 1; metric values are identical in both.
+
+## Time Sources and Network Time (DeviceTimeReq)
+
+The node's clock ("today" for rain, records and the daily history, local timestamps, the display clock) comes from the best **fresh** time source, in this fixed order:
+
+| Priority | Source | Fresh for | Accuracy class |
+|---|---|---|---|
+| 1 | **GNSS module** on a V4 without PCB ([settings](settings.md#gnss-module)); only with a fix (RMC status *A*) | 1 h | 20 ms with PPS, else 1 s |
+| 2 | **NTP** (Wi-Fi; lwIP asks every 3 h) | 24 h | 50 ms |
+| 3 | **DCF77 radio-clock sensor** (WH31 / WN31 DNT, *Radio-clock time* on the status page) | 25 h | 2 s |
+| 4 | **Phone** — the browser time the dashboard sends once per page load (`POST /api/time`); taken over the [own access point](airfield.md), or from the LAN only while no source is fresh | 24 h | 2 s |
+| 5 | **LoRaWAN** `DeviceTimeReq` | 26 h | 1 s |
+
+A source is fresh for its window after its last time. A worse source never changes the clock while a better one is fresh; once the better one is stale, the next time from a worse source is taken. A time within the source's accuracy only confirms the clock (no step). The status page (*Clock*) and `/api/info` (`measurement.clockSource`, `clockSourceAgeSec`, `clockSourceFresh`) show the source; the log has a line `Time: source ntp -> lorawan` on every change and `Time: clock set from … (±… ms)` on every step.
+
+- **GNSS:** the time of an RMC sentence with status *A* (or a ZDA during a fix); with the PPS pulse on GPIO41 the edge before the sentence marks its second (if the sentence came within 900 ms of it), otherwise the moment the line was read. Lines read after a stall of the main loop (LoRaWAN join, light sleep) are not used for the clock. Once the clock follows GNSS it is re-confirmed once a minute.
+- **DCF77 sensor:** the frames carry the local time of the time signal (CET / CEST); the node converts it with its time zone setting, so that must be the sensor's zone. A time is used only once **two consecutive frames agree** (their difference by the frames and by the node's uptime within 3 s + 1 ms per second between them) — a corrupt frame alone never sets the clock. Times in the repeated hour at the end of summer time (02:00–03:00) are refused. The WH31 sends its time only after a battery change and then about once a day (~02:00).
+- **LoRaWAN:** the node adds the MAC command `DeviceTimeReq` (LoRaWAN 1.0.3, one byte in FOpts) to a normal uplink: with the first uplink after every join, then once a day — **every 6 h in [low-power mode](#low-power-mode-lora-only)**, where the clock drifts more in light sleep. Unanswered requests are repeated after 1 h (RadioLib keeps the request queued until a downlink comes). **No request while a better source (NTP …) is fresh**, so a Wi-Fi node with NTP costs no downlinks. The network server answers in the next downlink (ChirpStack v4 and TTN support it); RadioLib converts the GPS time to Unix time (GPS epoch 1980-01-06, minus 18 leap seconds) and advances it from the end of the uplink to the moment it is read. The status page (*LoRaWAN → Network time*) shows the last answer and when the next request goes out; `/api/info` → `measurement.loraTimeReqInSec`.
+- **Clock steps backwards** (a better source corrects a clock that was ahead): the history buckets do not jump back — the open 5-min / hour / day bucket simply lasts until the clock has passed it again (a step of more than one window ends it and starts a new one, never in a window that already has an entry); "today" in the records, the rain statistics and the per-sensor rain stays on the current day when the step crosses midnight by up to a day.
 
 ## Low-Power Mode (LoRa only)
 
@@ -207,7 +226,7 @@ For battery/solar installs without Wi-Fi: with **`lowPowerEn = 1`** (portal, web
 
 - **Wind speed and rain** wake the chip on every edge of the reed contacts and are counted in software while it sleeps (the hardware pulse counters are not clocked in light sleep). Works on every PCB revision.
 - **Samples** (wind, gust, direction every wind sample interval; BME280 every 10 s) run as before. With 3-s wind sampling the node wakes less often.
-- **Wind-vane supply** (PCB v2.0): with **`vanePowerSave = 1`** (default) the potentiometer is only powered for ~100 ms around each reading (the filter, τ ≈ 15 ms, settles in that time, spent in light sleep). Set it to `0` for vanes that need continuous power.
+- **Wind-vane supply** (V4 Full / V4 Light): with **`vanePowerSave = 1`** (default) the potentiometer is only powered for ~100 ms around each reading (the filter, τ ≈ 15 ms, settles in that time, spent in light sleep). Set it to `0` for vanes that need continuous power.
 - **VE.Direct:** the node stays awake for the last ~2.5 s before each uplink to catch a frame.
 - Only active while **Wi-Fi is off**, **wireless sensors are off** (the LoRa chip would have to keep listening) and neither heater nor fan is running (their PWM stops in light sleep). Wind, rain and AUX pulses (counter or 2nd anemometer) are counted while sleeping. The user button still wakes the node and turns the display on.
 - The power saving still has to be measured on real hardware.

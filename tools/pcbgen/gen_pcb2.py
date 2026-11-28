@@ -11,7 +11,8 @@ Layout concept (board-local mm, origin top-left, y down):
 import sys, os, json, math
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pcbnew
-from design import PARTS
+import importlib as _il, os as _os
+_D = _il.import_module(_os.environ.get("DESIGN", "design")); PARTS = _D.PARTS
 from lcsc import LCSC, VALUE_OVERRIDE
 from sexp import parse, find, get
 
@@ -119,7 +120,10 @@ def hit(a, b): return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] 
 
 occupied = []
 for i, (hx, hy) in enumerate(HOLES, 1):
-    fp = load("MountingHole:MountingHole_3.2mm_M3"); fp.SetReference(f"H{i}"); fp.SetValue("M3")
+    # HOLE_FP / HOLE_NET: plated mounting holes tied to a net (e.g. GND for an ESD path to a grounded chassis)
+    fp = load(getattr(L, "HOLE_FP", "MountingHole:MountingHole_3.2mm_M3")); fp.SetReference(f"H{i}"); fp.SetValue("M3")
+    if getattr(L, "HOLE_NET", None):
+        for q in fp.Pads(): q.SetNet(net(L.HOLE_NET))
     fp.SetPosition(V(hx, hy)); fp.SetBoardOnly(True); fp.SetExcludedFromBOM(True); fp.SetExcludedFromPosFiles(True)
     fp.Reference().SetVisible(False); fp.Value().SetVisible(False)
     board.Add(fp)
@@ -173,8 +177,8 @@ for ref, pnum, tx, ty, other, dirn in getattr(L, "FIXED_PADS", []):
             if clash: print("FIXED_PADS overlap:", ref, bb, clash)
             occupied.append(bb); done = True; break
     assert done, ref
-for ref in ("J1", "J2"):
-    fps[ref].Reference().SetVisible(False)   # module outline is labelled instead
+for ref in ("J1", "J2", "J19", "J20"):
+    if ref in fps: fps[ref].Reference().SetVisible(False)   # module outline is labelled instead
 
 # ---------------- connectivity-aware placement inside each zone ---------------
 # Each part goes to the free spot (0.5 mm grid, 0/90/180/270 deg) that minimises the
@@ -381,7 +385,7 @@ for i, (x0, y0, x1, y1) in enumerate(MOATS):
 # Keep copper clear of M3 hardware with a 7 mm outer diameter plus radial margin.
 for hx, hy in HOLES:
     radius = getattr(L, "MOUNTING_COPPER_RADIUS", 0)
-    if not radius: continue
+    if not radius or getattr(L, "HOLE_NET", None): continue   # holes on a net: the pad is the washer area and connects
     z = pcbnew.ZONE(board); z.SetIsRuleArea(True)
     z.SetZoneName("M3 7mm hardware + 0.25mm copper margin")
     z.SetLayerSet(pcbnew.LSET.AllCuMask())

@@ -13,7 +13,7 @@ from lcsc import LCSC
 from sexp import parse, find, get
 
 parts = {p["ref"]: p for p in PARTS}
-board = parse(Path("pcb/v2.0/universal-weather-node.kicad_pcb").read_text())[0]
+board = parse(Path("pcb/v4-full/universal-weather-node-v4-full.kicad_pcb").read_text())[0]
 footprints = {next(p[2] for p in find(f, "property") if p[1] == "Reference"): f
               for f in find(board, "footprint")}
 removed = {"F2", "D4", "Q9", "R56", "U6", "R57", "R58", "R59", "R60", "C28", "C29", "C30"}
@@ -50,8 +50,9 @@ assert parts["J18"]["pins"] == {"1": "VIN_IN", "2": "GND", "3": "GND"}   # DC ja
 assert parts["JP8"]["pins"] == {"1": "+5V_BUCK", "2": "+5V"}
 for ref in ("J3", "JP8"):
     assert {p[1] for p in find(footprints[ref], "pad")} == {"1", "2"}
-assert parts["J1"]["pins"]["2"] == "+5V"
-assert parts["J2"]["pins"]["2"] == "3V3_HELTEC"
+assert "J1" not in parts and "J2" not in parts                      # V4 Full: no V3 socket set
+assert parts["J20"]["pins"]["2"] == "3V3_HELTEC"
+assert parts["U8"]["pins"]["1"] == "+5V" and parts["U8"]["pins"]["3"] == "+5V_V4"
 assert parts["F3"]["pins"] == {"1": "3V3_LDO", "2": "+3V3"}
 assert parts["U7"]["pins"]["1"] == "+5V" and parts["U7"]["pins"]["5"] == "3V3_LDO"
 assert parts["JP9"]["pins"] == {"1": "+5V", "2": "FAN_SUPPLY", "3": "+VLOAD"}
@@ -83,7 +84,7 @@ assert parts["C31"]["value"] == "47uF 63V"
 assert parts["C31"]["fp"].endswith("CP_Elec_8x10")
 assert parts["C6"]["value"] == "100uF"
 assert parts["C35"]["pins"] == {"1": "+5V", "2": "GND"} and parts["C35"]["value"] == "10uF 50V"
-project = json.loads(Path("pcb/v2.0/universal-weather-node.kicad_pro").read_text())
+project = json.loads(Path("pcb/v4-full/universal-weather-node-v4-full.kicad_pro").read_text())
 assert not any(p["pattern"].lstrip("/") in obsolete_nets
                for p in project["net_settings"]["netclass_patterns"])
 for ref in ["J3", "JP8", "Q4", *bank, "JP12", "R61", "C31", "C32", "C33", "C34"]:
@@ -129,15 +130,15 @@ assert worst_individual_power < .043
 assert math.isclose(4*worst_individual_power, gate_resistor_power)
 assert 5/10000 < .002
 
-base = Path("pcb/v2.0/production")
-bom = list(csv.DictReader((base / "universal-weather-node-v2.0-bom-jlcpcb.csv").open()))
+base = Path("pcb/v4-full/production")
+bom = list(csv.DictReader((base / "universal-weather-node-v4-full-bom-jlcpcb.csv").open()))
 by_ref = {r.strip(): row for row in bom for r in row["Designator"].split(",")}
-# V3/V4 double socket: + LM66100 line (U8/U9), R65 and C39 in existing lines
+# LM66100 line (U8/U9), R65 and C39 in existing lines
 assert len(bom) == 48 and len(by_ref) == 139
-tht = list(csv.DictReader((base / "universal-weather-node-v2.0-tht-lcsc.csv").open()))
+tht = list(csv.DictReader((base / "universal-weather-node-v4-full-tht-lcsc.csv").open()))
 tht_by_ref = {r.strip(): row for row in tht for r in row["Designator"].split(",")}
-# V4 sockets J19/J20 join the 1x18 socket line, J21 (1x2 P4 socket) is a new line
-assert len(tht) == 10 and len(tht_by_ref) == 26 and not set(tht_by_ref) & set(by_ref)
+# V4 Full: V4 sockets J19/J20 (1x18 line) + J21 (1x2 P4 socket); the V3 sockets J1/J2 are gone
+assert len(tht) == 10 and len(tht_by_ref) == 24 and not {"J1", "J2"} & set(tht_by_ref) and not set(tht_by_ref) & set(by_ref)
 assert not removed.intersection(tht_by_ref)
 assert not removed.intersection(by_ref)
 assert by_ref["Q4"]["LCSC Part #"] == "C154901"
@@ -157,7 +158,7 @@ for ref, article in {"C1": "C77102", "C33": "C77102", "C34": "C21397",
 for ref in refs:
     assert (by_ref[ref]["LCSC Part #"], by_ref[ref]["MPN"]) == LCSC[parts[ref]["lcsc_key"]][:2], ref
 assert all(r in by_ref for r in refs)
-simulation = json.loads(Path("pcb/v2.0/fan-pwm-stability.json").read_text())
+simulation = json.loads(Path("pcb/v4-full/fan-pwm-stability.json").read_text())
 assert len(simulation["cases"]) == 4
 assert all(c["off_command_to_output_below_10_percent_us"] < 1000
            and c["pwm_Hz"] == 100 and c["duty"] == .9 for c in simulation["cases"])

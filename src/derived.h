@@ -45,7 +45,7 @@ enum PressureTendency : int8_t {
     PT_STEADY = 0,
     PT_RISING_SLOWLY, PT_RISING, PT_RISING_QUICKLY, PT_RISING_VERY_RAPIDLY
 };
-PressureTendency pressureTendency(float delta3hHpa);
+PressureTendency pressureTendency(float delta3hHpa);   // non-finite: PT_STEADY
 const char* pressureTendencyText(PressureTendency t);   // "falling slowly", "steady", ...
 
 // Simple local trend from the 3-h tendency and the current QNH (no forecast

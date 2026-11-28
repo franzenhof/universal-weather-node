@@ -9,6 +9,7 @@
 #include "payload.h"
 #include "board_io.h"
 #include "uv_calibration.h"
+#include "rf_sensors.h"
 #include "sources.h"
 #include "sensors.h"
 
@@ -76,7 +77,7 @@ static Measurements currentMeasurements(const PathValues* pv)
         m.hasAuxAin    = ioAuxAinActive();      m.auxAinV = gIo.auxAinV;
         m.hasAuxPulses = gCfg.auxPulseEn && !gCfg.wind2Mode;  m.auxPulses = gIo.auxPulsesCycle;  m.auxPulsesTotal = gIo.auxPulsesTotal;
         m.hasAuxAin    = m.hasAuxAin && gCfg.wind2Mode != 2;
-        m.hasWind2     = gCfg.wind2Mode != 0;  m.hasWind2Dir = ioWind2DirActive();
+        m.hasWind2     = gCfg.wind2Mode != 0 && gIo.wind2Valid;  m.hasWind2Dir = m.hasWind2 && ioWind2DirActive();
         m.wind2DirDeg  = gIo.wind2DirDeg;
         m.wind2Speed   = windSpeedForOutput(gIo.wind2SpeedMs, gCfg);
         m.wind2Gust    = windSpeedForOutput(gIo.wind2GustMs,  gCfg);
@@ -89,7 +90,7 @@ static Measurements currentMeasurements(const PathValues* pv)
         m.veChargeState = gIo.ve.chargeState; m.veError = gIo.ve.error;
     }
     if (gSrc.uvBoard) {
-        m.hasUv = ioV2() && ioUvActive() && isfinite(gIo.uvSensorVolts) &&
+        m.hasUv = ioFull() && ioUvActive() && isfinite(gIo.uvSensorVolts) &&
                   gIo.uvSensorVolts >= 0.0f && gIo.uvSensorVolts <= 5.5f;
         if (m.hasUv) {
             m.uvSensorVolts = gIo.uvSensorVolts;
@@ -101,7 +102,7 @@ static Measurements currentMeasurements(const PathValues* pv)
         m.uvIndex = gSrc.uvIndexRadio;
     }
     m.hasLight = gSrc.lightValid;  m.lightLux = gSrc.lightLux;
-    m.hasSources = gCfg.rfEn != 0;  m.sources = srcBits();
+    m.hasSources = rfTableOn();  m.sources = srcBits();
     m.debug = gCfg.debugMode;
     m.dbgCycle    = loopCount;
     m.dbgSendFail = (uint8_t)min(sendFailCount, 255);
@@ -184,7 +185,7 @@ static void encodeLpp(const Measurements& m)
     for (int i = 0; i < 3; i++)
         if (m.hasDs18b20[i]) lppTemp(2 + i, m.ds18b20[i]);
 
-    // PCB v2.0 I/O block
+    // V4 Full I/O block
     if (m.hasIoStatus)  lpp.addDigitalInput(3, m.ioStatus);
     if (m.hasAuxAin)    lppAnalog(5, m.auxAinV);
     if (m.hasAuxPulses) { lppUInt(10, m.auxPulses); lppUInt(11, m.auxPulsesTotal); }

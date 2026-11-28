@@ -21,7 +21,8 @@ bool itPlusDecode(const uint8_t* b, ItPlusFrame& out)
     out.sensorId    = (uint8_t)(((b[0] & 0x0F) << 2) | (b[1] >> 6));
     out.newBattery  = (b[1] >> 5) & 1;
     out.weakBattery = (b[3] >> 7) & 1;
-    out.tempC       = tens * 10.0f + ones + tenths * 0.1f - 40.0f;
+    // in tenths first: float "37.6 - 40" gave -2.4000015 (printed -2.400002)
+    out.tempC       = (tens * 100 + ones * 10 + tenths - 400) / 10.0f;
     uint8_t h = b[3] & 0x7F;
     if (h == ITPLUS_PROBE_FLAG) {
         out.sensorId += 64;                 // second probe channel: own ID

@@ -13,7 +13,8 @@ enum OutId : uint8_t {
     OUT_WX_FIRST,                          // the weather networks in wx_upload.cpp order (8)
     OUT_NOTIFY_FIRST = OUT_WX_FIRST + 8,   // alarm channels ntfy, Pushover, Telegram, webhook (alarms.h AC_* without MQTT)
     OUT_CUSTOM_FIRST = OUT_NOTIFY_FIRST + 4,   // custom uploads 1-2
-    OUT_COUNT = OUT_CUSTOM_FIRST + 2
+    OUT_INFLUX = OUT_CUSTOM_FIRST + 2,     // InfluxDB / VictoriaMetrics push
+    OUT_COUNT
 };
 
 struct OutStatus {
@@ -28,8 +29,12 @@ void outStatusOk(OutStatus& s, uint32_t nowMs);
 void outStatusFail(OutStatus& s, uint32_t nowMs, int32_t code, const char* text);
 // {"lastOkSecAgo", "lastErrorSecAgo", "lastError", "lastErrorCode", "failsInRow"}
 void outStatusJson(JsonObject o, const OutStatus& s, uint32_t nowMs);
-const char* outStatusKey(uint8_t id);   // "lorawan", "mqtt", "haDiscovery", "loxone", "awekas", ..., "ntfy", ..., "custom1", "custom2"
+const char* outStatusKey(uint8_t id);   // "lorawan", "mqtt", "haDiscovery", "loxone", "awekas", ..., "ntfy", ..., "custom1", "custom2", "influxdb"
 
 // ---- device (thread-safe; any task) ----
 void outReport(uint8_t id, bool ok, int32_t code = 0, const char* text = nullptr);
 void outSnapshot(OutStatus out[OUT_COUNT]);
+// Web server task only (it runs one handler at a time): a fresh snapshot in
+// one shared buffer instead of a ~1.1-KB static copy per page / API call.
+// Valid until the next call (a later call only makes it newer).
+const OutStatus* outSnapshotForWebTask();

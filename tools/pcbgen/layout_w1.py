@@ -1,4 +1,4 @@
-"""Weather node v2.0 layout: 100 x 100 mm, 4 x M3 (92 x 92 mm corner pattern).
+"""Weather Node V4 Full layout (formerly v2.0): 100 x 100 mm, 4 x M3 (92 x 92 mm corner pattern).
 
 Board-local mm, origin top-left, y down. Heltec module at the left edge (USB-C
 flush with the edge) below the top-left hole; 18 screw-terminal poles along the
@@ -38,7 +38,6 @@ J7_Y1 = RJ_RAIN_TOP + 13.3 + 1.75 + PITCH + 1.2      # RAIN: pin 2 RAIN on top, 
 J5_Y1 = RJ_WIND_TOP + 13.3 + 1.75 + 3 * PITCH + 1.2  # WIND: 3V3 | DIR | SPD | GND top->bottom
 J17_Y1 = 81.0                                        # UV pin 1: 19 mm above bottom edge
 FIXED = {
-    "J2": (X0, ROW_TOP, 90), "J1": (X0, ROW_BOT, 90),
     "J6": (RJ_X, RJ_RAIN_TOP + 6.65 + 3.175, 90),
     "J4": (RJ_X, RJ_WIND_TOP + 6.65 + 3.175, 90),
     "J7": (TERM_RX, J7_Y1, 90),
@@ -101,7 +100,7 @@ ZONES = [   # order = placement priority; ANCHORS below pull critical pads toget
         "F7", "D1", "Q7", "D31", "R45", "F1",
         "U1", "C1", "C2", "C3", "C26", "L1", "C4", "C5", "C33", "C34", "R46", "R47", "R48", "C31",
         "JP8", "C7", "TP2", "TP3", "TP1",                           # buck disconnect, test points
-        "R2", "C10"]),                                              # HW revision ID at J1.17 (V3 GPIO20; V4 GPIO15 at J21)
+        "R2", "C10"]),                                              # HW revision ID at J21.1 (GPIO15)
     ("CLOW", 70.0, 88.0, 47.0, 64.0, ["C6"]),                      # bulk 5 V output capacitor
     ("I2C2", MOD[2] + 1.3, RJ_L - 0.3, 37.0, C_BOT, [
         "R15", "R16", "D12", "D13", "JP1", "JP11", "R17", "R18", "C8"]),   # I2C conditioning near J9
@@ -136,10 +135,10 @@ ANCHORS = [
     ("C34", "1", "L1", "2"),
     ("R46", "1", "L1", "2"), ("R47", "1", "U1", "5"), ("R48", "1", "R47", "2"),
     ("R61", "2", "JP12", "1"), ("JP12", "2", "R49", "1"),
-    ("C7", "1", "J1", "2"),
+    ("C7", "1", "U8", "1"),
     ("TP2", "1", "C1", "1"), ("TP3", "1", "C7", "1"), ("TP1", "1", "C2", "2"),
-    ("R1", "2", "J1", "17"), ("R2", "1", "J1", "17"), ("C10", "1", "J1", "17"),
-    ("F3", "1", "J2", "2"), ("C9", "1", "F3", "2"), ("D5", "1", "F3", "2"), ("TP4", "1", "C9", "1"), ("TP5", "1", "C9", "2"),
+    ("R1", "2", "J21", "1"), ("R2", "1", "J21", "1"), ("C10", "1", "J21", "1"),
+    ("F3", "1", "U7", "5"), ("C9", "1", "F3", "2"), ("D5", "1", "F3", "2"), ("TP4", "1", "C9", "1"), ("TP5", "1", "C9", "2"),
     # AUX
     ("R24", "1", "J11", "2"), ("R26", "1", "J11", "3"), ("R27", "2", "R26", "2"), ("D19", "3", "R26", "2"),
     ("R28", "1", "R26", "2"), ("C18", "1", "R28", "2"), ("U3", "1", "C18", "1"), ("C19", "1", "U3", "5"),
@@ -170,7 +169,7 @@ ANCHORS = [
     # rain
     ("R11", "1", "D20", "1"), ("R12", "2", "R11", "2"), ("D11", "3", "R11", "2"),
     ("R13", "1", "R11", "2"), ("C13", "1", "R13", "2"),
-    ("U2", "4", "J2", "17"), ("R6", "1", "U2", "4"), ("R14", "1", "U2", "6"), ("C14", "1", "U2", "5"),
+    ("U2", "4", "J19", "5"), ("R6", "1", "U2", "4"), ("R14", "1", "U2", "6"), ("C14", "1", "U2", "5"),
     # I2C
     ("R15", "1", "J9", "2"), ("R16", "1", "J9", "3"), ("D12", "3", "R15", "2"), ("D13", "3", "R16", "2"),
     ("JP11", "2", "R16", "2"), ("R17", "2", "JP11", "1"), ("R18", "2", "JP1", "1"),
@@ -191,9 +190,9 @@ ISOLATORS = ("U4",)
 ISO_ZONES = ("VIC",)
 M = MOD[0] + 25.1
 # module title shifted right / USB-C left: U7, C35-C37 (sensor LDO, Heltec bulk) sit under the module near J2
-TEXTS = (("Heltec WiFi LoRa 32 V3 or V4", M + 3.5, ROW_TOP + 7.5, 1.5), ("POPULATE ONE SOCKET SET ONLY", M + 3.5, ROW_TOP + 10.0, 1.0), ("USB-C", MOD[0] + 2.9, ROW_TOP + 11.4, 1.2),
-         ("ANT", MOD[0] + 46.5, ROW_TOP + 11.4, 1.2), ("Universal Weather Node v2.0", M, ROW_TOP + 15.0, 1.0), ("franzenhof.com", M, ROW_TOP + 17.5, 1.0))
-BRAND = (("Universal Weather Node v2.0", 1.6), ("franzenhof.com", 1.6))
+TEXTS = (("Heltec WiFi LoRa 32 V4", M + 3.5, ROW_TOP + 7.5, 1.5), ("V4.2 / V4.3 (not V4-R8)", M + 3.5, ROW_TOP + 10.0, 1.0), ("USB-C", MOD[0] + 2.9, ROW_TOP + 11.4, 1.2),
+         ("ANT", MOD[0] + 46.5, ROW_TOP + 11.4, 1.2), ("Universal Weather Node V4 Full", M, ROW_TOP + 15.0, 1.0), ("franzenhof.com", M, ROW_TOP + 17.5, 1.0))
+BRAND = (("Universal Weather Node V4 Full", 1.6), ("Rev 1.0 | franzenhof.com", 1.6))
 # bottom-side terminal labels (left->right as seen from the top) and back title block
 # (by pin number; BACK_LABELS_V for the terminals at the left/right edge)
 BACK_LABELS_V = {"J14": ["GND", "TX", "RX", "V+"], "J7": ["GND", "RAIN"], "J5": ["GND", "SPD", "DIR", "3V3"],
@@ -202,7 +201,7 @@ BACK_LABELS = {"J12": ["+V", "HEAT-"], "J13": ["FAN+", "GND", "TACH"], "J3": ["V
                "J9": ["3V3", "SDA", "SCL", "GND"]}
 BACK_TITLES = {"J12": "HEATER", "J13": "FAN", "J3": "POWER", "J11": "AUX", "J10": "1-WIRE", "J9": "I2C", "J7": "RAIN", "J5": "WIND", "J14": "VE.DIRECT", "J17": "UV"}
 BACK_DOCUMENTATION = True
-BACK_TEXTS = (("Universal Weather Node v2.0", 26.0, 17.0, 2.0), ("franzenhof.com", 26.0, 21.5, 1.6), ("CERN-OHL-P v2", 26.0, 25.0, 1.2),
+BACK_TEXTS = (("Universal Weather Node V4 Full Rev 1.0", 26.0, 17.0, 2.0), ("franzenhof.com", 26.0, 21.5, 1.6), ("CERN-OHL-P v2", 26.0, 25.0, 1.2),
               ("JP8 FITTED: VIN BUCK\nREMOVE BEFORE USB\nUSB ONLY: DISCONNECT VIN\nCHANGE JUMPERS ONLY UNPOWERED", 31.0, 40.0, 0.9))
 
 POWER_NETS = ["GND", "FAN", "FAN_SW", "FAN_SUPPLY", "VIN_IN", "VIN_F", "+VLOAD", "VIN_BUCK", "+5V_BUCK", "BUCK_SW", "BUCK_BST", "BUCK_VCC", "+5V", "+5V_V4", "3V3_HELTEC", "3V3_LDO"]
@@ -289,7 +288,7 @@ ROW_LABELS = {"JP1": [("1", "2", "SDA")], "JP11": [("1", "2", "SCL")],
 PIN_LABELS = {"TP1": ["GND"], "TP2": ["VIN"], "TP3": ["5V"], "TP4": ["3V3"], "TP5": ["GND"], "J16": ["GND", "3V3", "SDA", "SCL", "VANE", "5V"], "JP2": ["R8", "DIR"], "JP9": ["5V", "COM", "VIN"],
               }
 REFINE = ["C1", "C2", "C3", "L1", "C4", "C5", "C7", "C9", "C11", "C12", "C13", "C14", "C16", "C17", "C18", "C19", "R3", "R7", "R11", "R15", "R16"]
-SOLID_GND = ("J1", "J2", "J15", "J4", "J6", "J7", "J5", "J16", "TP1", "TP5")
+SOLID_GND = ("J19", "J20", "J15", "J4", "J6", "J7", "J5", "J16", "TP1", "TP5")
 
 # extra silkscreen notes placed on the nearest free spot (top side, else bottom side)
 NOTES = [
@@ -305,7 +304,7 @@ TOP_PIN_LABELS = {"J12": ["+V", "HEAT-"], "J13": ["FAN+", "GND", "TACH"], "J3": 
                   "J9": ["3V3", "SDA", "SCL", "GND"]}
 # notes with a reserved area (written before placement): (text, x, y, size, angle)
 BRAND_X = (MOD[2] + RJ_L) / 2
-FIXED_NOTES = [("Universal Weather Node v2.0", BRAND_X, 3.0, 1.3, 0), ("franzenhof.com", BRAND_X, 5.6, 1.3, 0),
+FIXED_NOTES = [("Universal Weather Node V4 Full", BRAND_X, 3.0, 1.3, 0), ("Rev 1.0 | franzenhof.com", BRAND_X, 5.6, 1.3, 0),
                ("J14 VE.DIRECT", 12.4, J14_Y + 5.25, 1.0, 90),
                ("GND", 9.9, J14_Y, 0.8, 90), ("TX", 9.9, J14_Y + 3.5, 0.8, 90), ("RX", 9.9, J14_Y + 7.0, 0.8, 90), ("V+", 9.9, J14_Y + 10.5, 0.8, 90),
                ("J6 DAVIS RAIN", RJ_L - 0.9, RJ_RAIN_TOP + 6.65, 1.0, 90),

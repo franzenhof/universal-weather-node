@@ -6,7 +6,6 @@
 #include "uv_calibration.h"
 #include "wind_window.h"
 
-#include "driver/pcnt.h"
 #include <driver/gpio.h>
 #include <DallasTemperature.h>   // DEVICE_DISCONNECTED_C
 #include <soc/usb_serial_jtag_reg.h>
@@ -23,16 +22,18 @@ static constexpr uint32_t AUX_TOTAL_MAGIC = 0x41555850;   // "AUXP"
 
 namespace {
 
-// v2.0: 1M / 1M from 3V3 -> ~1650 mV. Rev 1.2/1.3: GPIO20 not connected.
-constexpr uint32_t HW_ID_V2_MIN_MV = 1300;
-constexpr uint32_t HW_ID_V2_MAX_MV = 2000;
+// Revision ID on GPIO15: V4 Full 1M / 1M from 3V3 -> ~1650 mV, V4 Light
+// 1M / 470k -> ~1060 mV (5 % parts: ~980..1130 mV). Bare V4: ~0 V.
+constexpr uint32_t HW_ID_FULL_MIN_MV  = 1300;
+constexpr uint32_t HW_ID_FULL_MAX_MV  = 2000;
+constexpr uint32_t HW_ID_LIGHT_MIN_MV = 850;
+constexpr uint32_t HW_ID_LIGHT_MAX_MV = 1250;
 
 constexpr int     LEDC_CH_FAN    = 7;      // channels 0-5 left to the Heltec library/display
 constexpr int     FAN_PWM_FREQ_HZ = 100;   // the fan's high-side P-FET has a resistive gate pull-up
 constexpr int     PWM_BITS       = 8;
 constexpr int64_t HEATER_PERIOD_US = 10000000;
 constexpr uint64_t HEATER_TICK_US = HEATER_PERIOD_US / 100;
-constexpr int16_t PCNT_H_LIM     = 32767;
 constexpr unsigned long VE_TIMEOUT_MS = 10000;
 constexpr float   HYSTERESIS_C   = 1.0f;
 constexpr float   BATT_HYST_V    = 0.2f;
@@ -42,7 +43,7 @@ bool          veRunning = false;
 unsigned long veLastBlockMs = 0;
 
 bool    auxPulseRunning = false, tachoRunning = false;
-int16_t auxPulseLast = 0, tachoLast = 0;
+uint32_t auxPulseLast = 0, tachoLast = 0;
 uint32_t auxPulsesAcc = 0, tachoPulsesAcc = 0;
 
 // 2nd anemometer on AUX (wind2Mode): pulses since the last sub-sample, and
@@ -73,62 +74,34 @@ int64_t heaterPeriodStartUs = 0;
 bool heaterWant = false, fanWant = false;   // auto-mode state (with hysteresis)
 bool outputsSuspended = false;
 
-int32_t pcntDelta(int16_t cur, int16_t last)
-{
-    return (cur >= last) ? (int32_t)cur - last : (int32_t)(PCNT_H_LIM - last) + cur;
-}
-
 // Both inputs sit behind an inverting Schmitt trigger: the falling edge at
 // the GPIO is the rising edge at the terminal - one count per pulse.
-void startPcnt(pcnt_unit_t unit, int gpio)
+void startPcnt(PulseCounterId id, int gpio)
 {
-    pcnt_config_t c = {
-        .pulse_gpio_num = gpio,
-        .ctrl_gpio_num  = PCNT_PIN_NOT_USED,
-        .pos_mode       = PCNT_COUNT_DIS,
-        .neg_mode       = PCNT_COUNT_INC,
-        .counter_h_lim  = PCNT_H_LIM,
-        .counter_l_lim  = -32768,
-        .unit           = unit,
-        .channel        = PCNT_CHANNEL_0,
-    };
-    pcnt_unit_config(&c);
-    pcnt_set_filter_value(unit, 100);   // ~1.25 µs glitch filter, the RC filter on the board does the rest
-    pcnt_filter_enable(unit);
-    pcnt_counter_pause(unit);
-    pcnt_counter_clear(unit);
-    pcnt_counter_resume(unit);
+    pulseCounterStart(id, gpio, true);
 }
 
-void stopPcnt(pcnt_unit_t unit)
+uint32_t readPcnt(PulseCounterId id, uint32_t& last)
 {
-    pcnt_counter_pause(unit);
-    pcnt_counter_clear(unit);
-}
-
-uint32_t readPcnt(pcnt_unit_t unit, int16_t& last)
-{
-    int16_t cur = 0;
-    pcnt_get_counter_value(unit, &cur);
-    int32_t d = pcntDelta(cur, last);
+    const uint32_t cur = pulseCounterRead(id);
+    const uint32_t d = cur - last;
     last = cur;
-    return d > 0 ? (uint32_t)d : 0;
+    return d;
 }
 
 // 0 % / 100 % as plain GPIO levels (no PWM edges at all), PWM in between.
 void driveOutput(int pin, int ch, int pct, bool& attached)
 {
     if (pct <= 0 || pct >= 100) {
-        if (attached) { ledcDetachPin(pin); attached = false; }
+        if (attached) { ledcDetach(pin); attached = false; }
         pinMode(pin, OUTPUT);
         digitalWrite(pin, pct >= 100 ? HIGH : LOW);
     } else {
         if (!attached) {
-            ledcSetup(ch, FAN_PWM_FREQ_HZ, PWM_BITS);
-            ledcAttachPin(pin, ch);
-            attached = true;
+            // Arduino-ESP32 3.x: pin-based LEDC API, fixed channel kept
+            attached = ledcAttachChannel(pin, FAN_PWM_FREQ_HZ, PWM_BITS, ch);
         }
-        ledcWrite(ch, (uint32_t)pct * ((1 << PWM_BITS) - 1) / 100);
+        ledcWrite(pin, (uint32_t)pct * ((1 << PWM_BITS) - 1) / 100);
     }
 }
 
@@ -212,8 +185,13 @@ void updateOutputs()
     if (isnan(t))                          fanWant = false;
     else if (t >= above)                   fanWant = true;
     else if (t < above - HYSTERESIS_C)     fanWant = false;
-    bool pvOk = gCfg.fanMinPvW <= 0 ||
-                (gCfg.veDirectEn && gIo.veValid && isfinite(gIo.ve.pvW) && gIo.ve.pvW >= gCfg.fanMinPvW);
+    // PV condition: met from the limit, lost only below limit - max(1 W, 10 %),
+    // so PV power hovering around the limit does not switch the fan per block
+    static bool pvMet = false;
+    const float pvOff = gCfg.fanMinPvW - max(1.0f, gCfg.fanMinPvW / 10.0f);
+    pvMet = gCfg.veDirectEn && gIo.veValid && isfinite(gIo.ve.pvW) &&
+            gIo.ve.pvW >= (pvMet ? pvOff : (float)gCfg.fanMinPvW);
+    bool pvOk = gCfg.fanMinPvW <= 0 || pvMet;
     static bool pvBlocked = false;
     bool nowPvBlocked = gCfg.fanMode == 2 && fanWant && !pvOk;
     if (pvBlocked != nowPvBlocked)
@@ -244,19 +222,22 @@ void updateOutputs()
 
 } // namespace
 
-bool detectPcbV2()
+int pcbRevFromHwIdMv(uint32_t mv)
 {
-    // V3: GPIO20 is USB D+ of the internal USB-Serial-JTAG PHY, which has its
-    // own D+ pull-up. The Heltec V3 uses the CP2102 for USB, so detach the PHY
-    // from the pads before measuring. Never on a V4: GPIO19/20 are its only
-    // USB port; its ID is on GPIO15 (P4) instead.
-    const bool v4 = gBoard.detected == BOARD_V4;
-    const int PIN_HW_ID = boardHwIdPin(gBoard.detected);
-    if (!v4) CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
+    if (mv >= HW_ID_FULL_MIN_MV  && mv <= HW_ID_FULL_MAX_MV)  return PCB_REV_V4_FULL;
+    if (mv >= HW_ID_LIGHT_MIN_MV && mv <= HW_ID_LIGHT_MAX_MV) return PCB_REV_V4_LIGHT;
+    return 0;
+}
 
-    // Discharge first: on Rev 1.x the pin floats and would read whatever
-    // charge is left on it. On v2.0 the divider recharges C10 (1M || 1M x
-    // 100 nF = 50 ms) - 300 ms is 6 time constants.
+int detectPcb()
+{
+    // The V4's revision ID pin is GPIO15 (header P4); GPIO19/20 are its USB port.
+    const int PIN_HW_ID = BOARD_HW_ID_PIN;
+
+    // Discharge first: without a PCB the pin floats and would read whatever
+    // charge is left on it. On the V4 Full the divider recharges C10 (1M || 1M
+    // x 100 nF = 50 ms), on the V4 Light (1M || 470k) faster - 300 ms is
+    // 6 time constants.
     pinMode(PIN_HW_ID, OUTPUT);
     digitalWrite(PIN_HW_ID, LOW);
     delay(5);
@@ -267,35 +248,37 @@ bool detectPcbV2()
     for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(PIN_HW_ID);
     mv /= 8;
 
-    bool v2 = (mv >= HW_ID_V2_MIN_MV && mv <= HW_ID_V2_MAX_MV);
+    const int rev = pcbRevFromHwIdMv(mv);
     dbgSerial.printf("HW revision ID (GPIO%d): %u mV -> %s\n", PIN_HW_ID, (unsigned)mv,
-                     v2 ? "PCB v2.0" : v4 ? "no PCB (wireless build)" : "no ID (Rev 1.x)");
-    if (v4) gBoard.pcbOnV4 = v2;
-    if (!v2 && mv > 300)
-        dbgSerial.println("HW revision ID: unknown voltage - treated as Rev 1.x");
-    gIo.hwIdDetected = v2;
-    return v2;
+                     rev == PCB_REV_V4_FULL ? "PCB V4 Full" : rev == PCB_REV_V4_LIGHT ? "PCB V4 Light"
+                                            : "no PCB (wireless station)");
+    gBoard.pcb = rev != 0;
+    gBoard.pcbLight = rev == PCB_REV_V4_LIGHT;
+    if (!rev && mv > 300)
+        dbgSerial.println("HW revision ID: unknown voltage - running without PCB");
+    gIo.hwIdDetected = rev != 0;
+    return rev;
 }
 
 bool ioUvActive()       { return gCfg.uvEn; }
 bool ioAuxAinActive()   { return gCfg.auxAinEn && gCfg.wind2Mode != 2; }
 bool ioWind2DirActive() { return gCfg.wind2Mode == 2; }
 
-bool ioV2()
+bool ioFull()
 {
-    // Heltec V4 only on the PCB's V4 sockets (revision ID on GPIO15); a bare
-    // V4's GPIO38-40 go to the GNSS connector
-    return boardPcbAllowed() && gCfg.pcbVersion >= PCB_REV_2_0;
+    // only on the V4 Full (revision ID on GPIO15); a bare V4's GPIO38-40 go
+    // to the GNSS connector, the V4 Light has none of these functions
+    return boardPcbFull();
 }
 
-// PCB v2.0 Q6 gate, LOW = vane supply on: V3 GPIO19, V4 GPIO34 (boardPins())
-static int vanePin() { return boardPins(gBoard.kind, gBoard.pcbOnV4, gCfg.pcbVersion).vaneEn; }
-static int veTxPin() { return boardPins(gBoard.kind, gBoard.pcbOnV4, gCfg.pcbVersion).veTx; }
-static int veRxPin() { return boardPins(gBoard.kind, gBoard.pcbOnV4, gCfg.pcbVersion).veRx; }
+// V4 Full / V4 Light vane supply switch, LOW = on: GPIO34 (boardPins())
+static int vanePin() { return boardPins().vaneEn; }
+static int veTxPin() { return boardPins().veTx; }
+static int veRxPin() { return boardPins().veRx; }
 
 void windVaneSupply(bool on)
 {
-    if (!ioV2()) return;
+    if (!boardPcbAllowed()) return;   // V4 Full and V4 Light
     const int PIN_WDIR_EN = vanePin();
     if (PIN_WDIR_EN < 0) return;
     // Pad hold: the level must survive the light sleep in lowPowerSleep()
@@ -308,7 +291,10 @@ void windVaneSupply(bool on)
 
 void ioInit()
 {
-    if (!ioV2()) return;
+    if (!ioFull()) {          // V4 Light: only the vane supply; no PCB: nothing
+        windVaneSupply(true);
+        return;
+    }
 
     esp_reset_reason_t reason = esp_reset_reason();
     if (reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT || auxPulsesTotalMagic != AUX_TOTAL_MAGIC) {
@@ -332,8 +318,7 @@ void ioInit()
     }
     // GPIO3 is an ADC input on this revision and must never be driven, even
     // when UV measurement is disabled.
-    pinMode(PIN_UV_AIN, INPUT);
-    adcAttachPin(PIN_UV_AIN);
+    pinMode(PIN_UV_AIN, INPUT);   // analogRead() attaches the ADC channel
     // Push-pull Schmitt-trigger outputs and an RC-filtered ADC input: no pulls.
     pinMode(PIN_AUX_PULSE, INPUT);
     pinMode(PIN_TACHO,     INPUT);
@@ -342,7 +327,7 @@ void ioInit()
     tachoSinceMs = millis();
 
     ioPoll();
-    dbgSerial.printf("PCB v2.0 I/O: UV=%d AIN=%d PULSE=%d heater=%d fan=%d tacho=%d VE.Direct=%d\n",
+    dbgSerial.printf("PCB V4 Full I/O: UV=%d AIN=%d PULSE=%d heater=%d fan=%d tacho=%d VE.Direct=%d\n",
                      (int)gCfg.uvEn,
                      (int)gCfg.auxAinEn, (int)gCfg.auxPulseEn, (int)gCfg.heaterMode,
                      (int)gCfg.fanMode, (int)gCfg.tachoEn, (int)gCfg.veDirectEn);
@@ -350,7 +335,7 @@ void ioInit()
 
 void ioSuspendOutputs()
 {
-    if (!ioV2()) return;
+    if (!ioFull()) return;
     outputsSuspended = true;
     driveHeater(0);
     driveOutput(PIN_FAN, LEDC_CH_FAN, 0, fanPwmAttached);
@@ -363,12 +348,12 @@ static bool veTxIdle = false;   // VE.Direct TX held high while VE.Direct is off
 
 void ioPoll()
 {
-    if (!ioV2()) return;
+    if (!ioFull()) return;
 
     // ---- VE.Direct ----
     // Not in use: TX (V3 GPIO34, V4 GPIO45) driven high - the ADuM121N
     // isolator draws about 3.9 mA with its input low (floating) and about 1 mA
-    // with it high. Only here, after setup: ioV2() = PCB v2.0 (a V4 only with
+    // with it high. Only here, after setup: ioFull() = V4 Full (a V4 only with
     // its revision ID). GPIO45 is a V4 strapping pin - never driven before
     // setup and never held across a reset.
     if (!gCfg.veDirectEn && !veRunning && !veTxIdle) {
@@ -387,7 +372,7 @@ void ioPoll()
     } else if (!gCfg.veDirectEn && veRunning) {
         Serial1.end();
         veRunning = false;
-        veTxIdle = false;   // driven high again below
+        veTxIdle = false;   // driven high (idle) again by the next ioPoll()
         gIo.ve = VeDirectValues{ NAN, NAN, NAN, NAN, NAN, NAN, NAN, -1, -1 };
         dbgSerial.println("VE.Direct: stopped.");
     }
@@ -402,14 +387,13 @@ void ioPoll()
     }
     gIo.veValid = veRunning && veLastBlockMs != 0 && millis() - veLastBlockMs < VE_TIMEOUT_MS;
 
-    // ---- pulse counters (read often: the 16-bit counter wraps within a long
-    // cycle at fan-tacho rates) ----
+    // ---- pulse counters ----
     if (auxPulseInputUsed() && !auxPulseRunning) {
         startPcnt(PCNT_UNIT_AUX_PULSE, PIN_AUX_PULSE);
         auxPulseLast = 0;  auxPulsesAcc = 0;  wind2Pulses = 0;  sleepPulsesAux = 0;  wind2GustWin.clear();
         wind2LastMs = millis();  auxPulseRunning = true;
     } else if (!auxPulseInputUsed() && auxPulseRunning) {
-        stopPcnt(PCNT_UNIT_AUX_PULSE);
+        pulseCounterStop(PCNT_UNIT_AUX_PULSE);
         auxPulseRunning = false;  gIo.auxPulsesCycle = 0;
     }
     if (auxPulseRunning) {
@@ -429,7 +413,7 @@ void ioPoll()
         startPcnt(PCNT_UNIT_TACHO, PIN_TACHO);
         tachoLast = 0;  tachoPulsesAcc = 0;  tachoSinceMs = millis();  tachoRunning = true;
     } else if (!gCfg.tachoEn && tachoRunning) {
-        stopPcnt(PCNT_UNIT_TACHO);
+        pulseCounterStop(PCNT_UNIT_TACHO);
         tachoRunning = false;  gIo.fanRpm = 0.0f;  gIo.fanStalled = false;
     }
     if (tachoRunning) tachoPulsesAcc += readPcnt(PCNT_UNIT_TACHO, tachoLast);
@@ -473,7 +457,7 @@ static void sampleWind2()
 
 void ioSample()
 {
-    if (!ioV2()) return;
+    if (!ioFull()) return;
     if (ioUvActive()) {
         uint32_t mv = 0;
         for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(PIN_UV_AIN);
@@ -495,7 +479,7 @@ void ioSample()
 
 void ioFinishCycle(unsigned long /*elapsedMs*/)
 {
-    if (!ioV2()) return;
+    if (!ioFull()) return;
     ioPoll();   // collect the last pulses
 
     gIo.auxAinV = (ioAuxAinActive() && auxAinSamples > 0)
@@ -532,7 +516,8 @@ void ioFinishCycle(unsigned long /*elapsedMs*/)
             dbgSerial.printf("UV sensor: %.3f V (index calculation disabled)\n", gIo.uvSensorVolts);
     }
     gIo.auxPulsesCycle = (auxPulseRunning && !gCfg.wind2Mode) ? auxPulsesAcc : 0;
-    if (gCfg.wind2Mode && wind2Samples > 0 && wind2MsSum > 0) {
+    gIo.wind2Valid = gCfg.wind2Mode && wind2Samples > 0 && wind2MsSum > 0;
+    if (gIo.wind2Valid) {
         gIo.wind2SpeedMs = (float)wind2PulseSum * 1000.0f / (float)wind2MsSum * gCfg.windMsPerPps;
         gIo.wind2GustMs  = max(wind2Gust, gIo.wind2SpeedMs);
         if (gCfg.wind2Mode == 2) {
@@ -540,7 +525,7 @@ void ioFinishCycle(unsigned long /*elapsedMs*/)
             gIo.wind2DirDeg = (uint16_t)((deg % 360 + 360) % 360);
         }
         dbgSerial.printf("Wind 2: %.1f m/s (gust %.1f), %u deg\n", gIo.wind2SpeedMs, gIo.wind2GustMs, gIo.wind2DirDeg);
-    } else if (!gCfg.wind2Mode) {
+    } else {   // no accepted sample this cycle: no current value (outputs leave wind 2 out)
         gIo.wind2SpeedMs = gIo.wind2GustMs = 0.0f;  gIo.wind2DirDeg = 0;
     }
 
@@ -582,12 +567,12 @@ uint8_t ioStatusByte()
 
 bool auxPulseInputUsed()
 {
-    return ioV2() && (gCfg.auxPulseEn || gCfg.wind2Mode);
+    return ioFull() && (gCfg.auxPulseEn || gCfg.wind2Mode);
 }
 
 bool ioAnyEnabled()
 {
-    return ioV2() && (gCfg.uvEn || gCfg.auxAinEn || gCfg.auxPulseEn || gCfg.wind2Mode || gCfg.heaterMode || gCfg.fanMode ||
+    return ioFull() && (gCfg.uvEn || gCfg.auxAinEn || gCfg.auxPulseEn || gCfg.wind2Mode || gCfg.heaterMode || gCfg.fanMode ||
                       gCfg.tachoEn || gCfg.veDirectEn);
 }
 

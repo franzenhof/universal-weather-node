@@ -1,3 +1,5 @@
+#include "lsensors.h"
+#include "heltec_board.h"
 #include "json_payload.h"
 #include "globals.h"
 #include "board_io.h"
@@ -6,8 +8,10 @@
 #include "derived.h"
 #include "wx_upload.h"
 #include "loxone.h"
+#include "series.h"
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -15,7 +19,7 @@ extern WxDailyStats hostDailyStats;   // test/host/runtime.cpp
 
 int main()
 {
-    gCfg.pcbVersion=20;
+    gCfg.pcbVersion=20; gBoard.pcb=true;   // PCB v2.0
     gCfg.lipoEn=gCfg.debugMode=gCfg.uvEn=gCfg.uvIndexEn=gCfg.auxAinEn=gCfg.auxPulseEn=1;
     gCfg.heaterMode=gCfg.fanMode=2;gCfg.tachoEn=gCfg.veDirectEn=1;
     bme280Present=true;bus1Count=3;
@@ -39,7 +43,7 @@ int main()
     assert(!deserializeJson(parsed,buf.data(),n));
     assert(parsed["victron"]["batteryV"].as<float>()==gIo.ve.battV);
     assert(parsed["status"]["pcbRev"].as<int>()==20);
-    assert(std::string(parsed["status"]["board"].as<const char*>())=="V3" && parsed["status"]["boardFem"].isNull());
+    assert(std::string(parsed["status"]["board"].as<const char*>())=="V4" && parsed["status"]["boardFem"].isNull());   // FEM not detected in the host build
     assert(parsed["uvIndex"].as<float>()==gIo.uvIndex);
     assert(parsed["cpuTemp"].as<float>()==42.3f && parsed["resetReason"].as<std::string>()=="unknown");
     gCfg.debugMode=0;buildJsonPayload(doc);   // CPU temperature and restart cause also without debug mode
@@ -68,10 +72,30 @@ int main()
         auto has=[&](const char* line){for(auto& l:lx) if(l==line) return true; return false;};
         auto hasName=[&](const std::string& nm){for(auto& l:lx) if(l.compare(0,nm.size()+1,nm+"=")==0) return true; return false;};
         assert(n==(int)lx.size() && n>40);
-        assert(has("rf1_temp=4.5") && has("rf1_humidity=88") && has("rf1_battery=0") && has("rf1_rssi=-71") && hasName("rf1_age"));
-        assert(has("radioBatteryLow=1") && has("rf1_windDirDeg=247") && has("warnFrost=0") && has("ds18b20_1=10.5") && has("ds18b20_3=14.5"));
+        assert(has("rf00002A5B_temp=4.5") && has("rf00002A5B_humidity=88") && has("rf00002A5B_battery=0") && has("rf00002A5B_rssi=-71") && hasName("rf00002A5B_age"));
+        assert(has("radioBatteryLow=1") && has("rf00002A5B_windDirDeg=247") && has("warnFrost=0") && has("ds18b20_1=10.5") && has("ds18b20_3=14.5"));
         assert(hasName("temp") && hasName("pressureQnh") && hasName("cpuTemp") && hasName("victronBatteryV") && hasName("fanRpm") &&
                hasName("heaterOn") && hasName("auxPulsesTotal") && !hasName("resetReason") && !hasName("windUnit") && !hasName("apiVersion"));
+    }
+    {   // a ★ sensor (logical sensor, lsensors.h): rfSensors[] gains sensor (key), internalId, name; Loxone uses the key
+        gLogicalSensors = LogicalSensorTable();
+        const int e = lsAdd(gLogicalSensors, 0x2A5B, "Garten S\xC3\xBC" "d", lsRandom);
+        assert(e == 0 && lsSetCustomId(gLogicalSensors, 0, "garten"));
+        buildJsonPayload(doc);
+        JsonObject o = doc["rfSensors"][0];
+        assert(o["id"].as<std::string>() == "00002A5B" && o["customId"].as<std::string>() == "garten");
+        assert(o["internalId"].as<std::string>() == gLogicalSensors.s[0].internalId && o["internalId"].as<std::string>() != "garten" && o["displayName"].as<std::string>() == "Garten S\xC3\xBC" "d");
+        assert(o["reception"].isNull() && o["receptionPoor"].is<bool>() && !o["receptionPoor"].as<bool>());   // ★: present, rate unknown yet
+        assert(o["idCollision"].is<bool>() && !o["idCollision"].as<bool>());
+        std::vector<std::string> lx;
+        loxoneLines(doc, "", [](const char* l, size_t, void* c) { static_cast<std::vector<std::string>*>(c)->push_back(l); }, &lx);
+        bool key = false, radio = false;
+        for (auto& l : lx) { key |= l == "garten_temp=4.5"; radio |= l.compare(0, 9, "00002A5B_") == 0; }
+        assert(key && !radio);
+        gLogicalSensors = LogicalSensorTable();
+        buildJsonPayload(doc);
+        assert(doc["rfSensors"][0]["customId"].isNull() && doc["rfSensors"][0]["internalId"].isNull());   // received only again
+        assert(doc["rfSensors"][0]["receptionPoor"].isNull() && doc["rfSensors"][0]["idCollision"].isNull());   // the reception watchdog is for ★ sensors only
     }
     gCfg.srcSel[SG_AIR]=SRC_RF1;srcUpdateCycle();buildJsonPayload(doc);
     assert(doc["temp"].as<float>()==4.5f && doc["humidityPct"].as<float>()==88 && !doc["pressureQnh"].isNull());
@@ -150,6 +174,8 @@ int main()
     gCfg.rfEn=0;
     gCfg.uvEn=gCfg.auxAinEn=gCfg.auxPulseEn=0;gCfg.wind2Mode=2;
     srcUpdateCycle();buildJsonPayload(doc);
+    assert(doc["wind2"].isNull());                    // no accepted wind 2 sample this cycle: left out
+    gIo.wind2Valid=true;buildJsonPayload(doc);
     assert(!doc["wind2"].isNull() && doc["uvIndex"].isNull());
 
     // VPD from the selected temperature/humidity (BME280: 23.46 C / 49.6 %)
@@ -172,4 +198,30 @@ int main()
     assert(fabs(doc["rainMonth"].as<float>()-1.0f)<1e-5f && fabs(doc["rainYear"].as<float>()-20.0f)<1e-4f);
     assert(doc["rainUnit"].as<std::string>()=="in");
     gCfg.unitSystem=0;hostDailyStats=WxDailyStats{};
+
+    // custom series (series.h): "series" keyed by slot number, the last cycle's value, null without one
+    buildJsonPayload(doc);
+    assert(doc["series"].isNull());   // none defined
+    {
+        SeriesDef* d=seriesDefs();
+        strcpy(d[2].name,"Hochbeet");strcpy(d[2].sensorInternalId,"L3F9A2C");d[2].field=SF_MOIST;
+        strcpy(d[31].name,"Fühler");d[31].field=SF_DS1;seriesSetAgg(d[31],SA_MAX);
+        strcpy(d[4].name,"Blitze");strcpy(d[4].sensorInternalId,"L3F9A2C");d[4].field=SF_STRIKES;
+        float v[SERIES_MAX]={};bool ok[SERIES_MAX]={};
+        v[2]=41.4f;ok[2]=true;v[31]=21.46f;ok[31]=true;   // slot 5: no value this cycle
+        seriesSetNow(v,ok);
+        buildJsonPayload(doc);
+        JsonArray sa=doc["series"];
+        assert(sa.size()==3 && sa[0]["slot"]==3 && sa[1]["slot"]==5 && sa[2]["slot"]==32);   // defined slots in order
+        JsonObject s3=sa[0],s5=sa[1],s32=sa[2];
+        assert(s3["name"].as<std::string>()=="Hochbeet" && s3["sensor"].as<std::string>()=="L3F9A2C" && s3["field"].as<std::string>()=="moist");
+        assert(s3["agg"].as<std::string>()=="mean" && s3["unit"].as<std::string>()=="%" && s3["value"].as<float>()==41.0f);
+        assert(s32["sensor"].isNull() && s32["agg"].as<std::string>()=="max" && s32["unit"].as<std::string>()=="\xC2\xB0" "C" && fabs(s32["value"].as<float>()-21.5f)<1e-4f);
+        assert(s5["agg"].as<std::string>()=="sum" && s5["unit"].isNull());
+        {std::string js;serializeJson(s5,js);assert(js.find("\"value\":null")!=std::string::npos);}
+        gCfg.unitSystem=1;buildJsonPayload(doc);   // temperatures in the device units
+        assert(fabs(doc["series"][2]["value"].as<float>()-70.6f)<1e-3f && doc["series"][2]["unit"].as<std::string>()=="\xC2\xB0" "F");
+        gCfg.unitSystem=0;
+        for(int i=0;i<SERIES_MAX;i++) d[i]=SeriesDef();
+    }
 }

@@ -1,10 +1,10 @@
 #pragma once
-// Heltec WiFi LoRa 32 V3 / V4: board detection and the V4 RF front end.
+// Heltec WiFi LoRa 32 V4: board check and the RF front end.
 //
-// The V4 (ESP32-S3R2, 16 MB flash) is pin-compatible with the V3 (ESP32-S3FN8,
-// 8 MB in-package flash) for the SX1262, OLED, Vext, PRG button and battery
-// divider, but puts an RF front-end module (FEM: PA + LNA) between the SX1262
-// and the antenna, controlled by GPIOs that the V3 leaves free on the header:
+// This firmware line runs on the V4 only (ESP32-S3R2: 16 MB flash, 2 MB quad
+// PSRAM in the package); the V3 is served by the 2.x line (branch 2.x). The
+// V4 puts an RF front-end module (FEM: PA + LNA) between the SX1262 and the
+// antenna, controlled by these GPIOs:
 //
 //   GPIO7   VFEM_Ctrl  FEM supply LDO enable (HIGH = on)             V4.2 + V4.3
 //   GPIO2   CSD        FEM chip enable (HIGH = on, LOW = shutdown)    V4.2 + V4.3
@@ -18,86 +18,120 @@
 //   sleep: CSD=0, CPS/CTX=0; KCT8103L also VFEM=0 (GC1109 keeps VFEM on)
 // The FEM type is read from GPIO2 as input with VFEM on: HIGH = KCT8103L.
 //
-// PCB Rev 1.2 / 1.3 and the V3 sockets of v2.0 use GPIO2 (vane), GPIO5
-// (1-Wire) and GPIO7 (rain), which the V4 needs for the FEM. PCB v2.0 has a
-// second socket set for the V4 with its own pin map (boardPins(), docs/pcb.md
-// "Heltec V3 or V4 on the PCB"), recognised by the revision ID on GPIO15. A
-// V4 without that ID runs the PCB-less build (wireless sensors, optional
-// BME280 on GPIO41/42) and leaves every PCB input / output unconfigured
-// (boardPcbAllowed()).
+// PCB: two boards carry a V4 (same pin map, boardPins()), recognised by the
+// revision ID divider on GPIO15: V4 Full (1M/1M, ~1.65 V: wind, rain, 1-Wire,
+// I2C plus the I/O block - heater, fan, tacho, AUX, UV, VE.Direct) and V4
+// Light (1M/470k, ~1.06 V: wind, rain, 1-Wire, I2C only). A V4 without an ID
+// runs as a wireless station (wireless sensors, optional BME280 on GPIO47/48,
+// optional GNSS module on the V4's GNSS connector) and leaves every PCB
+// input / output unconfigured (boardPcbAllowed()).
 //
 // This header is host-compiled (test/firmware_board.cpp): no RadioLib here.
 #include <stdint.h>
 
-enum BoardKind : uint8_t { BOARD_V3 = 3, BOARD_V4 = 4 };
-// Config::boardSel: 0 = auto (by flash size), 3 = V3, 4 = V4
-constexpr int BOARD_SEL_AUTO = 0;
-inline bool boardSelValid(int v) { return v == BOARD_SEL_AUTO || v == BOARD_V3 || v == BOARD_V4; }
-
 enum FemType : uint8_t { FEM_NONE = 0, FEM_GC1109 = 1, FEM_KCT8103L = 2 };
 
-// eFuse PSRAM_CAP (BLK1 bits 131-132): 0 = none, 1 = 8 MB, 2 = 2 MB
+// eFuse PSRAM_CAP (BLK1 bits 131-132): 0 = none, 1 = 8 MB (S3R8, V4-R8), 2 = 2 MB (S3R2, V4)
 constexpr int PSRAM_CAP_8MB = 1;
+constexpr int PSRAM_CAP_2MB = 2;
 
 struct BoardInfo {
-    BoardKind kind       = BOARD_V3;   // in effect (setting or detection)
-    BoardKind detected   = BOARD_V3;   // by flash size
-    bool      autoSel    = true;       // setting is "Auto"
     uint32_t  flashBytes = 0;          // physical flash size (JEDEC ID), 0 = unknown
     int       psramCap   = -1;         // eFuse PSRAM_CAP, -1 = not read
-    FemType   fem        = FEM_NONE;   // V4: detected front-end module
-    bool      pcbOnV4    = false;      // V4: PCB v2.0 revision ID found on GPIO15
+    FemType   fem        = FEM_NONE;   // detected front-end module
+    bool      pcb        = false;      // a PCB revision ID (V4 Full or V4 Light) found on GPIO15
+    bool      pcbLight   = false;      // ... and it is the V4 Light (no I/O block)
 };
 extern BoardInfo gBoard;
 
-// The V3 has 8 MB (in-package, ESP32-S3FN8), the V4 16 MB (external). The
-// V4-R8 variant (ESP32-S3R8, 8 MB octal PSRAM) also has 16 MB but a
-// different pin map (Vext GPIO40, GPIO33-37 taken by the PSRAM): flagged by
-// boardIsR8(), not supported.
-inline BoardKind boardDetect(uint32_t flashBytes)
+// A Heltec V4: 16 MB flash and the 2-MB quad PSRAM of the ESP32-S3R2. A V3
+// (8 MB, no PSRAM) belongs to firmware 2.x; the V4-R8 (ESP32-S3R8, 8 MB
+// octal PSRAM on GPIO33-37) has another pin map and is not supported.
+inline bool boardSupportedBy(uint32_t flashBytes, int psramCap)
 {
-    return flashBytes >= 16UL * 1024 * 1024 ? BOARD_V4 : BOARD_V3;
+    return flashBytes >= 16UL * 1024 * 1024 && psramCap == PSRAM_CAP_2MB;
 }
+inline bool boardSupported() { return boardSupportedBy(gBoard.flashBytes, gBoard.psramCap); }
+inline bool boardIsR8() { return gBoard.psramCap == PSRAM_CAP_8MB; }
+// PCB functions (wind, rain, vane switch, 1-Wire) only on a PCB (V4 Full or
+// V4 Light, revision ID read) - otherwise its pins would collide with the FEM.
+inline bool boardPcbAllowed() { return gBoard.pcb; }
+// The I/O block (heater, fan, tacho, AUX analog/pulse, UV, VE.Direct): V4 Full only.
+inline bool boardPcbFull() { return gBoard.pcb && !gBoard.pcbLight; }
+inline const char* boardPcbName() { return !gBoard.pcb ? "none" : gBoard.pcbLight ? "V4 Light" : "V4 Full"; }
 
-inline BoardKind boardResolve(int sel, BoardKind detected)
-{
-    if (sel == BOARD_V3) return BOARD_V3;
-    if (sel == BOARD_V4) return BOARD_V4;
-    return detected;
-}
-
-inline bool boardIsV4() { return gBoard.kind == BOARD_V4; }
-inline bool boardIsR8() { return gBoard.kind == BOARD_V4 && gBoard.psramCap == PSRAM_CAP_8MB; }
-// V3: always; V4: only on a PCB v2.0 (its V4 sockets; the revision ID on
-// GPIO15 was read) - otherwise the PCB pins would collide with the FEM.
-inline bool boardPcbAllowed() { return !boardIsV4() || gBoard.pcbOnV4; }
-
-// GPIOs of the PCB functions; -1 = not present on that board / revision.
+// GPIOs of the PCB functions; -1 = not present (no PCB).
 struct BoardPins {
-    int8_t windSpeed, rain, oneWire;   // pulse counters (falling edge via the Schmitt trigger on Rev 1.3+), 1-Wire DQ
+    int8_t windSpeed, rain, oneWire;   // pulse counters (falling edge via the Schmitt trigger), 1-Wire DQ
     int8_t windDir;                    // wind direction ADC (ADC1)
-    int8_t vaneEn;                     // v2.0 vane supply, LOW = on
-    int8_t veRx, veTx;                 // v2.0 VE.Direct
+    int8_t vaneEn;                     // vane supply, LOW = on
+    int8_t veRx, veTx;                 // VE.Direct
 };
-// kind = the board in effect, pcbOnV4 = V4 with the v2.0 ID, pcbRev = 12 / 13 / 20
-inline BoardPins boardPins(BoardKind kind, bool pcbOnV4, int pcbRev)
+inline BoardPins boardPins(bool pcb, bool light = false)
 {
-    if (kind == BOARD_V4) {
-        if (!pcbOnV4) return { -1, -1, -1, -1, -1, -1, -1 };
-        return { 44, 16, 43, 6, 34, 33, 45 };   // V4 sockets of PCB v2.0
-    }
-    if (pcbRev >= 20) return { 6, 7, 5, 2, 19, 33, 34 };
-    if (pcbRev >= 13) return { 6, 7, 5, 2, -1, -1, -1 };
-    return { 3, 4, 5, 2, -1, -1, -1 };
+    if (!pcb) return { -1, -1, -1, -1, -1, -1, -1 };
+    if (light) return { 44, 16, 43, 6, 34, -1, -1 };   // V4 Light: no VE.Direct
+    return { 44, 16, 43, 6, 34, 33, 45 };              // V4 Full
 }
-// Revision ID divider: V3 GPIO20 (USB D+ of the unused USB PHY), V4 GPIO15 (P4).
-inline int boardHwIdPin(BoardKind detected) { return detected == BOARD_V4 ? 15 : 20; }
-// UART0 (GPIO43/44) only on the V3 (CP2102 USB bridge): on a V4 these pins
-// are 1-Wire and wind speed on the PCB, the log goes over the native USB.
-// Decided by the hardware (flash size), before the board setting is known.
-inline bool boardUseUart0(BoardKind detected) { return detected != BOARD_V4; }
+inline BoardPins boardPins() { return boardPins(gBoard.pcb, gBoard.pcbLight); }
+// Revision ID divider of the V4 Full / V4 Light on the V4's GPIO15 (header P4)
+constexpr int BOARD_HW_ID_PIN = 15;
 
-inline const char* boardName(BoardKind k) { return k == BOARD_V4 ? "V4" : "V3"; }
+// ---------------------------------------------------------------------------
+// GNSS connector of the V4 (B9), only on a V4 without PCB: the V4 Full / V4
+// Light use GPIO34 and 38-42 themselves (vane supply, heater, fan, tacho ...).
+// Pins and levels from Meshtastic's heltec_v4 variant (variants/esp32s3/
+// heltec_v4/variant.h, read 2026-11-26; hardware facts only, no code):
+//   GPIO34  VGNSS_Ctrl  module supply, active LOW (GPS_EN_ACTIVE LOW)  - to verify on the device
+//   GPIO39  module TX -> ESP RX   (verified on the device; GNSS_UART_SWAPPED)
+//   GPIO38  ESP TX -> module RX
+//   GPIO40  wake / standby: HIGH = forced awake, LOW = may sleep
+//   GPIO41  PPS (1 pulse per second, rising edge = start of the UTC second)
+//   GPIO42  reset, active LOW (L76K: LOW > 100 ms resets)
+// UART1 (UART0 belongs to the boot ROM / USB log).
+// ---------------------------------------------------------------------------
+constexpr int  GNSS_PIN_VCTRL     = 34;
+constexpr int  GNSS_VCTRL_ON      = 0;      // LOW = module powered (verified on a V4.3 with the Heltec module, 2026-11-26)
+// Verified on a V4.3 (2026-11-26): the ESP receives the module's NMEA on GPIO39 and sends on GPIO38
+// (the reverse of the reading of the third-party pin list) - hence "swapped".
+constexpr bool GNSS_UART_SWAPPED  = true;
+constexpr int  GNSS_PIN_ESP_RX    = GNSS_UART_SWAPPED ? 39 : 38;
+constexpr int  GNSS_PIN_ESP_TX    = GNSS_UART_SWAPPED ? 38 : 39;
+constexpr int  GNSS_PIN_WAKE      = 40;
+constexpr int  GNSS_PIN_PPS       = 41;
+constexpr int  GNSS_PIN_RESET     = 42;
+constexpr int  GNSS_UART_NUM      = 1;
+
+// GNSS runs only on a V4 without PCB and when it is switched on in the settings.
+inline bool gnssActiveFor(bool pcb, int gnssEn) { return gnssEn && !pcb; }
+
+// ---------------------------------------------------------------------------
+// BME280 pins. With a PCB (V4 Full / V4 Light): GPIO41/42, where the PCB has
+// it. Without PCB (wireless build): GPIO47/48 on the S3's second I2C
+// controller (the OLED keeps its own bus on 17/18), because 41/42 belong to
+// the GNSS connector. Old wiring (2.x / 3.x documented 41/42 for every board)
+// is still found: when nothing answers on 47/48 and GNSS is off, 41/42 are
+// probed and used, with a hint to move the sensor. With GNSS on, 41/42 are
+// never driven as I2C (41 = PPS input, 42 = the module's reset).
+// ---------------------------------------------------------------------------
+constexpr int BME_PCB_SDA = 41, BME_PCB_SCL = 42;     // PCB, and the old wireless wiring
+constexpr int BME_WIRELESS_SDA = 47, BME_WIRELESS_SCL = 48;
+
+struct BmePins {
+    int8_t sda, scl;
+    bool   oldWiring;   // a wireless build with the BME280 on the old pins 41/42
+};
+// Probe 41/42 after 47/48 found nothing?
+inline bool bmeProbeOldPins(bool pcb, bool gnssOn, bool found4748) { return !pcb && !gnssOn && !found4748; }
+// The pins to keep (also for the hot-plug re-probe) after probing.
+inline BmePins bmePinSelect(bool pcb, bool gnssOn, bool found4748, bool found4142)
+{
+    if (pcb) return { BME_PCB_SDA, BME_PCB_SCL, false };
+    if (found4748) return { BME_WIRELESS_SDA, BME_WIRELESS_SCL, false };
+    if (!gnssOn && found4142) return { BME_PCB_SDA, BME_PCB_SCL, true };
+    return { BME_WIRELESS_SDA, BME_WIRELESS_SCL, false };
+}
+
 inline const char* femName(FemType f)
 {
     return f == FEM_GC1109 ? "GC1109" : f == FEM_KCT8103L ? "KCT8103L" : "none";
@@ -146,5 +180,5 @@ inline int femOutputDbm(int chipDbm, FemType f) { return chipDbm + femGainDb(f, 
 
 // ---- target only (heltec_board.cpp) ----
 void boardDetectHardware();     // flash size + eFuse: first thing in setup()
-void boardApply(int boardSel);  // after loadConfig(): resolves gBoard.kind
+void boardLog();                // the board line in the log (after the serial log started)
 void femInit();                 // V4: power the FEM, detect its type, RF switch table on the radio

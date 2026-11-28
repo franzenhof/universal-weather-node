@@ -1,54 +1,30 @@
-# Custom partition table for this board's 8 MB flash — based on Arduino-ESP32's
-# stock default_8MB.csv, with one change: the unused stock spiffs partition
-# (this project never used a filesystem) is replaced by a smaller "cfgdata"
-# partition (64 KB, NVS-formatted) holding this project's own "config"
-# namespace (see config.cpp) — WiFi/MQTT settings, LoRaWAN keys, calibration
-# data, the 2048-byte MQTT CA cert field, etc.
+# Partition table for the Heltec WiFi LoRa 32 V4 (ESP32-S3R2, 16 MB flash) -
+# firmware 4.x (V4 only). Frozen for 4.0.0 (B11, docs/design/storage-layout.md):
+# a partition table cannot change over the air, so every later release keeps
+# exactly this one. The 3.x line keeps its 8-MB table; this one is not
+# OTA-compatible with it: a node comes from 3.x with one USB flash of the
+# -factory image (settings: backup there, restore here - Settings -> System ->
+# Backup and restore).
 #
-# Deliberately a SEPARATE partition rather than simply growing the stock
-# "nvs" partition: "nvs" is also used by WiFiManager/ESP-IDF's own WiFi
-# credential storage, and — on this same physical board — by at least one
-# other, unrelated firmware project that happens to share our "config"
-# namespace name. Keeping "nvs" at its stock offset/size means:
-#   - flashing this firmware over EITHER an older build of this project OR
-#     that other project leaves its "nvs" partition (and whatever it stored
-#     there) completely undisturbed — no page-boundary ambiguity, no
-#     namespace collision with our own data anymore.
-#   - flashing an OLDER firmware (stock partition table) back over THIS one
-#     is equally safe for the same reason: "nvs" never changed shape, so
-#     nothing that only knows about "nvs" is affected either way. It simply
-#     won't know "cfgdata" exists, which is harmless.
+#   nvs       Wi-Fi state of the core / WiFiManager (stock offset and size)
+#   app0/1    6 MB each (4.0.0: 2.7 MB) - room for the dashboard and assets
+#   cfgdata   this project's settings and small state (NVS: "config", "alarms",
+#             "cupload", "records", "rainstat", "diag"); 4.0.0
+#             uses ~12 KB of it
+#   coredump  ESP-IDF core dump (ELF) of the last crash, read at the next
+#             start (reset history) and downloadable for debugging
+#   history   chart history and custom series (NVS; live data <= 201 KB)
+#   files     reserved, not used by 4.0.0: room for a later file system
+#             (dashboard assets, logs) without touching this table
 #
-# cfgdata is placed AFTER app0/app1 (where spiffs used to be), not before —
-# so app0/app1 keep their EXACT stock offsets (0x10000 / 0x340000). This
-# matters because PlatformIO's esptool upload step does not derive the
-# firmware's flash offset from this file's app0 entry; it always defaults
-# to board.upload.offset_address = 0x10000 unless told otherwise (a real
-# footgun found the hard way: an earlier version of this table moved app0
-# to make room for cfgdata *before* it, which silently kept uploading the
-# firmware to the old 0x10000 — right into the middle of cfgdata — until
-# board_upload.offset_address was added to platformio.ini to match). With
-# app0 back at the stock offset, no such override is needed at all, and one
-# less thing can drift out of sync between this file and platformio.ini.
+# app0 keeps the stock offset 0x10000 (the upload offset PlatformIO uses).
 #
-# It also means this table is now byte-identical to the stock one for nvs,
-# otadata, app0, AND app1 — the only difference is what used to be spiffs.
-# That also directly benefits OTA updates via WiFiManager's own /update page
-# (or ArduinoOTA): OTA never rewrites the partition table itself, only the
-# app image in whichever OTA slot the table currently defines — so flashing
-# this project and that other (stock-partition-table) one back and forth
-# via OTA is safe in both directions, regardless of which one is currently
-# "in flash": "nvs" (used by both projects' actual WiFi state, and by the
-# other project's "config" namespace) is never touched, and cfgdata is
-# simply ignored by firmware that doesn't know about it.
-#
-# A full flash erase before the next upload is still recommended whenever
-# this table changes, as a general safety margin.
-#
-# Name,    Type, SubType, Offset,  Size, Flags
-nvs,       data, nvs,     0x9000,  0x5000,
-otadata,   data, ota,     0xe000,  0x2000,
-app0,      app,  ota_0,   0x10000, 0x330000,
-app1,      app,  ota_1,   0x340000,0x330000,
-cfgdata,   data, nvs,     0x670000,0x10000,
-coredump,  data, coredump,0x680000,0x10000,
+# Name,    Type, SubType, Offset,   Size,     Flags
+nvs,       data, nvs,     0x9000,   0x5000,
+otadata,   data, ota,     0xe000,   0x2000,
+app0,      app,  ota_0,   0x10000,  0x600000,
+app1,      app,  ota_1,   0x610000, 0x600000,
+cfgdata,   data, nvs,     0xC10000, 0x20000,
+coredump,  data, coredump,0xC30000, 0x20000,
+history,   data, nvs,     0xC50000, 0x180000,
+files,     data, spiffs,  0xDD0000, 0x230000,

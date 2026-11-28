@@ -1,9 +1,12 @@
 #include "ota_upload.h"
+#include "psram_json.h"
 #include "wx_upload.h"
 #include "globals.h"
 #include "time_sync.h"
 #include "wifi_mqtt.h"
 #include "generated_version.h"
+#include "reset_history.h"
+#include <esp_task_wdt.h>
 #include "serial_log.h"
 #include "sources.h"
 #include "derived.h"
@@ -22,13 +25,19 @@
 #include "ph_live.h"
 #include "wx_formats.h"
 #include "tls_gate.h"
+#include "influx.h"
+#include "influx_queue.h"
+#include "net_json.h"
+#include <string>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include "storage_write.h"
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
 
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <MD5Builder.h>
@@ -37,6 +46,12 @@
 #include <functional>
 #include <memory>
 #include <new>
+
+// The status slots (out_status.h) are laid out by hand: one per weather
+// network, per alarm channel without MQTT, per custom upload.
+static_assert((size_t)(OUT_NOTIFY_FIRST - OUT_WX_FIRST) == WX_TARGET_COUNT, "out_status.h: one slot per weather network");
+static_assert(OUT_CUSTOM_FIRST - OUT_NOTIFY_FIRST == AC_COUNT - 1, "out_status.h: one slot per alarm channel (not MQTT)");
+static_assert(OUT_INFLUX - OUT_CUSTOM_FIRST == CUSTOM_UPLOADS, "out_status.h: one slot per custom upload");
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -53,6 +68,7 @@ constexpr float INHG_TO_HPA = 33.8639f;
 constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 5000;
 constexpr uint16_t HTTP_TIMEOUT_MS         = 8000;
 constexpr uint32_t TLS_HANDSHAKE_TIMEOUT_S = 8;
+constexpr unsigned long CWOP_READ_TIMEOUT_MS = 5000;   // banner / login answer of APRS-IS
 
 // One network's aggregation window — the equivalent of the bridge's
 // WindowAggregator: average for wind speed/pressure/humidity/temperature/
@@ -72,6 +88,7 @@ struct Agg {
 struct Reading {
     bool  hasWind = false, hasRain = false, hasBme = false, hasHum = false, hasPress = false;   // hasBme: temperature
     float windKmh = 0, gustKmh = 0;
+    bool  hasDir = false;     // with hasWind: the direction is known (calm / no vane: left out, never 0 = north)
     int   dirDeg = 0;
     float rainRateMmH = 0, dailyRainMm = 0;
     float tempC = 0, humidity = 0, pressureHpa = 0;
@@ -271,13 +288,11 @@ bool loadRainNvs(RainRecord& out, int& version)
 
 bool writeRainNvs(const RainRecord& r)
 {
-    Preferences prefs;
-    if (!prefs.begin(RAIN_NVS_NAMESPACE, false, "cfgdata")) return false;
+    StorageWrite w(RAIN_NVS_NAMESPACE);   // storage_write.h: refused once a reset sealed the storage
+    if (!w.ok()) return false;
     uint8_t buf[RAIN_BLOB_SIZE];
     rainBlobEncode(r, buf);
-    bool ok = prefs.putBytes(RAIN_NVS_KEY, buf, sizeof(buf)) == sizeof(buf);
-    prefs.end();
-    return ok;
+    return w.prefs().putBytes(RAIN_NVS_KEY, buf, sizeof(buf)) == sizeof(buf);
 }
 
 // Caller holds wxMutex. Rolls the record over onto the current local date
@@ -327,12 +342,14 @@ Reading readingFrom(const Agg& a, float dailyRainMm, bool rainEn)
         r.hasWind = true;
         r.windKmh = wind10.meanMs * MS_TO_KMH;
         r.gustKmh = wind10.gustMs * MS_TO_KMH;
+        r.hasDir  = wind10.dirValid;
         r.dirDeg  = wind10.dirValid ? wind10.dirDeg : 0;
     } else if (a.windCount) {
         r.hasWind = true;
         r.windKmh = a.windSum / a.windCount * MS_TO_KMH;
         r.gustKmh = a.gustMax * MS_TO_KMH;
         int deg   = (int)roundf(atan2f(a.dirSin / a.windCount, a.dirCos / a.windCount) * RAD_TO_DEG);
+        r.hasDir  = a.dirSin != 0.0f || a.dirCos != 0.0f;   // no direction vectors summed: unknown
         r.dirDeg  = (deg % 360 + 360) % 360;
     }
     if (rainEn) {
@@ -371,7 +388,7 @@ String formatTime(const char* fmt, bool utc)
     time_t now = time(nullptr);
     struct tm t;
     if (utc) gmtime_r(&now, &t);
-    else if (!localTimeNow(t)) localtime_r(&now, &t);
+    else localTimeOf(now, t);
     char buf[24];
     strftime(buf, sizeof(buf), fmt, &t);
     return String(buf);
@@ -407,7 +424,7 @@ String awekasUrl(const Reading& r, const Creds& c)
     d.hasHum = r.hasHum;       d.humidity = r.humidity;
     d.hasPress = r.hasPress;   d.pressureHpa = r.pressureHpa;
     d.hasRain = r.hasRain;     d.dailyRainMm = r.dailyRainMm;  d.rainRateMmH = r.rainRateMmH;
-    d.hasWind = r.hasWind;     d.windKmh = r.windKmh;  d.gustKmh = r.gustKmh;  d.dirDeg = r.dirDeg;
+    d.hasWind = r.hasWind;     d.windKmh = r.windKmh;  d.gustKmh = r.gustKmh;  d.dirDeg = r.dirDeg;  d.hasDir = r.hasDir;
     d.hasTendency = r.hasTendency;  d.tendency = awekasTendency(r.pressDelta3hHpa);
     d.hasSolar = r.hasSolar;   d.solarWm2 = r.solarWm2;
     d.hasUv = r.hasUv;         d.uvIndex = r.uvIndex;
@@ -440,7 +457,7 @@ String wuStyleUrl(const char* base, const Reading& r, const Creds& c)
     if (r.hasWind) {
         u += "&windspeedmph="; u += num(r.windKmh / MPH_TO_KMH, 1);
         u += "&windgustmph=";  u += num(r.gustKmh / MPH_TO_KMH, 1);
-        u += "&winddir=";      u += String(r.dirDeg);
+        if (r.hasDir) { u += "&winddir="; u += String(r.dirDeg); }
     }
     return u;
 }
@@ -470,7 +487,7 @@ String wcloudUrl(const Reading& r, const Creds& c)
     if (r.hasWind) {
         u += "&wspd=";   u += x10(r.windKmh / MS_TO_KMH);
         u += "&wspdhi="; u += x10(r.gustKmh / MS_TO_KMH);
-        u += "&wdir=";   u += String(r.dirDeg);
+        if (r.hasDir) { u += "&wdir="; u += String(r.dirDeg); }
     }
     return u;
 }
@@ -490,7 +507,7 @@ String windyUrl(const Reading& r, const Creds& c)
     if (r.hasWind) {
         u += "&wind=";    u += num(r.windMs(), 1);
         u += "&gust=";    u += num(r.gustKmh / MS_TO_KMH, 1);
-        u += "&winddir="; u += String(r.dirDeg);
+        if (r.hasDir) { u += "&winddir="; u += String(r.dirDeg); }
     }
     if (r.hasRain)  { u += "&precip=";   u += num(r.rain1hMm, 1); }
     if (r.hasUv)    { u += "&uv=";       u += num(r.uvIndex, 1); }
@@ -504,7 +521,7 @@ String windyUrl(const Reading& r, const Creds& c)
 // rainday (mm today), dew (°C), uv (index), lux (lx).
 String osemBody(const Reading& r, const Creds& c)
 {
-    JsonDocument doc;
+    JsonDocument doc(psramJsonAllocator());
     String list = c.map;
     int pos = 0;
     while (pos < (int)list.length()) {
@@ -523,7 +540,7 @@ String osemBody(const Reading& r, const Creds& c)
         else if (k == "press"   && r.hasPress) v = num(r.pressureHpa, 1);
         else if (k == "wind"    && r.hasWind)  v = num(r.windMs(), 1);
         else if (k == "gust"    && r.hasWind)  v = num(r.gustKmh / MS_TO_KMH, 1);
-        else if (k == "dir"     && r.hasWind)  v = String(r.dirDeg);
+        else if (k == "dir"     && r.hasWind && r.hasDir) v = String(r.dirDeg);
         else if (k == "rain"    && r.hasRain)  v = num(r.rain1hMm, 1);
         else if (k == "rainday" && r.hasRain)  v = num(r.dailyRainMm, 1);
         else if (k == "dew"     && r.hasBme && r.hasHum) v = num(dewPointC(r.tempC, r.humidity), 1);
@@ -534,6 +551,38 @@ String osemBody(const Reading& r, const Creds& c)
     String body;
     serializeJson(doc, body);
     return body;
+}
+
+// The start of a reply body, for a status text or an "OK" check: at most
+// maxBytes, never the whole body - getString() reserves a server-chosen
+// Content-Length up front and reads a chunked / unbounded body to the end,
+// which a large error page or a hostile endpoint would turn into memory
+// pressure and a long block of the upload task. The rest is discarded by
+// http.end() (no connection reuse). A chunked reply's first chunk-size line is
+// dropped (the start of its data is what matters here).
+constexpr size_t REPLY_START_MAX = 256;
+constexpr unsigned long REPLY_READ_MS = 3000;
+String readReplyStart(HTTPClient& http, size_t maxBytes = REPLY_START_MAX)
+{
+    String out;
+    NetworkClient* s = http.getStreamPtr();
+    if (!s) return out;
+    const int size = http.getSize();   // -1 = not announced (chunked / until close)
+    const size_t want = size >= 0 && (size_t)size < maxBytes ? (size_t)size : maxBytes;
+    out.reserve(want);
+    for (const unsigned long start = millis(); out.length() < want && millis() - start < REPLY_READ_MS;) {
+        const int c = s->read();
+        if (c >= 0) { out += (char)c; continue; }
+        if (!s->connected()) break;
+        delay(2);
+    }
+    if (size < 0) {   // chunked: "1a\r\n<data>" - drop the size line
+        const int eol = out.indexOf("\r\n");
+        bool hex = eol > 0 && eol <= 8;
+        for (int i = 0; hex && i < eol; i++) hex = isxdigit((unsigned char)out[i]);
+        if (hex) out.remove(0, eol + 2);
+    }
+    return out;
 }
 
 // The WiFi clients are declared before the HTTPClient using them: locals are
@@ -553,9 +602,33 @@ int httpPostJson(const String& url, const String& auth, const String& json, Stri
     if (auth.length()) http.addHeader("Authorization", auth);
     tlsBegin(); tlsLogHeap("POST", "before");
     int code = http.POST(json);
-    if (code > 0) body = http.getString();
+    if (code > 0) body = readReplyStart(http);
     http.end();
     tlsLogHeap("POST", "after"); tlsEnd();
+    return code;
+}
+
+// POST a text/plain body (InfluxDB line protocol); plain HTTP or unverified TLS
+// by the URL scheme. The auth string, if any, is sent as the Authorization
+// header verbatim (InfluxDB v2: "Token <token>"; empty for VictoriaMetrics).
+int httpPostText(const String& url, const String& auth, const char* body, size_t len, String& reply)
+{
+    WiFiClient       plain;   // before `http`, see httpPostJson()
+    WiFiClientSecure tls;
+    HTTPClient http;
+    http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+    http.setTimeout(HTTP_TIMEOUT_MS);
+    http.setReuse(false);
+    const bool https = url.startsWith("https://");
+    if (https) { tls.setInsecure(); tls.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S); }
+    if (!(https ? http.begin(tls, url) : http.begin(plain, url))) return HTTPC_ERROR_CONNECTION_REFUSED;
+    http.addHeader("Content-Type", "text/plain; charset=utf-8");
+    if (auth.length()) http.addHeader("Authorization", auth);
+    if (https) { tlsBegin(); tlsLogHeap("influx", "before"); }
+    int code = http.POST((uint8_t*)body, len);
+    if (code > 0) reply = readReplyStart(http);
+    http.end();
+    if (https) { tlsLogHeap("influx", "after"); tlsEnd(); }
     return code;
 }
 
@@ -563,7 +636,8 @@ int httpPostJson(const String& url, const String& auth, const String& json, Stri
 // — same tradeoff as MQTT_TLS_INSECURE: encrypted, not authenticated; no CA
 // bundle to keep up to date on the device for a handful of upload hosts.
 // `onBody` (optional) reads a 200 reply straight from the stream instead of
-// into `body` - for replies too large to hold as a String.
+// into `body` - for replies too large to hold as a String; any other reply
+// is not read at all then. Without onBody, `body` = the start of the reply.
 int httpGet(const String& url, String& body, std::function<void(Stream&)> onBody = nullptr)
 {
     WiFiClient       plain;   // before `http`, see httpPostJson()
@@ -587,8 +661,8 @@ int httpGet(const String& url, String& body, std::function<void(Stream&)> onBody
     const bool isTls = url.startsWith("https://");
     if (isTls) { tlsBegin(); tlsLogHeap("GET", "before"); }
     int code = http.GET();
-    if (code == HTTP_CODE_OK && onBody) onBody(http.getStream());
-    else if (code > 0)                  body = http.getString();
+    if (onBody) { if (code == HTTP_CODE_OK) onBody(http.getStream()); }
+    else if (code > 0) body = readReplyStart(http);
     http.end();
     if (isTls) { tlsLogHeap("GET", "after"); tlsEnd(); }
     return code;
@@ -610,7 +684,7 @@ WxObs obsFrom(const Reading& r)
     o.hasTemp = r.hasBme; o.tempC = r.tempC;
     o.hasHum = r.hasHum;  o.humidity = r.humidity;
     o.hasPress = r.hasPress; o.qnhHpa = r.pressureHpa;
-    o.hasWind = r.hasWind; o.windMs = r.windMs(); o.gustMs = r.gustKmh / MS_TO_KMH; o.dirDeg = r.dirDeg;
+    o.hasWind = r.hasWind; o.windMs = r.windMs(); o.gustMs = r.gustKmh / MS_TO_KMH; o.dirDeg = r.dirDeg; o.hasDir = r.hasDir;
     o.hasRain = r.hasRain; o.rain1hMm = r.rain1hMm; o.rainDayMm = r.dailyRainMm; o.rain24hMm = historyRainSum(24 * 3600);
     return o;
 }
@@ -630,11 +704,20 @@ int cwopSend(const Reading& r, const Creds& c, String& reply)
         return -1;
     }
     WiFiClient tcp;
-    tcp.setTimeout(5);
+    // Stream::setTimeout() takes milliseconds on Arduino-ESP32 3.x (NetworkClient
+    // has no setTimeout(seconds) of its own any more, unlike 2.x's WiFiClient).
+    tcp.setTimeout(CWOP_READ_TIMEOUT_MS);
     if (!tcp.connect("cwop.aprs.net", 14580, HTTP_CONNECT_TIMEOUT_MS)) { reply = "connect failed"; return -1; }
     String banner = tcp.readStringUntil('\n');   // "# aprsc ..."
     tcp.print(login); tcp.print("\r\n");
-    String ack = tcp.readStringUntil('\n');      // "# logresp CW1234 unverified, server ..."
+    // "# logresp CW1234 unverified, server ...": the first line that has it (a
+    // server comment line may come first), within CWOP_READ_TIMEOUT_MS in all
+    String ack;
+    for (const unsigned long start = millis(); millis() - start < CWOP_READ_TIMEOUT_MS;) {
+        String line = tcp.readStringUntil('\n');
+        if (line.indexOf("logresp") >= 0) { ack = line; break; }
+        if (!line.length() && !tcp.connected()) break;
+    }
     tcp.print(pkt); tcp.print("\r\n");
     tcp.flush();
     delay(200);
@@ -756,10 +839,10 @@ void updateCheckPoll()
     if (u.indexOf("api.github.com/") >= 0 && u.indexOf("/releases") >= 0 && u.indexOf("per_page=") < 0)
         u += (u.indexOf('?') >= 0 ? "&per_page=5" : "?per_page=5");
 
-    JsonDocument filter;
+    JsonDocument filter(psramJsonAllocator());
     filter[0]["name"] = true;
     filter[0]["tag_name"] = true;
-    JsonDocument doc;
+    JsonDocument doc(psramJsonAllocator());
     DeserializationError jsonErr = DeserializationError::EmptyInput;
     String body;
     int code = httpGet(u, body, [&](Stream& s) {
@@ -767,7 +850,8 @@ void updateCheckPoll()
     });
     char best[24] = "", status[48];
     if (code == HTTP_CODE_OK) {
-        if (jsonErr == DeserializationError::Ok) {
+        // the releases list is an array; an object (e.g. an error document) is no answer
+        if (jsonErr == DeserializationError::Ok && doc.is<JsonArray>()) {
             for (JsonObject o : doc.as<JsonArray>()) {
                 const char* n = o["tag_name"].is<const char*>() ? o["tag_name"].as<const char*>() : o["name"].as<const char*>();
                 // the name is shown on the status page and sent via MQTT: only
@@ -815,7 +899,7 @@ int notifyHttp(const NotifyReq& req, char* reply, size_t len)
     const bool isTls = !strncmp(req.url, "https://", 8);
     if (isTls) { tlsBegin(); tlsLogHeap("request", "before"); }
     const int code = req.post ? http.POST((uint8_t*)req.body, strlen(req.body)) : http.GET();
-    String b = code > 0 ? http.getString() : HTTPClient::errorToString(code);
+    String b = code > 0 ? readReplyStart(http, len + 16) : HTTPClient::errorToString(code);
     http.end();
     if (isTls) { tlsLogHeap("request", "after"); tlsEnd(); }
     b.trim();
@@ -823,6 +907,48 @@ int notifyHttp(const NotifyReq& req, char* reply, size_t len)
     for (size_t i = 0; i < b.length() && n + 1 < len; i++) reply[n++] = (b[i] >= 0x20 && b[i] < 0x7F) ? b[i] : ' ';
     reply[n] = '\0';
     return code;
+}
+
+// Network sensors (net_sensor.h): a REST slot that is due, one request per
+// call. The reply is parsed as it streams in, filtered to the mapped keys;
+// the URL may carry a token - never logged.
+unsigned long netRestLastMs[NET_SLOTS] = {};
+void netRestService()
+{
+    for (int i = 0; i < NET_SLOTS; i++) {
+        if (gCfg.net[i].type != NET_REST) { netRestLastMs[i] = 0; continue; }
+        const unsigned long now = millis();
+        const unsigned long pollMs = (unsigned long)gCfg.net[i].pollSec * 1000UL;
+        if (netRestLastMs[i] && now - netRestLastMs[i] < pollMs) continue;
+        std::unique_ptr<NetSlotCfg> cBuf(new (std::nothrow) NetSlotCfg());   // ~0.5 KB while polling
+        if (!cBuf) return;
+        NetSlotCfg& c = *cBuf;
+        netLock();
+        c = gCfg.net[i];
+        netUnlock();
+        if (c.type != NET_REST || !c.addr[0]) continue;
+        NetSlotStatus& st = gNetStatus[i];
+        if (!strncmp(c.addr, "https://", 8) && tlsMayStart("network sensor") != TLS_GO) {
+            netRestLastMs[i] = (now - pollMs + 10000UL) | 1;   // retry in 10 s (tls_gate.h)
+            st.lastErr = NET_ERR_WAIT;
+            continue;
+        }
+        netRestLastMs[i] = now | 1;
+        JsonDocument filter(psramJsonAllocator()), doc(psramJsonAllocator());
+        netFilter(c, filter);
+        DeserializationError err = DeserializationError::EmptyInput;
+        String body;
+        const int code = httpGet(String(c.addr), body, [&](Stream& s) {
+            err = deserializeJson(doc, s, DeserializationOption::Filter(filter));
+        });
+        VsValues v;
+        const uint8_t res = netRestResult(c, code, err, doc.as<JsonVariantConst>(), v);
+        st.lastHttp = (int16_t)code;
+        st.lastErr  = res;
+        if (res == NET_ERR_NONE) { st.received++; st.lastOkMs = millis(); netPost(i, v); }
+        else { st.failed++; dbgSerial.printf("Network sensor %d (REST): HTTP %d, %s\n", i + 1, code, netErrKey(res)); }
+        return;
+    }
 }
 
 // Custom uploads (custom_upload.h): due ones, one per call.
@@ -858,12 +984,18 @@ void customUploadService()
         std::unique_ptr<NotifyReq> reqBuf(new (std::nothrow) NotifyReq());   // ~1 KB while sending
         if (!reqBuf) return;
         NotifyReq& req = *reqBuf;
-        phRender(u.url, req.url, sizeof(req.url), PE_URL, phLiveLookup, &live);
+        bool urlCut = false, bodyCut = false;
+        phRender(u.url, req.url, sizeof(req.url), PE_URL, phLiveLookup, &live, &urlCut);
         if (u.post) {
             req.post = true;
             const bool json = u.body[0] == '{' || u.body[0] == '[';
             strcpy(req.contentType, json ? "application/json" : "text/plain");
-            phRender(u.body, req.body, sizeof(req.body), json ? PE_JSON : PE_NONE, phLiveLookup, &live);
+            phRender(u.body, req.body, sizeof(req.body), json ? PE_JSON : PE_NONE, phLiveLookup, &live, &bodyCut);
+        }
+        if (urlCut || bodyCut) {   // never send a cut URL / body (e.g. invalid JSON)
+            dbgSerial.printf("Custom upload %d: %s too long with the values filled in - not sent\n", i + 1, urlCut ? "URL" : "body");
+            outReport(OUT_CUSTOM_FIRST + i, false, 0, urlCut ? "URL too long, not sent" : "body too long, not sent");
+            return;
         }
         char reply[48];
         const int code = notifyHttp(req, reply, sizeof(reply));
@@ -874,20 +1006,188 @@ void customUploadService()
     }
 }
 
+// InfluxDB / VictoriaMetrics push with backfill (influx_queue.h, B4). Every
+// interval the current values become one line-protocol body with its own
+// timestamp, which goes into a PSRAM ring; the ring is sent oldest first in
+// chunks of <= 8 KB, one request per loop pass. On an outage (no Wi-Fi, no
+// reply, 5xx, 401/403/404/408/429) the bodies stay and are retried with
+// backoff (30 s doubling to 10 min); a refused chunk (other 4xx) is dropped
+// with a log line. A full ring drops the oldest push. RAM only: lost on a
+// restart. Without PSRAM (ring not allocated) it is best-effort as before.
+InfluxQueue  influxQ;
+uint8_t*     influxBuf = nullptr;
+portMUX_TYPE influxMux = portMUX_INITIALIZER_UNLOCKED;
+InfluxBacklogStatus influxSnap;
+
+void influxPublish()
+{
+    InfluxBacklogStatus s;
+    s.active          = influxQ.attached();
+    s.pushes          = influxQ.count();
+    s.bytes           = influxQ.used();
+    s.capacity        = influxQ.capacity();
+    s.oldestEpoch     = influxQ.oldestEpoch();
+    s.droppedFull     = influxQ.droppedFull();
+    s.droppedRejected = influxQ.droppedRejected();
+    portENTER_CRITICAL(&influxMux);
+    influxSnap = s;
+    portEXIT_CRITICAL(&influxMux);
+}
+
+// Allocate the ring (PSRAM only - internal RAM is too scarce for it) when the
+// push is on; free it when it is switched off.
+void influxRing(bool on)
+{
+    if (on && !influxBuf) {
+        static bool warned = false;
+        influxBuf = (uint8_t*)heap_caps_malloc(INFLUX_BACKLOG_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (influxBuf) {
+            influxQ.attach(influxBuf, INFLUX_BACKLOG_BYTES);
+            dbgSerial.printf("InfluxDB: backlog ring %u KB in PSRAM\n", (unsigned)(INFLUX_BACKLOG_BYTES / 1024));
+        } else if (!warned) {
+            warned = true;
+            dbgSerial.println("InfluxDB: no PSRAM for the backlog - pushes are best-effort (not queued)");
+        }
+        influxPublish();
+    } else if (!on && influxBuf) {
+        if (influxQ.count()) dbgSerial.printf("InfluxDB: push off - %u queued pushes discarded\n", (unsigned)influxQ.count());
+        influxQ.detach();
+        heap_caps_free(influxBuf);
+        influxBuf = nullptr;
+        influxPublish();
+    }
+}
+
+// URL, token and measurement: written by the web task under wxUploadLock(),
+// so the upload task works on a copy taken under it (a save during a push
+// must never pair the new URL with the old token). ~550 bytes: on the heap
+// only while a push is built or sent, not in the scarce static RAM.
+struct InfluxSettings {
+    char url[sizeof(Config::influxUrl)];
+    char token[sizeof(Config::influxToken)];
+    char measurement[sizeof(Config::influxMeasurement)];
+};
+
+std::unique_ptr<InfluxSettings> copyInfluxSettings()
+{
+    std::unique_ptr<InfluxSettings> s(new (std::nothrow) InfluxSettings());
+    if (!s) return s;
+    xSemaphoreTake(wxMutex, portMAX_DELAY);
+    memcpy(s->url, gCfg.influxUrl, sizeof(s->url));
+    memcpy(s->token, gCfg.influxToken, sizeof(s->token));
+    memcpy(s->measurement, gCfg.influxMeasurement, sizeof(s->measurement));
+    xSemaphoreGive(wxMutex);
+    s->url[sizeof(s->url) - 1] = s->token[sizeof(s->token) - 1] = s->measurement[sizeof(s->measurement) - 1] = '\0';
+    return s;
+}
+
+int influxPost(const InfluxSettings& cfg, const char* body, size_t len)
+{
+    String reply;
+    const int code = httpPostText(cfg.url, influxAuthHeader(cfg.token).c_str(), body, len, reply);
+    if (code >= 200 && code < 300) {
+        outReport(OUT_INFLUX, true);
+    } else {
+        const String why = code > 0 ? reply : HTTPClient::errorToString(code);
+        outReport(OUT_INFLUX, false, code, why.c_str());
+        dbgSerial.printf("InfluxDB push failed: HTTP %d %s\n", code, why.c_str());
+    }
+    return code;
+}
+
+// Capture: once per interval, also while Wi-Fi is down (called before the
+// task's Wi-Fi check).
+void influxCaptureService()
+{
+    const bool on = gCfg.wifiEn && gCfg.influxEn && gCfg.influxUrl[0];   // single bytes: no lock needed
+    influxRing(on);
+    if (!on) return;
+    static unsigned long lastMs = 0;
+    const unsigned long now = millis();
+    const unsigned long intervalMs = (unsigned long)gCfg.influxIntervalSec * 1000UL;
+    if (lastMs == 0) { lastMs = now; return; }           // first pass: let values + clock settle
+    if (now - lastMs < intervalMs) return;
+    if (!timeIsValid()) return;                           // the timestamp travels in the packet
+    int64_t epoch;
+    if (!epochNow(epoch)) return;
+    lastMs = now;
+    const std::unique_ptr<InfluxSettings> cfg = copyInfluxSettings();
+    if (!cfg) return;
+    std::string body;
+    const bool up = wifiIsConnected();
+    buildInfluxLineProtocol(body, epoch, up ? (int)WiFi.RSSI() : 0, up, cfg->measurement);
+    if (body.empty()) return;
+    if (!influxQ.attached()) {                            // no ring: send now or never (old behaviour)
+        if (!up || otaUploadActive()) return;
+        const bool https = !strncmp(cfg->url, "https://", 8);
+        if (https && tlsMayStart("InfluxDB") != TLS_GO) return;
+        influxPost(*cfg, body.data(), body.size());
+        return;
+    }
+    const size_t before = influxQ.droppedFull();
+    influxQ.push((uint32_t)epoch, body.data(), body.size());
+    if (influxQ.droppedFull() != before && influxQ.droppedFull() % 100 == 1)   // first drop, then every 100th
+        dbgSerial.printf("InfluxDB backlog full: oldest push dropped (%u so far)\n", (unsigned)influxQ.droppedFull());
+    if (!up && influxQ.noteOffline())
+        dbgSerial.println("InfluxDB: Wi-Fi down - buffering pushes");
+    influxPublish();
+}
+
+// Send: one chunk of the oldest queued bodies per call (Wi-Fi up checked).
+void influxPushService()
+{
+    if (!influxQ.attached() || !influxQ.due(millis())) return;
+    const std::unique_ptr<InfluxSettings> cfg = copyInfluxSettings();
+    if (!cfg || !cfg->url[0]) return;
+    const bool https = !strncmp(cfg->url, "https://", 8);
+    if (https && tlsMayStart("InfluxDB") != TLS_GO) return;   // not enough memory / a web page is busy
+    std::string chunk;
+    chunk.reserve(INFLUX_CHUNK_BYTES);                        // >= 4 KB: malloc takes it from the PSRAM
+    const size_t n = influxQ.peek(chunk, INFLUX_CHUNK_BYTES);
+    if (!n) return;
+    const int code = influxPost(*cfg, chunk.data(), chunk.size());
+    const size_t queued = influxQ.count();
+    const InfluxEvent ev = influxQ.result(code, n, millis());
+    if (ev.outageStarted)
+        dbgSerial.printf("InfluxDB unreachable - buffering pushes (%u queued, retry in %u s)\n",
+                         (unsigned)influxQ.count(), (unsigned)(influxRetryDelayMs(influxQ.failsInRow()) / 1000));
+    if (ev.action == IR_DROP)
+        dbgSerial.printf("InfluxDB refused %u push(es) (HTTP %d) - dropped, not retried\n", (unsigned)n, code);
+    if (ev.cleared)
+        dbgSerial.printf("InfluxDB backlog cleared: %u pushes sent late, %u lost\n", (unsigned)ev.resent, (unsigned)ev.dropped);
+    else if (ev.action == IR_OK && queued > n)
+        dbgSerial.printf("InfluxDB push: HTTP %d, %u pushes / %u bytes, %u still queued\n",
+                         code, (unsigned)n, (unsigned)chunk.size(), (unsigned)influxQ.count());
+    else if (ev.action == IR_OK)
+        dbgSerial.printf("InfluxDB push: HTTP %d, %u bytes\n", code, (unsigned)chunk.size());
+    influxPublish();
+}
+
 void wxUploadTask(void*)
 {
+    // Task watchdog (120 s, main.cpp), fed before every network step: each
+    // request is bounded by its timeouts (connect 5 s, TLS 8 s, read 8 s per
+    // chunk), so only a hang - not a slow server - reaches the 120 s.
+    esp_task_wdt_add(nullptr);
     for (;;) {
+        esp_task_wdt_reset();
         vTaskDelay(1000 / portTICK_PERIOD_MS);
+        influxCaptureService();   // InfluxDB values are queued also while Wi-Fi is down (backfill)
         if (!gCfg.wifiEn || !wifiIsConnected()) continue;
         // Firmware upload in progress (ota_upload.h): no update check,
         // notifications, custom uploads or weather networks meanwhile - the
         // windows keep aggregating and are sent afterwards.
         if (otaUploadActive()) continue;
         updateCheckPoll();
+        esp_task_wdt_reset();
         alarmsNotifyService(notifyHttp);   // one request at a time, never in parallel with the uploads
+        esp_task_wdt_reset();
         customUploadService();
+        esp_task_wdt_reset();
+        netRestService();                  // network sensors (net_sensor.h), REST slots
 
         for (int i = 0; i < (int)WX_TARGET_COUNT; i++) {
+            esp_task_wdt_reset();
             Target& t = targets[i];
             const unsigned long now = millis();
 
@@ -969,10 +1269,20 @@ void wxUploadTask(void*)
 
             sendOne(i, r, c);
         }
+
+        esp_task_wdt_reset();
+        influxPushService();   // InfluxDB / VictoriaMetrics: one chunk of the queue per pass
     }
 }
 
 } // namespace
+
+void influxBacklogStatus(InfluxBacklogStatus& out)
+{
+    portENTER_CRITICAL(&influxMux);
+    out = influxSnap;
+    portEXIT_CRITICAL(&influxMux);
+}
 
 void wxUploadSetup()
 {
@@ -1133,11 +1443,19 @@ void rainStatsFlush()
 void systemRestart(const char* reason)
 {
     dbgSerial.printf("Restart: %s\n", reason ? reason : "");
+    resetHistoryNoteRestart(reason);   // the reason and the uptime for the reset history
     rainStatsFlush();
     recordsFlush();
     historyStoreFlush();
     delay(100);   // let the log line out
     ESP.restart();
+}
+
+void rainStatsForgetRtc()
+{
+    xSemaphoreTake(wxMutex, portMAX_DELAY);
+    memset(&rtcRainState, 0, sizeof(rtcRainState));   // every part's magic gone: read as invalid at the next start
+    xSemaphoreGive(wxMutex);
 }
 
 void wxUploadLock()   { xSemaphoreTake(wxMutex, portMAX_DELAY); }

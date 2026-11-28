@@ -72,22 +72,25 @@ int main()
     doc["sources"]["tempHum"] = "board";
     JsonArray rf = doc["rfSensors"].to<JsonArray>();
     JsonObject r1 = rf.add<JsonObject>();
-    r1["id"] = "00002A5B"; r1["slot"] = 2; r1["type"] = 1; r1["protocol"] = "Bresser";
+    r1["id"] = "00002A5B"; r1["customId"] = "garten"; r1["internalId"] = "L3F9A2C"; r1["displayName"] = "Garten Sued";   // ★: by its custom ID
+    r1["slot"] = 2; r1["type"] = 1; r1["protocol"] = "Bresser";
     r1["rssi"] = -71; r1["ageSec"] = 12; r1["batteryOk"] = false;
     r1["temp"] = 4.5f; r1["humidityPct"] = 88; r1["windSpeed"] = 3.1f; r1["lightLux"] = 5322;
     r1["stale"].to<JsonArray>().add("wind");
-    JsonObject r2 = rf.add<JsonObject>();   // no slot (not in the ID list): not sent
+    JsonObject r2 = rf.add<JsonObject>();   // received only, no slot: as rf<radio ID>
     r2["id"] = "00000099"; r2["rssi"] = -90; r2["temp"] = 1.0f;
-    JsonObject r32 = rf.add<JsonObject>();  // wireless 32: sent as rf32_ (all 32 slots, not only the value sources)
-    r32["id"] = "34000A1B"; r32["slot"] = 32; r32["type"] = 3; r32["model"] = "WN34"; r32["rssi"] = -80;
+    JsonObject rc = rf.add<JsonObject>();   // collision case: a ★ sensor whose custom ID looks like the radio ID of the received-only one above
+    rc["id"] = "00ABCDEF"; rc["customId"] = "00000099"; rc["internalId"] = "L00000C"; rc["slot"] = 4; rc["rssi"] = -55; rc["temp"] = 9.0f;
+    JsonObject r32 = rf.add<JsonObject>();  // a key with '-' (allowed: a-z A-Z 0-9 _ -)
+    r32["id"] = "34000A1B"; r32["customId"] = "pool-2"; r32["internalId"] = "L000001"; r32["slot"] = 32; r32["type"] = 3; r32["model"] = "WN34"; r32["rssi"] = -80;
     r32["ageSec"] = 40; r32["batteryOk"] = true; r32["temp"] = 21.3f;
     JsonObject r3 = rf.add<JsonObject>();   // Fine Offset air quality + leak values: generic keys
-    r3["id"] = "45003660"; r3["slot"] = 3; r3["type"] = 8; r3["model"] = "WH45"; r3["rssi"] = -60;
+    r3["id"] = "45003660"; r3["customId"] = "Luft_1"; r3["internalId"] = "L000002"; r3["slot"] = 3; r3["type"] = 8; r3["model"] = "WH45"; r3["rssi"] = -60;
     r3["ageSec"] = 5; r3["batteryOk"] = true; r3["pm25"] = 3.5f; r3["pm10"] = 4.1f; r3["co2Ppm"] = 553;
     r3["externalPower"] = true; r3["leak"] = true; r3["leakRaw"] = 267; r3["leafWetnessPct"] = 7;
     r3["conductivityUsCm"] = 643; r3["pressure"] = 1001.7f;
-    JsonObject r33 = rf.add<JsonObject>();  // beyond the table: never sent
-    r33["id"] = "34000A1C"; r33["slot"] = 33; r33["temp"] = 5.0f;
+    JsonObject r33 = rf.add<JsonObject>();  // neither key nor ID: nothing to send it under
+    r33["slot"] = 33; r33["temp"] = 5.0f;
 
     std::vector<std::string> lines;
     std::map<std::string, std::string> m = run(doc, "", lines);
@@ -107,18 +110,21 @@ int main()
     assert(m["fanOn"] == "0" && m["fanDutyPct"] == "100" && m["fanRpm"] == "2950" && m["fanStalled"] == "0");
     assert(m["victronValid"] == "1" && m["victronBatteryV"] == "13.28" && m["victronPvW"] == "45" &&
            m["victronYieldTodayKWh"] == "0.12" && m["victronChargeState"] == "3");
-    // wireless sensors: by value-source slot, stale values left out
-    assert(m["rf2_temp"] == "4.5" && m["rf2_humidity"] == "88" && m["rf2_battery"] == "0" &&
-           m["rf2_rssi"] == "-71" && m["rf2_age"] == "12" && m["rf2_lightLux"] == "5322");
-    assert(!m.count("rf2_windSpeed") && !m.count("rf2_id") && !m.count("rf2_slot") && !m.count("rf2_type"));
-    assert(m["rf3_pm25"] == "3.5" && m["rf3_pm10"] == "4.1" && m["rf3_co2Ppm"] == "553" && m["rf3_externalPower"] == "1");
-    assert(m["rf3_leak"] == "1" && m["rf3_leakRaw"] == "267" && m["rf3_leafWetnessPct"] == "7");
-    assert(m["rf3_conductivityUsCm"] == "643" && m["rf3_pressure"] == "1001.7" && !m.count("rf3_model"));
-    assert(m["rf32_temp"] == "21.3" && m["rf32_rssi"] == "-80" && m["rf32_battery"] == "1" && m["rf32_age"] == "40");
-    assert(!m.count("rf33_temp") && !m.count("rf32_model") && !m.count("rf32_type"));
-    for (const auto& kv : m)
-        assert(kv.first.compare(0, 3, "rf1") != 0 &&
-               kv.first.find("rf_") == std::string::npos);
+    // wireless sensors: ★ by key (A5c D3), received-only as rf<radio ID>, stale values left out
+    assert(m["garten_temp"] == "4.5" && m["garten_humidity"] == "88" && m["garten_battery"] == "0" &&
+           m["garten_rssi"] == "-71" && m["garten_age"] == "12" && m["garten_lightLux"] == "5322");
+    assert(!m.count("garten_windSpeed") && !m.count("garten_id") && !m.count("garten_slot") && !m.count("garten_type"));
+    assert(!m.count("garten_customId") && !m.count("garten_iid") && !m.count("garten_displayName"));   // text: not sent
+    assert(m["Luft_1_pm25"] == "3.5" && m["Luft_1_pm10"] == "4.1" && m["Luft_1_co2Ppm"] == "553" && m["Luft_1_externalPower"] == "1");
+    assert(m["Luft_1_leak"] == "1" && m["Luft_1_leakRaw"] == "267" && m["Luft_1_leafWetnessPct"] == "7");
+    assert(m["Luft_1_conductivityUsCm"] == "643" && m["Luft_1_pressure"] == "1001.7" && !m.count("Luft_1_model"));
+    assert(m["pool-2_temp"] == "21.3" && m["pool-2_rssi"] == "-80" && m["pool-2_battery"] == "1" && m["pool-2_age"] == "40");
+    assert(!m.count("pool-2_model") && !m.count("pool-2_type"));
+    assert(m["rf00000099_temp"] == "1.0" && m["rf00000099_rssi"] == "-90");   // received only: "rf" + its radio ID
+    assert(m["00000099_temp"] == "9.0" && m["00000099_rssi"] == "-55");      // the ★ sensor with custom ID 00000099: its own lines, no clash
+    for (const auto& kv : m)   // no slot numbers, no internal IDs, no radio IDs of ★ sensors
+        assert((kv.first.compare(0, 2, "rf") != 0 || kv.first.compare(0, 10, "rf00000099") == 0) && kv.first.find("L3F9A2C") == std::string::npos &&
+               kv.first.find("00002A5B") == std::string::npos && kv.first.compare(0, 3, "_te") != 0);
     // plain ASCII, '.' decimal separator, no exponent
     for (const std::string& l : lines)
     {
@@ -129,7 +135,7 @@ int main()
 
     // prefix on every name
     std::map<std::string, std::string> p = run(doc, "g75_", lines);
-    assert(p.size() == m.size() && p["g75_temp"] == "6.6" && p["g75_rf2_temp"] == "4.5" && p["g75_warnFrost"] == "1");
+    assert(p.size() == m.size() && p["g75_temp"] == "6.6" && p["g75_garten_temp"] == "4.5" && p["g75_warnFrost"] == "1");
     for (const std::string& l : lines) assert(l.compare(0, 4, "g75_") == 0);
 
     // imperial: rain and pressure with 2 decimals

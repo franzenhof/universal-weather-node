@@ -10,6 +10,7 @@
 //     a failed datagram (lwIP/Wi-Fi buffers full) is retried once after 2 ms,
 //     at most 4 retries per set, and the set is cut off after 50 ms.
 #include "loxone.h"
+#include "psram_json.h"
 #include "out_status.h"
 #include "globals.h"
 #include "json_payload.h"
@@ -17,6 +18,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <lwip/dns.h>
+#include <lwip/tcpip.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -142,7 +144,15 @@ void loxonePoll()
     dnsGen = dnsGen + 1;
     dnsDone = false;
     ip_addr_t addr;
+    // the raw lwIP API outside the lwIP thread: only with the core lock
+    // (IDF 5 builds with CONFIG_LWIP_TCPIP_CORE_LOCKING; dns.c does not check it)
+#if CONFIG_LWIP_TCPIP_CORE_LOCKING
+    LOCK_TCPIP_CORE();
+#endif
     err_t err = dns_gethostbyname(host, &addr, dnsFound, (void*)(uintptr_t)dnsGen);
+#if CONFIG_LWIP_TCPIP_CORE_LOCKING
+    UNLOCK_TCPIP_CORE();
+#endif
     if (err == ERR_OK) {
         if (IP_IS_V4(&addr) && ip4_addr_get_u32(ip_2_ip4(&addr))) {
             st.ip = IPAddress(ip4_addr_get_u32(ip_2_ip4(&addr)));
@@ -174,7 +184,7 @@ void loxoneSendTelemetry(const PathValues* pv)
     strlcpy(prefix, (const char*)gCfg.loxPrefix, sizeof(prefix));
     loxoneUnlock();
 
-    JsonDocument doc;
+    JsonDocument doc(psramJsonAllocator());
     buildJsonPayload(doc, pv);
     if (doc.overflowed()) { st.errors++; setError("out of memory"); return; }
 
