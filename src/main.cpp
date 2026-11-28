@@ -95,6 +95,7 @@ extern SPIClass* hspi;
 #include "astro.h"
 #include "alarms.h"
 #include "oled_screens.h"
+#include "button_logic.h"
 #include "custom_upload.h"
 #include "out_status.h"
 #include "loxone.h"
@@ -121,9 +122,11 @@ static void drawDisplay();
 // alone would show whatever was drawn last (possibly hours-old data or the
 // "LoRaWAN Join..." screen). A PRG press: 20 s, or the configured minutes
 // in mode 2 (Settings → Display).
+static bool displayNight();
 static void activateDisplay(unsigned long durationMs = 20000)
 {
     if (durationMs == 20000 && gCfg.dispMode == 2) durationMs = (unsigned long)gCfg.dispMinutes * 60000UL;
+    if (durationMs == 20000 && gCfg.dispMode == 1 && !displayNight()) durationMs = 0xFFFFFFFFUL;   // "always on" stays on
     if (!displayActive || !(gCfg.dispScreens & (1 << displayScreen)))
         displayScreen = oledNextScreen(OS_COUNT - 1, gCfg.dispScreens);   // the first enabled screen
     displayActive    = true;
@@ -272,57 +275,35 @@ static void openPortalSaveAndRestart(bool showStartScreen = true)
     systemRestart("config portal closed");
 }
 
+// A short press: the next screen while the display is on with several screens, else switch it on
+static void shortPress()
+{
+    const uint8_t mask = (uint8_t)gCfg.dispScreens;
+    if (!displayActive || !(mask & (mask - 1))) { activateDisplay(20000); return; }
+    displayScreen = oledNextScreen(displayScreen, mask);
+    displayScreenMs = millis();
+    if (displayOnForMs != 0xFFFFFFFFUL) displayOnSinceMs = millis();   // and stays on a while longer
+    drawDisplay();
+    display.display();
+}
+
 static void handleButton()
 {
-    static unsigned long pressedAtMs = 0;
-    static bool          longFired   = false;
+    static ButtonLogic button;
 
     // Take the ISR's events atomically (check-then-clear could drop an edge)
     portENTER_CRITICAL(&buttonMux);
-    bool          pressEvent   = isrPressEvent;
-    bool          releaseEvent = isrReleaseEvent;
-    unsigned long pressMs      = isrPressedAtMs;
-    unsigned long releaseMs    = isrReleasedAtMs;
+    const bool          pressEvent   = isrPressEvent;
+    const bool          releaseEvent = isrReleaseEvent;
+    const unsigned long pressMs      = isrPressedAtMs;
+    const unsigned long releaseMs    = isrReleasedAtMs;
     isrPressEvent = isrReleaseEvent = false;
     portEXIT_CRITICAL(&buttonMux);
 
-    // Both pending: a release older than the press belongs to the previous press.
-    if (pressEvent && releaseEvent && (long)(releaseMs - pressMs) < 0) {
-        if (!longFired && (releaseMs - pressedAtMs) < 3000) {
-            // already on with several screens: the press shows the next one
-            const uint8_t mask = (uint8_t)gCfg.dispScreens;
-            if (displayActive && (mask & (mask - 1))) {
-                displayScreen = oledNextScreen(displayScreen, mask);
-                displayScreenMs = millis();
-                if (displayOnForMs != 0xFFFFFFFFUL) displayOnSinceMs = millis();   // and stays on a while longer
-                drawDisplay();
-                display.display();
-            } else {
-                activateDisplay(20000);
-            }
-        }
-        releaseEvent = false;
-    }
-
-    // Press event (falling edge)
-    if (pressEvent) {
-        pressedAtMs = pressMs;
-        longFired   = false;
-    }
-
-    // Release event (rising edge)
-    if (releaseEvent) {
-        if (!longFired && (releaseMs - pressedAtMs) < 3000) {
-            activateDisplay(20000);
-        }
-    }
-
-    // Long press: button currently held for ≥ 3 s
-    if (!longFired && pressedAtMs > 0 && (digitalRead(BUTTON) == LOW)
-            && (millis() - pressedAtMs >= 3000)) {
-        longFired = true;
-        openPortalSaveAndRestart();
-    }
+    const uint8_t act = button.step(pressEvent, pressMs, releaseEvent, releaseMs, false,
+                                    digitalRead(BUTTON) == LOW, millis());
+    if (act & BTN_SHORT) shortPress();
+    if (act & BTN_LONG) openPortalSaveAndRestart();
 }
 
 // ============================================================================
@@ -752,16 +733,14 @@ static void drawDisplay()
         snprintf(buf, sizeof(buf), "#%d", loopCount);
     display.drawString(0, OLED_ROW[1], buf);
 
-    if (gSrc.tempValid && gSrc.pressValid)
-        snprintf(buf, sizeof(buf), "%.1f%s  %.1f%%rH  %.0f%s",
-                 temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg),
-                 gSrc.humidity,
-                 pressureForOutput(gSrc.pressAbsHpa, gCfg), pressureUnitLabel(gCfg));
-    else if (gSrc.tempValid)
-        snprintf(buf, sizeof(buf), "%.1f%s  %.1f%%rH (radio)",
-                 temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg), gSrc.humidity);
-    else
+    if (gSrc.tempValid) {   // humidity only when its source has a fresh value (temperature-only sensors)
+        int n = snprintf(buf, sizeof(buf), "%.1f%s", temperatureForOutput(gSrc.tempC, gCfg), temperatureUnitLabel(gCfg));
+        if (gSrc.humValid) n += snprintf(buf + n, sizeof(buf) - n, "  %.1f%%rH", gSrc.humidity);
+        if (gSrc.pressValid) snprintf(buf + n, sizeof(buf) - n, "  %.0f%s", pressureForOutput(gSrc.pressAbsHpa, gCfg), pressureUnitLabel(gCfg));
+        else                 snprintf(buf + n, sizeof(buf) - n, " (radio)");
+    } else {
         snprintf(buf, sizeof(buf), "no BME280");
+    }
     display.drawString(0, OLED_ROW[2], buf);
 
     if (gIo.veValid && !isnan(gIo.ve.battV)) {
@@ -1150,10 +1129,10 @@ void loop()
             seriesCycleValues(sv, sok);
             pushHistorySample(sv, sok);
         }
-        recordsCycle();        // extremes (records.h)
         astroCycle();          // sun / moon times of the day (astro.h)
         wxUploadPushCycle(calWind(srcIsRadio(SG_WIND) ? srcRfWind(PATH_BASE, true)
                                                       : windRing->stats(WIND_SPAN_10MIN_MS, gCfg.windMsPerPps)));
+        recordsCycle();        // extremes (records.h); after the cycle's rain is in "rain today"
         resetPath(PATH_BASE, cycleEnd);
         loopCount++;
 

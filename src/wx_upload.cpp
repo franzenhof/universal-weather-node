@@ -38,6 +38,12 @@
 #include <memory>
 #include <new>
 
+// The status slots (out_status.h) are laid out by hand: one per weather
+// network, per alarm channel without MQTT, per custom upload.
+static_assert((size_t)(OUT_NOTIFY_FIRST - OUT_WX_FIRST) == WX_TARGET_COUNT, "out_status.h: one slot per weather network");
+static_assert(OUT_CUSTOM_FIRST - OUT_NOTIFY_FIRST == AC_COUNT - 1, "out_status.h: one slot per alarm channel (not MQTT)");
+static_assert(OUT_COUNT - OUT_CUSTOM_FIRST == CUSTOM_UPLOADS, "out_status.h: one slot per custom upload");
+
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
 #endif
@@ -72,6 +78,7 @@ struct Agg {
 struct Reading {
     bool  hasWind = false, hasRain = false, hasBme = false, hasHum = false, hasPress = false;   // hasBme: temperature
     float windKmh = 0, gustKmh = 0;
+    bool  hasDir = false;     // with hasWind: the direction is known (calm / no vane: left out, never 0 = north)
     int   dirDeg = 0;
     float rainRateMmH = 0, dailyRainMm = 0;
     float tempC = 0, humidity = 0, pressureHpa = 0;
@@ -327,12 +334,14 @@ Reading readingFrom(const Agg& a, float dailyRainMm, bool rainEn)
         r.hasWind = true;
         r.windKmh = wind10.meanMs * MS_TO_KMH;
         r.gustKmh = wind10.gustMs * MS_TO_KMH;
+        r.hasDir  = wind10.dirValid;
         r.dirDeg  = wind10.dirValid ? wind10.dirDeg : 0;
     } else if (a.windCount) {
         r.hasWind = true;
         r.windKmh = a.windSum / a.windCount * MS_TO_KMH;
         r.gustKmh = a.gustMax * MS_TO_KMH;
         int deg   = (int)roundf(atan2f(a.dirSin / a.windCount, a.dirCos / a.windCount) * RAD_TO_DEG);
+        r.hasDir  = a.dirSin != 0.0f || a.dirCos != 0.0f;   // no direction vectors summed: unknown
         r.dirDeg  = (deg % 360 + 360) % 360;
     }
     if (rainEn) {
@@ -371,7 +380,7 @@ String formatTime(const char* fmt, bool utc)
     time_t now = time(nullptr);
     struct tm t;
     if (utc) gmtime_r(&now, &t);
-    else if (!localTimeNow(t)) localtime_r(&now, &t);
+    else localTimeOf(now, t);
     char buf[24];
     strftime(buf, sizeof(buf), fmt, &t);
     return String(buf);
@@ -407,7 +416,7 @@ String awekasUrl(const Reading& r, const Creds& c)
     d.hasHum = r.hasHum;       d.humidity = r.humidity;
     d.hasPress = r.hasPress;   d.pressureHpa = r.pressureHpa;
     d.hasRain = r.hasRain;     d.dailyRainMm = r.dailyRainMm;  d.rainRateMmH = r.rainRateMmH;
-    d.hasWind = r.hasWind;     d.windKmh = r.windKmh;  d.gustKmh = r.gustKmh;  d.dirDeg = r.dirDeg;
+    d.hasWind = r.hasWind;     d.windKmh = r.windKmh;  d.gustKmh = r.gustKmh;  d.dirDeg = r.dirDeg;  d.hasDir = r.hasDir;
     d.hasTendency = r.hasTendency;  d.tendency = awekasTendency(r.pressDelta3hHpa);
     d.hasSolar = r.hasSolar;   d.solarWm2 = r.solarWm2;
     d.hasUv = r.hasUv;         d.uvIndex = r.uvIndex;
@@ -440,7 +449,7 @@ String wuStyleUrl(const char* base, const Reading& r, const Creds& c)
     if (r.hasWind) {
         u += "&windspeedmph="; u += num(r.windKmh / MPH_TO_KMH, 1);
         u += "&windgustmph=";  u += num(r.gustKmh / MPH_TO_KMH, 1);
-        u += "&winddir=";      u += String(r.dirDeg);
+        if (r.hasDir) { u += "&winddir="; u += String(r.dirDeg); }
     }
     return u;
 }
@@ -470,7 +479,7 @@ String wcloudUrl(const Reading& r, const Creds& c)
     if (r.hasWind) {
         u += "&wspd=";   u += x10(r.windKmh / MS_TO_KMH);
         u += "&wspdhi="; u += x10(r.gustKmh / MS_TO_KMH);
-        u += "&wdir=";   u += String(r.dirDeg);
+        if (r.hasDir) { u += "&wdir="; u += String(r.dirDeg); }
     }
     return u;
 }
@@ -490,7 +499,7 @@ String windyUrl(const Reading& r, const Creds& c)
     if (r.hasWind) {
         u += "&wind=";    u += num(r.windMs(), 1);
         u += "&gust=";    u += num(r.gustKmh / MS_TO_KMH, 1);
-        u += "&winddir="; u += String(r.dirDeg);
+        if (r.hasDir) { u += "&winddir="; u += String(r.dirDeg); }
     }
     if (r.hasRain)  { u += "&precip=";   u += num(r.rain1hMm, 1); }
     if (r.hasUv)    { u += "&uv=";       u += num(r.uvIndex, 1); }
@@ -523,7 +532,7 @@ String osemBody(const Reading& r, const Creds& c)
         else if (k == "press"   && r.hasPress) v = num(r.pressureHpa, 1);
         else if (k == "wind"    && r.hasWind)  v = num(r.windMs(), 1);
         else if (k == "gust"    && r.hasWind)  v = num(r.gustKmh / MS_TO_KMH, 1);
-        else if (k == "dir"     && r.hasWind)  v = String(r.dirDeg);
+        else if (k == "dir"     && r.hasWind && r.hasDir) v = String(r.dirDeg);
         else if (k == "rain"    && r.hasRain)  v = num(r.rain1hMm, 1);
         else if (k == "rainday" && r.hasRain)  v = num(r.dailyRainMm, 1);
         else if (k == "dew"     && r.hasBme && r.hasHum) v = num(dewPointC(r.tempC, r.humidity), 1);
@@ -534,6 +543,38 @@ String osemBody(const Reading& r, const Creds& c)
     String body;
     serializeJson(doc, body);
     return body;
+}
+
+// The start of a reply body, for a status text or an "OK" check: at most
+// maxBytes, never the whole body - getString() reserves a server-chosen
+// Content-Length up front and reads a chunked / unbounded body to the end,
+// which a large error page or a hostile endpoint would turn into memory
+// pressure and a long block of the upload task. The rest is discarded by
+// http.end() (no connection reuse). A chunked reply's first chunk-size line is
+// dropped (the start of its data is what matters here).
+constexpr size_t REPLY_START_MAX = 256;
+constexpr unsigned long REPLY_READ_MS = 3000;
+String readReplyStart(HTTPClient& http, size_t maxBytes = REPLY_START_MAX)
+{
+    String out;
+    WiFiClient* s = http.getStreamPtr();   // Arduino-ESP32 2.0.x: WiFiClient
+    if (!s) return out;
+    const int size = http.getSize();   // -1 = not announced (chunked / until close)
+    const size_t want = size >= 0 && (size_t)size < maxBytes ? (size_t)size : maxBytes;
+    out.reserve(want);
+    for (const unsigned long start = millis(); out.length() < want && millis() - start < REPLY_READ_MS;) {
+        const int c = s->read();
+        if (c >= 0) { out += (char)c; continue; }
+        if (!s->connected()) break;
+        delay(2);
+    }
+    if (size < 0) {   // chunked: "1a\r\n<data>" - drop the size line
+        const int eol = out.indexOf("\r\n");
+        bool hex = eol > 0 && eol <= 8;
+        for (int i = 0; hex && i < eol; i++) hex = isxdigit((unsigned char)out[i]);
+        if (hex) out.remove(0, eol + 2);
+    }
+    return out;
 }
 
 // The WiFi clients are declared before the HTTPClient using them: locals are
@@ -553,7 +594,7 @@ int httpPostJson(const String& url, const String& auth, const String& json, Stri
     if (auth.length()) http.addHeader("Authorization", auth);
     tlsBegin(); tlsLogHeap("POST", "before");
     int code = http.POST(json);
-    if (code > 0) body = http.getString();
+    if (code > 0) body = readReplyStart(http);
     http.end();
     tlsLogHeap("POST", "after"); tlsEnd();
     return code;
@@ -563,7 +604,8 @@ int httpPostJson(const String& url, const String& auth, const String& json, Stri
 // — same tradeoff as MQTT_TLS_INSECURE: encrypted, not authenticated; no CA
 // bundle to keep up to date on the device for a handful of upload hosts.
 // `onBody` (optional) reads a 200 reply straight from the stream instead of
-// into `body` - for replies too large to hold as a String.
+// into `body` - for replies too large to hold as a String; any other reply
+// is not read at all then. Without onBody, `body` = the start of the reply.
 int httpGet(const String& url, String& body, std::function<void(Stream&)> onBody = nullptr)
 {
     WiFiClient       plain;   // before `http`, see httpPostJson()
@@ -587,8 +629,8 @@ int httpGet(const String& url, String& body, std::function<void(Stream&)> onBody
     const bool isTls = url.startsWith("https://");
     if (isTls) { tlsBegin(); tlsLogHeap("GET", "before"); }
     int code = http.GET();
-    if (code == HTTP_CODE_OK && onBody) onBody(http.getStream());
-    else if (code > 0)                  body = http.getString();
+    if (onBody) { if (code == HTTP_CODE_OK) onBody(http.getStream()); }
+    else if (code > 0) body = readReplyStart(http);
     http.end();
     if (isTls) { tlsLogHeap("GET", "after"); tlsEnd(); }
     return code;
@@ -610,7 +652,7 @@ WxObs obsFrom(const Reading& r)
     o.hasTemp = r.hasBme; o.tempC = r.tempC;
     o.hasHum = r.hasHum;  o.humidity = r.humidity;
     o.hasPress = r.hasPress; o.qnhHpa = r.pressureHpa;
-    o.hasWind = r.hasWind; o.windMs = r.windMs(); o.gustMs = r.gustKmh / MS_TO_KMH; o.dirDeg = r.dirDeg;
+    o.hasWind = r.hasWind; o.windMs = r.windMs(); o.gustMs = r.gustKmh / MS_TO_KMH; o.dirDeg = r.dirDeg; o.hasDir = r.hasDir;
     o.hasRain = r.hasRain; o.rain1hMm = r.rain1hMm; o.rainDayMm = r.dailyRainMm; o.rain24hMm = historyRainSum(24 * 3600);
     return o;
 }
@@ -750,11 +792,11 @@ void updateCheckPoll()
     xSemaphoreGive(wxMutex);
 
     // GitHub's releases list carries every release's notes and assets (easily
-    // >100 KB): ask for the newest few only, and parse the reply as it streams
+    // >100 KB): ask for the newest 20 only (2.x among newer 4.x), and parse the reply as it streams
     // in (filtered to the names) instead of buffering it in the heap.
     String u = url;
     if (u.indexOf("api.github.com/") >= 0 && u.indexOf("/releases") >= 0 && u.indexOf("per_page=") < 0)
-        u += (u.indexOf('?') >= 0 ? "&per_page=5" : "?per_page=5");
+        u += (u.indexOf('?') >= 0 ? "&per_page=20" : "?per_page=20");
 
     JsonDocument filter;
     filter[0]["name"] = true;
@@ -767,13 +809,14 @@ void updateCheckPoll()
     });
     char best[24] = "", status[48];
     if (code == HTTP_CODE_OK) {
-        if (jsonErr == DeserializationError::Ok) {
+        // the releases list is an array; an object (e.g. an error document) is no answer
+        if (jsonErr == DeserializationError::Ok && doc.is<JsonArray>()) {
             for (JsonObject o : doc.as<JsonArray>()) {
                 const char* n = o["tag_name"].is<const char*>() ? o["tag_name"].as<const char*>() : o["name"].as<const char*>();
                 // the name is shown on the status page and sent via MQTT: only
                 // plain version characters are accepted (wxValidVersionTag)
                 if (!n || strlen(n) >= sizeof(best) || !wxValidVersionTag(n)) continue;
-                if (compareVersions(n, FIRMWARE_VERSION) > 0 && (!best[0] || compareVersions(n, best) > 0)) strlcpy(best, n, sizeof(best));
+                if (versionOffered(n, FIRMWARE_VERSION) && (!best[0] || compareVersions(n, best) > 0)) strlcpy(best, n, sizeof(best));
             }
             snprintf(status, sizeof(status), best[0] ? "newer firmware: %s" : "up to date", best);
         } else {
@@ -815,7 +858,7 @@ int notifyHttp(const NotifyReq& req, char* reply, size_t len)
     const bool isTls = !strncmp(req.url, "https://", 8);
     if (isTls) { tlsBegin(); tlsLogHeap("request", "before"); }
     const int code = req.post ? http.POST((uint8_t*)req.body, strlen(req.body)) : http.GET();
-    String b = code > 0 ? http.getString() : HTTPClient::errorToString(code);
+    String b = code > 0 ? readReplyStart(http, len + 16) : HTTPClient::errorToString(code);
     http.end();
     if (isTls) { tlsLogHeap("request", "after"); tlsEnd(); }
     b.trim();
@@ -858,12 +901,18 @@ void customUploadService()
         std::unique_ptr<NotifyReq> reqBuf(new (std::nothrow) NotifyReq());   // ~1 KB while sending
         if (!reqBuf) return;
         NotifyReq& req = *reqBuf;
-        phRender(u.url, req.url, sizeof(req.url), PE_URL, phLiveLookup, &live);
+        bool urlCut = false, bodyCut = false;
+        phRender(u.url, req.url, sizeof(req.url), PE_URL, phLiveLookup, &live, &urlCut);
         if (u.post) {
             req.post = true;
             const bool json = u.body[0] == '{' || u.body[0] == '[';
             strcpy(req.contentType, json ? "application/json" : "text/plain");
-            phRender(u.body, req.body, sizeof(req.body), json ? PE_JSON : PE_NONE, phLiveLookup, &live);
+            phRender(u.body, req.body, sizeof(req.body), json ? PE_JSON : PE_NONE, phLiveLookup, &live, &bodyCut);
+        }
+        if (urlCut || bodyCut) {   // never send a cut URL / body (e.g. invalid JSON)
+            dbgSerial.printf("Custom upload %d: %s too long with the values filled in - not sent\n", i + 1, urlCut ? "URL" : "body");
+            outReport(OUT_CUSTOM_FIRST + i, false, 0, urlCut ? "URL too long, not sent" : "body too long, not sent");
+            return;
         }
         char reply[48];
         const int code = notifyHttp(req, reply, sizeof(reply));

@@ -23,6 +23,16 @@ int main()
     assert(f.sensorId == 0x2B && f.newBattery && f.weakBattery);
     assert(near(f.tempC, -5.3f) && f.hasHumidity && f.humidity == 87);
 
+    // -2.4 C (37.6 -> BCD 3 7 6): exactly the float nearest -2.4, no residue
+    uint8_t m24[5] = {0x92, 0x83, 0x76, 0x6A, 0};
+    m24[4] = itPlusCrc8(m24, 4);
+    assert(itPlusDecode(m24, f) && f.tempC == -2.4f);
+    for (int t = 0; t <= 999; t++) {   // every BCD value: the nearest float of (t - 400) / 10
+        uint8_t b[5] = {0x92, (uint8_t)(0x80 | (t / 100)), (uint8_t)((((t / 10) % 10) << 4) | (t % 10)), 0x6A, 0};
+        b[4] = itPlusCrc8(b, 4);
+        assert(itPlusDecode(b, f) && f.tempC == (float)((t - 400) / 10.0));
+    }
+
     // Second probe channel: ID + 64, no humidity
     uint8_t pr[5] = {0x92, 0x84, 0x48, ITPLUS_PROBE_FLAG, 0};
     pr[4] = itPlusCrc8(pr, 4);

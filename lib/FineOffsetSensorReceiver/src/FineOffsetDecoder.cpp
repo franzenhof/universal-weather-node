@@ -132,11 +132,18 @@ void decodeWh65(const uint8_t* b, size_t len, FoFrame& o, bool wh24Units)
     if (uv != 0xFFFF) { o.hasUv = true; o.uvIndex = uvIndexFromRaw(uv); }
     uint32_t light = be24(b + 12);
     if (light != 0xFFFFFF) { o.hasLight = true; o.lightLux = light * 0.1f; }
-    // WS69: 8 more bytes with a 17-bit pressure value and its own CRC + sum
+    // WS69: 8 more bytes with a 17-bit pressure value (Pa) and its own CRC +
+    // sum. In the fixed-length read the bytes after a WH65 frame are noise
+    // that passes both checks about once in 65536 frames, so the pressure must
+    // also be "none" (0x1FFFF) or a station pressure of 300..1100 hPa (as for
+    // the WH25); the other extension bytes have no known meaning to check.
     if (len >= 25 && checkFrame(b, 25)) {
-        if (!wh24Units) o.model = "WS69";
-        uint32_t p = ((uint32_t)(b[17] & 0x01) << 16) | be16(b + 18);
-        if (p != 0x1FFFF) { o.hasPressure = true; o.pressureHpa = p * 0.01f; }
+        const uint32_t p = ((uint32_t)(b[17] & 0x01) << 16) | be16(b + 18);
+        const bool noPressureModule = p == 0x1FFFF;
+        if (noPressureModule || (p >= 30000 && p <= 110000)) {
+            if (!wh24Units) o.model = "WS69";
+            if (!noPressureModule) { o.hasPressure = true; o.pressureHpa = p * 0.01f; }
+        }
     }
 }
 
@@ -157,7 +164,7 @@ void decodeWs80(const uint8_t* b, FoFrame& o)   // WS80 and WS90 (same first 14 
     o.batteryMv = (uint16_t)(b[6] * 20);
     o.batteryOk = o.batteryMv > 2400;    // 2 x AA lithium (WS85 threshold of rtl_433)
     // WS90 firmware >= 1.6.0 (WS80 likely too) reports 0 V on an external power
-    // supply (Ecowitt wiki, section WS90): not a flat battery
+    // supply (Ecowitt wiki by Gyvate, section WS90): not a flat battery
     if (b[6] == 0) { o.extPower = true; o.batteryOk = true; }
     int temp = (b[7] & 0x03) << 8 | b[8];
     if (temp != 0x3FF) setTemp400(o, temp);
@@ -252,7 +259,7 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
             // 1-99 % is the WH31's range; 0 % and 0xFF (no reading) both mean
             // "no humidity", e.g. a temperature-only sensor sending the WH31
             // frame (WN30). Checking only b[4] != 0 mislabelled a WN30 that
-            // sends 0xFF as a WH31 (forum trace, 2026-11-25).
+            // sends 0xFF as a WH31 (forum, Dirk27 2026-11-25).
             if (b[4] >= 1 && b[4] <= 100) setHumidity(o, b[4]);
             else if (f->code == FO_FAMILY_WH31) o.model = "WN30";   // temperature only: the WN30 sends this frame
             break;
@@ -391,7 +398,7 @@ bool foDecode(const uint8_t* b, size_t len, FoFrame& out, bool wh24Units)
         case FO_FAMILY_LDS01:
             // 54 II II II ?? ?? Dd dd ?? ?? ?? ?? ?? ?? ?? HH ?? CC SS
             // Confirmed against a forum radio trace with the console's own
-            // readings (2026-11-25): distance is the low 12 bits of
+            // readings (Dirk27, 2026-11-25): distance is the low 12 bits of
             // b[6..7] in mm; b[15] is the low byte of the console's "heat-on
             // count" (293..297; where the rest is sent is not known). Bit 0x40
             // of b[6] is set in extra frames about 10 s apart after a change

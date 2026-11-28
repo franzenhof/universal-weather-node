@@ -76,7 +76,7 @@ static Measurements currentMeasurements(const PathValues* pv)
         m.hasAuxAin    = ioAuxAinActive();      m.auxAinV = gIo.auxAinV;
         m.hasAuxPulses = gCfg.auxPulseEn && !gCfg.wind2Mode;  m.auxPulses = gIo.auxPulsesCycle;  m.auxPulsesTotal = gIo.auxPulsesTotal;
         m.hasAuxAin    = m.hasAuxAin && gCfg.wind2Mode != 2;
-        m.hasWind2     = gCfg.wind2Mode != 0;  m.hasWind2Dir = ioWind2DirActive();
+        m.hasWind2     = gCfg.wind2Mode != 0 && gIo.wind2Valid;  m.hasWind2Dir = m.hasWind2 && ioWind2DirActive();
         m.wind2DirDeg  = gIo.wind2DirDeg;
         m.wind2Speed   = windSpeedForOutput(gIo.wind2SpeedMs, gCfg);
         m.wind2Gust    = windSpeedForOutput(gIo.wind2GustMs,  gCfg);

@@ -129,9 +129,24 @@ void drawCustom(OLEDDisplay& d, const OledCustom& c)
 }
 
 // Off-screen canvas for the preview: the display library's drawing, no I2C.
+// The driver's UTF-8 decoder (DefaultFontTableLookup) keeps the previous byte in a
+// static shared by every OLEDDisplay. The preview canvas draws on the web task while
+// the loop task draws the real display, so it gets its own copy of that state.
+char previewFontLookup(const uint8_t ch)
+{
+    static uint8_t last = 0;   // web task only (the preview)
+    if (ch < 128) { last = 0; return (char)ch; }
+    const uint8_t prev = last;
+    last = ch;
+    if (prev == 0xC2) return (char)ch;
+    if (prev == 0xC3) return (char)(ch | 0xC0);
+    if (prev == 0x82 && ch == 0xAC) return (char)0x80;   // the euro sign
+    return 0;
+}
+
 class OledCanvas : public OLEDDisplay {
 public:
-    OledCanvas() { setGeometry(GEOMETRY_128_64); }
+    OledCanvas() { setGeometry(GEOMETRY_128_64); setFontTableLookupFunction(previewFontLookup); }
     void display() override {}
     const uint8_t* pixels() const { return buffer; }
 protected:

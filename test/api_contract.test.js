@@ -34,7 +34,7 @@ function build() {
       '-std=c++11', '-Wall', '-Wextra', '-Werror', '-ffp-contract=off', '-DFIRMWARE_VERSION="2.0.0"',
       '-I', 'test/host', '-I', 'src', '-I', 'lib/TfaWeatherSensorReceiver/src', '-I', 'lib/FineOffsetSensorReceiver/src',
       '-I', '.pio/libdeps/heltec_wifi_lora_32_V3/ArduinoJson/src',
-      'src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp',
+      'src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp', 'src/rf_minrssi.cpp',
       'src/derived.cpp', 'src/derived_now.cpp', 'src/units.cpp', 'src/json_payload.cpp', 'src/api_info.cpp',
       'src/calibration.cpp', 'src/records.cpp', 'src/out_status.cpp', 'src/astro.cpp', 'src/astro_store.cpp', 'src/alarms.cpp', 'src/series_def.cpp',
       'test/firmware_api.cpp', '-o', exe,

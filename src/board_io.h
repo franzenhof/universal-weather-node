@@ -37,7 +37,8 @@ struct IoState {
     float    auxAinV = 0.0f;         // cycle average, already scaled
     uint32_t auxPulsesCycle = 0;
     uint32_t auxPulsesTotal = 0;     // since power-on (kept across restarts)
-    float    wind2SpeedMs = 0.0f;    // 2nd anemometer (wind2Mode): cycle average (pulse-weighted)
+    bool     wind2Valid = false;     // 2nd anemometer (wind2Mode): an accepted sample this cycle
+    float    wind2SpeedMs = 0.0f;    // cycle average (pulse-weighted); 0 while !wind2Valid
     float    wind2GustMs = 0.0f;     // highest 3-s gust of the cycle
     uint16_t wind2DirDeg = 0;        // vector average incl. wind2DirOffsetDeg (wind2Mode 2)
     bool     heaterOn = false;
@@ -74,7 +75,8 @@ bool ioWind2DirActive();
 // Puts the outputs into a safe state (off) and starts whatever is enabled.
 // Call once after sensorsInit(); no-op on Rev 1.2/1.3.
 void ioInit();
-// Latches heater/fan off until restart, including during config/OTA.
+// Latches heater/fan off until restart (config portal; a web OTA leaves them
+// under normal control).
 void ioSuspendOutputs();
 // Every loop() iteration: VE.Direct reception and picking up enable changes
 // made by applyParam() (downlink, MQTT, web settings).

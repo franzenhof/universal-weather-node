@@ -12,20 +12,23 @@
 // Serial object directly, not through this wrapper. Our own code uses
 // dbgSerial instead of Serial for exactly this reason.
 //
-// Written from both the main loop task (virtually all of our own logging)
-// and the web-server task on core 0 (webApiTask's own start/stop messages),
-// and read/reset from the web task's /api/log/raw and /api/log/clear
-// handlers — mutex-protected internally for exactly the same reason as
-// history.cpp's ring buffer: a snapshot()/clear() racing a concurrent
-// write() could hand back more than just a stale byte, since logHead/logFull
-// are read mid-update. Never called from an ISR (the button ISR only
-// touches its own volatile variables, see main.cpp), so a plain
-// (non-FromISR) mutex is safe to use here.
+// Written from several tasks (the main loop, the web server's handlers,
+// the upload task, ...) and read/reset by the /api/log handlers - so the
+// ring is mutex-protected: a snapshot()/clear() racing a write() could hand
+// back more than just a stale byte. Each write and each println(text) goes
+// to the ring and the port as one step under the mutex: a line from another
+// task never lands between a text and its line end, and the port shows the
+// lines in the ring's order. Never called from an ISR (the button ISR only
+// touches its own volatile variables, see main.cpp), so a plain mutex is safe.
 class SerialLog : public Print
 {
 public:
     size_t write(uint8_t c) override;
     size_t write(const uint8_t* buffer, size_t size) override;
+    // text and line end in one step (Print's println is two writes)
+    using Print::println;
+    size_t println(const char* s);
+    size_t println(const String& s);
 
     // Copies the buffered log (oldest byte first) into out as a NUL-terminated
     // string. Returns the number of bytes written, excluding the terminator.
@@ -34,6 +37,7 @@ public:
     void clear();
 
 private:
+    size_t writeLine(const uint8_t* a, size_t an, const uint8_t* b, size_t bn);
     SemaphoreHandle_t mutex_ = xSemaphoreCreateMutex();
 };
 

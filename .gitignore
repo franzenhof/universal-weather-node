@@ -13,9 +13,6 @@ include/decoder_js.h
 include/readme_md.h
 include/i18n_keys.h
 include/i18n_table.h
-include/chart_page_gz.h
-include/web_assets.h
-
 
 # KiCad
 *.kicad_prl
@@ -25,3 +22,9 @@ fp-info-cache
 _autosave-*
 \#auto_saved_files\#
 
+# local tools / editor settings (not part of the project)
+.claude/
+.vscode/settings.json
+tools/pcbgen/freerouting-*.jar
+include/chart_page_gz.h
+include/web_assets.h

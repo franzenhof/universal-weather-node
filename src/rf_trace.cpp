@@ -356,7 +356,9 @@ void rfTraceClassifyItPlus(const uint8_t* b, RfTracePacket& p, char* check, size
         snprintf(check, checkLen, crc ? "CRC ok, values invalid" : "CRC fail");
         p.result = RF_TR_FAILED;
         p.protocol = "IT+";
-        p.id = (p.phase == RF_TP_ITPLUS9 ? RF_ID_ITPLUS9 : RF_ID_ITPLUS17) | (uint32_t)(((b[0] & 0x0F) << 2) | (b[1] >> 6));
+        const uint8_t h = b[3] & 0x7F;   // humidity byte: 0x6A none, 0x7D second probe (rf_sensors.h: rfItPlusId)
+        const uint8_t sid = (uint8_t)((((b[0] & 0x0F) << 2) | (b[1] >> 6)) + (h == ITPLUS_PROBE_FLAG ? 64 : 0));
+        p.id = rfItPlusId(p.phase != RF_TP_ITPLUS9, sid, h != ITPLUS_NO_HUMIDITY && h != ITPLUS_PROBE_FLAG);
         p.hasId = crc;   // without a valid CRC the ID bits are not trustworthy
     } else {
         snprintf(check, checkLen, "no known format (model nibble %X, IT+ needs 9)", b[0] >> 4);
@@ -456,7 +458,7 @@ void rfTraceFileName(char* out, size_t len, const char* hostname)
     if (start) {
         time_t tt = (time_t)start;
         struct tm tm;
-        localtime_r(&tt, &tm);
+        localTimeOf(tt, tm);
         snprintf(out, len, "uwn-rftrace-%s-%04d%02d%02d-%02d%02d.txt", h, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                  tm.tm_hour, tm.tm_min);
     } else {

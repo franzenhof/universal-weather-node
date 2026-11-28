@@ -39,7 +39,7 @@ int main()
     for (int l = 0; l < LANG_COUNT; l++)
         for (int k = 0; k < T_COUNT_; k++) assert(TL((uint8_t)l, (TextId)k) && TL((uint8_t)l, (TextId)k)[0]);
     i18nSet(LANG_DE);
-    assert(i18nCurrent() == LANG_DE && T(T_c_settings) == I18N_TEXT[LANG_DE][T_c_settings]);
+    assert(i18nCurrent() == LANG_DE && !strcmp(T(T_c_settings), I18N_TEXT[LANG_DE][T_c_settings]));
     i18nSet(42);
     assert(i18nCurrent() == LANG_EN && !strcmp(T(T_c_settings), "Settings"));
     assert(!strcmp(TL(LANG_EN, (TextId)T_COUNT_), ""));

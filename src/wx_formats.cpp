@@ -50,7 +50,8 @@ bool wowUrl(const WxObs& o, const char* siteId, const char* pin, const char* dat
     if (o.hasHum)   b.add("&humidity=%.0f", o.humidity);
     if (o.hasTemp && o.hasHum) b.add("&dewptf=%.1f", f(dewPointC(o.tempC, o.humidity)));
     if (o.hasPress) b.add("&baromin=%.2f", o.qnhHpa / 33.8639f);
-    if (o.hasWind)  b.add("&windspeedmph=%.1f&windgustmph=%.1f&winddir=%d", o.windMs * MS_TO_MPH, o.gustMs * MS_TO_MPH, o.dirDeg);
+    if (o.hasWind)  b.add("&windspeedmph=%.1f&windgustmph=%.1f", o.windMs * MS_TO_MPH, o.gustMs * MS_TO_MPH);
+    if (o.hasWind && o.hasDir) b.add("&winddir=%d", o.dirDeg);
     if (o.hasRain)  b.add("&dailyrainin=%.2f", o.rainDayMm / 25.4f);
     return b.ok;
 }
@@ -68,7 +69,9 @@ bool cwopPacket(const WxObs& o, const char* call, double lat, double lon, int da
           latD, latM, lat < 0 ? 'S' : 'N', lonD, lonM, lon < 0 ? 'W' : 'E');
     auto clamp = [](long v, long lo, long hi) { return v < lo ? lo : v > hi ? hi : v; };
     if (o.hasWind) {
-        b.add("%03d/%03ld", o.dirDeg % 360, clamp(lroundf(o.windMs * MS_TO_MPH), 0, 999));
+        if (o.hasDir) b.add("%03d", o.dirDeg % 360);
+        else          b.add("...");
+        b.add("/%03ld", clamp(lroundf(o.windMs * MS_TO_MPH), 0, 999));
         b.add("g%03ld", clamp(lroundf(o.gustMs * MS_TO_MPH), 0, 999));
     } else {
         b.add(".../...g...");

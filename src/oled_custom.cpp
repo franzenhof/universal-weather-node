@@ -9,7 +9,8 @@ void oledCustomClean(const char* in, char* out, size_t len)
     for (const unsigned char* s = (const unsigned char*)(in ? in : ""); *s; s++) {
         if (*s < 0x20 || *s == 0x7F) continue;   // newline, tab, ... (the stored form splits at '\n')
         // a UTF-8 character fits completely or not at all
-        size_t need = *s < 0x80 ? 1 : (*s & 0xE0) == 0xC0 ? 2 : (*s & 0xF0) == 0xE0 ? 3 : (*s & 0xF8) == 0xF0 ? 4 : 1;
+        size_t need = *s < 0x80 ? 1 : (*s & 0xE0) == 0xC0 ? 2 : (*s & 0xF0) == 0xE0 ? 3 : (*s & 0xF8) == 0xF0 ? 4 : 0;
+        if (!need) continue;   // a stray continuation byte (0x80-0xBF) or a never-valid byte (0xF8-0xFF) is dropped
         if (need > 1) {
             size_t k = 1;
             while (k < need && (s[k] & 0xC0) == 0x80) k++;

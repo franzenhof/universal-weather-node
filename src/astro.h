@@ -38,10 +38,13 @@ void astroMoon(int64_t t, float& illum, uint8_t& phase);
 const char* astroMoonPhaseKey(uint8_t phase);   // "new", "waxingCrescent", ...
 
 // ---- device part (astro_store.cpp) ----
-bool astroLocation(double& lat, double& lon);   // false = latitude / longitude not set
+// false = latitude / longitude not set. Takes wxUploadLock (not while holding it).
+bool astroLocation(double& lat, double& lon);
 void astroCycle();                              // main loop: recompute at the day change / location change
-// "astro" object for /api/data; false (nothing added) without location or clock
+// "astro" object for /api/data (any task, from the cached day and its
+// location); false (nothing added) without location or clock
 bool astroJson(JsonObject o);
 // Sunshine by radiation (Config::sunMethod 1, WMO-like): sun above 3 deg and
-// wm2 >= 0.4 x clear-sky maximum now. false = no location / clock (sunny unset).
+// wm2 >= 0.4 x clear-sky maximum now, at the cached day's location. false =
+// no location / clock (sunny unset).
 bool astroSunnyByRadiation(float wm2, bool& sunny);

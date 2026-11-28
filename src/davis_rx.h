@@ -13,7 +13,9 @@
 // Call every loop() while Davis mode is selected: starts the receive task,
 // applies changed settings, processes received packets.
 void davisRxLoop();
-// Davis mode left: stops the task (waits until it released the radio).
+// Davis mode left: stops the task (waits until it released the radio, up to
+// 10 s; a task stuck in a radio call restarts the node rather than being
+// deleted while it may hold the SPI bus).
 void davisRxStop();
 // The task owns the radio (from start until davisRxStop() returned).
 bool davisRadioOwned();

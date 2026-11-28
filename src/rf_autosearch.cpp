@@ -17,7 +17,7 @@ AutoResult autoSearchPacket(AutoSearch& s, uint32_t id, uint8_t proto, float rss
     for (AutoCand& x : s.c) if (x.id == id) c = &x;
     if (!c) {   // a free entry, else the one heard longest ago
         for (AutoCand& x : s.c) if (!x.id) { c = &x; break; }
-        if (!c) { c = &s.c[0]; for (AutoCand& x : s.c) if (x.lastMs < c->lastMs) c = &x; }
+        if (!c) { c = &s.c[0]; for (AutoCand& x : s.c) if (now - x.lastMs > now - c->lastMs) c = &x; }   // age: wrap-safe
         *c = AutoCand();
         c->id = id;
     }

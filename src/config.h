@@ -119,6 +119,8 @@ struct Config {
     // Per wireless sensor: "ID:t:h,..." offsets in 0.1 K / 0.1 % (calibration.h)
     // Per wireless sensor: "ID:name|..." (rf_names.h)
     char     rfNames[1024]     = "";
+    // Per wireless sensor minimum signal: "ID:dBm|..." (rf_minrssi.h), "" = every packet
+    char     rfMinRssi[256]    = "";
     char     rfCal[1024]       = "";      // stored "A1B2C3D4:5:-20[:gains]" (calibration.h), ~15-40 bytes per sensor
     // Sunshine detection (derived.h): 0 = illuminance threshold, 1 = solar
     // radiation >= 0.4 x clear-sky maximum (needs a W/m2 source and lat/lon)
@@ -310,7 +312,34 @@ Config loadConfig();
 // The same into an existing Config that holds the defaults (a fresh Config,
 // e.g. on the heap): Config is ~7 KB, too big for the 8 KB web task stack.
 void loadConfigInto(Config& c);
+// Every key of c to NVS. Skipped (logged) once configHoldForRestart() ran.
 void   saveConfig(const Config& c);
+// A save stored settings that take effect only at the restart that follows
+// (the web settings' restart fields, which gCfg does not take until then).
+// From now until that restart saveConfig() writes nothing: another caller
+// (★ button, downlink) would save gCfg and so put the old restart fields
+// back. Its change stays in RAM until the restart - the restart fields win
+// over a small change made in the last moments.
+void   configHoldForRestart();
+bool   configHeldForRestart();
+// Factory reset (cmdFactoryReset(), params.cpp): every NVS write of settings
+// (saveConfig(), saveRfProto(), saveHaRfIds(), alarmsSave(),
+// customUploadSave()) runs inside a SettingsWrite and writes nothing when
+// ok() is false. configSealForReset() waits for a write in progress and from
+// then on refuses all of them (and holds the config, configHeldForRestart()),
+// so a save racing the reset cannot put the old settings back before the
+// restart.
+class SettingsWrite {
+public:
+    SettingsWrite();
+    ~SettingsWrite();
+    SettingsWrite(const SettingsWrite&) = delete;
+    SettingsWrite& operator=(const SettingsWrite&) = delete;
+    bool ok() const { return ok_; }
+private:
+    bool ok_;
+};
+void   configSealForReset();
 // Writes only the "rfproto" key (wireless auto search locked: one NVS write).
 void   saveRfProto(int proto);
 

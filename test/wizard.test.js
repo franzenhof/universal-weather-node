@@ -35,16 +35,46 @@ test('the wizard has seven steps and posts known fields', () => {
   assert.ok(fields.length > 20);
 });
 
+// "name*" = a prefix (rfname_<ID>)
+const literal = (f) => f.replace(/\*$/, '');
+
 test('every wizard field is handled by the settings handler', () => {
   const post = body(web, 'void handleSettingsPost()');
-  const missing = fields.filter((f) => !post.includes(`"${f}"`));
+  const missing = fields.filter((f) => !post.includes(f.endsWith('*') ? `"${literal(f)}` : `"${f}"`));
   assert.deepStrictEqual(missing, []);
 });
 
+// the wizard page and the sensor rows of step 2
+const page = body(web, 'void renderWizard(') + body(web, 'void wizardSensorRows(');
+
 test('every wizard field is rendered by the wizard', () => {
-  const page = body(web, 'void renderWizard(');
-  const missing = fields.filter((f) => !page.includes(`"${f}"`) && !page.includes(`name='${f}'`));
+  const missing = fields.filter((f) => f.endsWith('*') ? !page.includes(`name='${literal(f)}`)
+    : !page.includes(`"${f}"`) && !page.includes(`name='${f}'`));
   assert.deepStrictEqual(missing, []);
+});
+
+// mirrors wizardFieldAllowed() (src/setup_wizard.cpp): an open wizard POST
+// with any other field is refused
+function allowed(step, name) {
+  if (['form', 'wizard', 'wstep', 'wstay'].includes(name)) return true;
+  return steps[step - 1].split(',').filter(Boolean).some((f) =>
+    f.endsWith('*') ? name.startsWith(literal(f)) : name === f || name === f + '_clear');
+}
+
+test('every field a wizard step renders is in that step\'s list', () => {
+  const wiz = body(web, 'void renderWizard(');
+  const rows = body(web, 'void wizardSensorRows(');
+  const names = (src) => [...src.matchAll(/field\w+\s*\(html,\s*"(\w+)"/g), ...src.matchAll(/name='(\w+)/g)].map((m) => m[1]);
+  const bad = [];
+  for (let step = 1; step < 7; step++) {
+    const start = wiz.indexOf(`case ${step}:`);
+    assert.ok(start >= 0, `case ${step} not found`);
+    const end = wiz.indexOf(step < 6 ? `case ${step + 1}:` : 'default:', start);
+    let src = wiz.slice(start, end);
+    if (step === 2) src += rows;
+    for (const n of names(src)) if (!allowed(step, n)) bad.push(`${step}:${n}`);
+  }
+  assert.deepStrictEqual(bad, []);
 });
 
 test('wizard steps post with wizard=1 to the settings handler', () => {

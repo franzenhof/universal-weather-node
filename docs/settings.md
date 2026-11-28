@@ -116,7 +116,7 @@ Switching them on again is only possible in the config portal (fields `wifien`, 
 | Heater mode, power, thresholds | off / on / auto; auto: on below the switch-on temperature with the start power, rising linearly to full power at the full-power temperature | off, 100 %, 4.0 °C / 10 %, −10.0 °C / 100 % |
 | Fan mode, speed, threshold, minimum PV power | off / on / auto (from the threshold); PWM 1–100 %; °C; W (VE.Direct, 0 = ignore) | off, 100 %, 15.0 °C, 0 |
 | Fan tacho, pulses per revolution | GPIO40 | off, 2 |
-| Victron VE.Direct | GPIO33/34 | off |
+| Victron VE.Direct | RX GPIO33, TX GPIO34 (Heltec V4 on v2.0: TX GPIO45) | off |
 | Minimum battery voltage for heater/fan | V (VE.Direct), 0 = no limit | 0 |
 | **Loxone (UDP)** | see [Loxone](loxone.md) | |
 | Loxone UDP | on/off, Miniserver IP or host name, UDP port, name prefix (`A–Z a–z 0–9 _ . -`, max 16), interval (`0` = every cycle, else 2–3600 s) | off, –, 7000, –, 0 |
@@ -182,7 +182,7 @@ A line is text with placeholders, as for the [custom uploads](weather-networks.m
 
 Above the first screen's fields, *Available placeholders* lists every placeholder that has a value right now, with that value; a click inserts it into the field used last. The custom uploads (*Outputs*) and the alarm texts have the same list.
 
-Unlike the uploads, values come **in the device's units** (*Basics → Units*). A suffix sets decimals or another unit: `{temp:.0}`, `{wind:kmh}`, `{qnh:inhg:.1}`. A value that is not there right now — or a misspelt name — shows as `--`. A small line holds about 20 characters (128 pixels, proportional font); the preview shows what fits. Title up to 23, lines up to 39 bytes of template text.
+Unlike the uploads, values come **in the device's units** (*Basics → Units*). A suffix sets decimals or another unit: `{temp:.0}`, `{wind:kmh}`, `{qnh:inhg:.1}`. A value that is not there right now — or a misspelt name — shows as `--`. A small line holds about 20 characters (128 pixels, proportional font); the preview shows what fits. Title up to 23, lines up to 63 bytes of template text.
 
 Texts on the screens follow the device language (*Settings → Basics → Language*; *Auto* = English). Existing nodes keep the old behaviour until something is changed here.
 

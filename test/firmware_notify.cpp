@@ -11,6 +11,7 @@ static bool lookup(const char* n, PhValue& o, void*)
 {
     if (!strcmp(n, "name"))  { o.kind = PK_TEXT; o.text = "Frost \"A\""; return true; }
     if (!strcmp(n, "value")) { o.kind = PK_TEXT; o.text = "-1.5"; return true; }
+    if (!strcmp(n, "long"))  { static const std::string t(100, 'x'); o.kind = PK_TEXT; o.text = t.c_str(); return true; }
     return false;
 }
 
@@ -57,6 +58,10 @@ int main()
     strcpy(ch.whBody, "{\"alarm\":\"{name}\",\"value\":{value}}");
     assert(notifyWebhook(ch, lookup, nullptr, r) && r.post && std::string(r.contentType) == "application/json");
     assert(std::string(r.body) == "{\"alarm\":\"Frost \\\"A\\\"\",\"value\":-1.5}");
+    assert(!r.truncated);
+    // a body that does not fit is flagged (the sender refuses it instead of sending cut JSON)
+    strcpy(ch.whBody, "{\"a\":\"{long}{long}{long}{long}{long}{long}{long}{long}\"}");   // 8 x 100 > 640
+    assert(notifyWebhook(ch, lookup, nullptr, r) && r.truncated);
     assert(notifyOk(AC_NTFY, 200) && !notifyOk(AC_NTFY, 401) && !notifyOk(AC_NTFY, -1));
     puts("notify ok");
     return 0;

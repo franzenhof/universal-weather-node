@@ -6,6 +6,7 @@
 #include "rf_sensors.h"
 #include "serial_log.h"
 #include "sources.h"
+#include "system_restart.h"
 #include "radio_board.h"   // the shared SX1262 (Heltec V4 front end handled there)
 #include <DavisDecoder.h>
 #include <DavisHopper.h>
@@ -525,14 +526,16 @@ void davisRxLoop()
 void davisRxStop()
 {
     if (!owned) return;
+    // Cooperative stop: the task checks stopRequest at least every 100 ms and
+    // after each radio call; a radio call on a hung chip can take a few
+    // seconds (RadioLib BUSY / SPI timeouts, several per begin()). Deleting it
+    // from here could leave the SPI bus or `lock` taken for good, so a task
+    // that does not end within DAVIS_STOP_WAIT_MS restarts the node instead.
+    constexpr uint32_t DAVIS_STOP_WAIT_MS = 10000;
     stopRequest = true;
     if (task) xTaskNotifyGive(task);
-    for (int i = 0; i < 100 && taskRunning; i++) vTaskDelay(pdMS_TO_TICKS(10));
-    if (taskRunning) {   // stuck in a radio call - should not happen; take it down
-        vTaskDelete(task);
-        taskRunning = false;
-        radio.standby();
-    }
+    for (uint32_t waitedMs = 0; waitedMs < DAVIS_STOP_WAIT_MS && taskRunning; waitedMs += 10) vTaskDelay(pdMS_TO_TICKS(10));
+    if (taskRunning) systemRestart("Davis task did not stop");
     task = nullptr;
     DavisRadio::setPacketHook(nullptr);
     if (queue) xQueueReset(queue);

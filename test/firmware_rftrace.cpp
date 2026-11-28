@@ -32,6 +32,7 @@ bool localTimeNow(struct tm& out)
     gmtime_r(&t, &out);   // TZ=UTC in this test
     return true;
 }
+void localTimeOf(time_t t, struct tm& out) { gmtime_r(&t, &out); }   // TZ=UTC in this test
 
 static size_t hostFree = 200 * 1024, hostLargest = 100 * 1024;
 static size_t fakeFree() { return hostFree; }

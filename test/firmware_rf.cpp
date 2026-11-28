@@ -40,8 +40,54 @@ int main()
     assert(srcRfValueFresh(0, "rain") && (s.staleMask & ~(RF_VAL_LIGHT | RF_VAL_PRESS)) == 0);
     b.rainTotalMm = 106.5f;
     assert(near(rfStoreValues(s, b, millis(), gap), 0.5f) && gap == 0);
-    b.rainTotalMm = 0.3f;   // battery change: the sensor's total restarts
-    assert(near(rfStoreValues(s, b, millis(), gap), 0.3f));
+    b.rainTotalMm = 0.3f;   // battery change: the sensor's total restarts - held until the next packet confirms it
+    assert(rfStoreValues(s, b, millis(), gap) == 0.0f && near(s.rainTotalMm, 106.5f));
+    b.rainTotalMm = 0.5f;   // confirmed: the rain since the restart (0.3) and since the held packet (0.2)
+    assert(near(rfStoreValues(s, b, millis(), gap), 0.5f) && near(s.rainTotalMm, 0.5f));
+
+    // ---- phantom rain: a rain total that drops or jumps is held until the
+    // next packet confirms it (like DavisRainFilter for the Davis tip counter) ----
+    {
+        RfSensorReading& g = gRfSensors[RF_MAX_SENSORS - 1];   // in the table: rfExpireValues() sees it
+        g = RfSensorReading();
+        g.used = true; g.id = 0x40012345UL; g.proto = RF_PROTO_FINEOFFSET;
+        RfValues rain; rain.ok = RF_VAL_RAIN;
+        unsigned long t = 10000000UL;
+        auto feed = [&](float totalMm, unsigned long afterMs) { t += afterMs; rain.rainTotalMm = totalMm; return rfStoreValues(g, rain, t, gap); };
+        assert(feed(1500.0f, 0) == 0.0f);                             // first value: reference only
+        assert(near(feed(1500.2f, 49000), 0.2f));
+        assert(feed(12.3f, 49000) == 0.0f && near(g.rainTotalMm, 1500.2f));   // one corrupt (lower) total: held
+        assert(near(feed(1500.4f, 49000), 0.2f));                     // back on the old track: the held one is dropped
+        assert(feed(4000.0f, 49000) == 0.0f && near(g.rainTotalMm, 1500.4f));  // corrupt jump up: held
+        assert(near(feed(1500.6f, 49000), 0.2f));                     // dropped
+        assert(feed(12.3f, 49000) == 0.0f && feed(3000.0f, 49000) == 0.0f);    // two contradicting corrupt totals
+        assert(near(feed(1500.8f, 49000), 0.2f) && near(g.rainTotalMm, 1500.8f));
+        // a real cloudburst of 8 mm in one 49-s interval: held, then confirmed and counted
+        assert(feed(1508.8f, 49000) == 0.0f);
+        assert(near(feed(1509.0f, 49000), 8.2f) && near(g.rainTotalMm, 1509.0f));
+        // a confirmed jump far beyond any rain rate (100 mm in 98 s): a new
+        // reference, only the rain after the held packet counts
+        assert(feed(1609.0f, 49000) == 0.0f);
+        assert(near(feed(1609.2f, 49000), 0.2f) && near(g.rainTotalMm, 1609.2f));
+        // the 16-bit counter wraps (WH40: 6553.5 mm): a confirmed restart counts what the new counter holds
+        g.rainTotalMm = 6553.4f;
+        assert(feed(0.1f, 49000) == 0.0f);
+        assert(near(feed(0.2f, 49000), 0.2f));   // (the 0.1 mm before the wrap is not in the sensor's counter any more)
+        // after a long outage the total may rise more: 40 mm after 30 min is taken at once
+        assert(near(feed(40.2f, 30 * 60000UL), 40.0f) && gap == 30 * 60000UL);
+        // a held value keeps the rain value stale (no fresh rain from an unconfirmed packet)
+        rfExpireValues(t + SRC_RF_FRESH_MS + 1);
+        assert(g.staleMask & RF_VAL_RAIN);
+        t += SRC_RF_FRESH_MS + 1;
+        assert(feed(5.0f, 0) == 0.0f && (g.staleMask & RF_VAL_RAIN));
+        // Davis (already filtered by DavisRainFilter) and network sources: taken as they come
+        RfSensorReading d;
+        d.used = true; d.id = RF_ID_DAVIS | 1; d.proto = RF_PROTO_DAVIS;
+        rain.rainTotalMm = 10.0f; rfStoreValues(d, rain, t, gap);
+        rain.rainTotalMm = 20.0f;
+        assert(near(rfStoreValues(d, rain, t + 10000, gap), 10.0f));
+        g = RfSensorReading();
+    }
 
     // ---- expiry survives the millis() wrap: once stale, a value stays
     // stale even if its timestamp looks recent again ----
@@ -74,6 +120,29 @@ int main()
     assert(i == 2 && !gRfSensors[2].used);
     rfSensorsClear();
     for (const RfSensorReading& r : gRfSensors) assert(!r.used);
+    // IT+ new battery (new random ID): takes the slot of an IT+ sensor silent
+    // for a minute, not only after the 5-min freshness window
+    {
+        const unsigned long now = millis();
+        for (int k = 0; k < RF_MAX_SENSORS; k++) {
+            RfSensorReading& r = gRfSensors[k];
+            r.used = true; r.id = rfItPlusId(true, (uint8_t)k, true); r.proto = RF_PROTO_ITPLUS17; r.lastMs = now - 1000;
+        }
+        gRfSensors[5].lastMs = now - 50000UL;   // silent 50 s: not yet
+        assert(rfSlotFor(rfItPlusId(true, 40, true), now, 60000UL, RF_PROTO_ITPLUS17) == -1);
+        gRfSensors[5].lastMs = now - 120000UL;  // silent 2 min: the one whose battery was changed
+        assert(rfSlotFor(rfItPlusId(true, 40, true), now, 60000UL, RF_PROTO_ITPLUS17) == 5);
+        // a 10-min air quality sensor keeps its place between packets despite a short take-over limit
+        rfSensorsClear();
+        for (int k = 0; k < RF_MAX_SENSORS; k++) {
+            RfSensorReading& r = gRfSensors[k];
+            r.used = true; r.id = 0x46000000UL | (uint32_t)k; r.proto = RF_PROTO_FINEOFFSET; r.lastMs = now - 1000;
+        }
+        gRfSensors[3].lastMs = now - 8 * 60000UL;
+        assert(rfFreshMs(gRfSensors[3]) > SRC_RF_FRESH_MS);
+        assert(rfSlotFor(0x12345678UL, now, 60000UL) == -1);
+        rfSensorsClear();
+    }
 
     // ---- rain after an outage is spread, not counted as one burst ----
     gCfg.srcSel[SG_RAIN] = SRC_RF1;
@@ -93,6 +162,31 @@ int main()
     assert(near(rainMMSinceStart - before, 3.0f + 0.2f + 0.02f));
     for (int k = 0; k < 400; k++) { delay(12000); w.rainMs = millis(); srcRfPacket(0, false, 0.0f, false); }
     assert(near(rainMMSinceStart - before, 6.2f));         // nothing lost, nothing extra
+
+    // ---- wireless 10-min wind: the window covers 10 min at any packet rate
+    // (Davis ISS ID 1 2.5625 s, WS80 4.75 s, 12 s) ----
+    gCfg.srcSel[SG_WIND] = SRC_RF1;
+    w.hasWind = true; w.windDirDeg = 90.0f;
+    for (unsigned long periodMs : { 2563UL, 4750UL, 12000UL }) {
+        srcRfWindReset(0);
+        const unsigned long t0 = millis();
+        for (unsigned long t = 0; t < 780000UL; t = millis() - t0) {   // 3 min calm, 7 min at 10 m/s (gust 12), 3 min calm
+            const bool windy = t >= 180000UL && t < 600000UL;
+            w.windAvgMs = windy ? 10.0f : 0.0f; w.windGustMs = windy ? 12.0f : 0.0f;
+            w.windMs = w.lastMs = millis();
+            srcRfPacket(0, true, 0.0f, false);
+            delay(periodMs);
+        }
+        const WindStats ten = srcRfWind(0, true);
+        std::printf("10-min wind, a packet every %lu ms: mean %.2f m/s, gust %.1f m/s\n", periodMs, ten.meanMs, ten.gustMs);
+        assert(ten.valid && std::fabs(ten.meanMs - 7.0f) < 0.3f && near(ten.gustMs, 12.0f) && ten.dirDeg == 90);
+        const WindStats all = srcRfWind(0, false);     // the path window: everything since its reset (~13 min)
+        assert(all.valid && all.meanMs > 4.5f && all.meanMs < 5.6f && near(all.gustMs, 12.0f));
+        delay(616000UL);                                        // silent for more than 10 min: nothing left
+        assert(!srcRfWind(0, true).valid);
+    }
+    w.hasWind = false;
+    gCfg.srcSel[SG_WIND] = SRC_AUTO;
     // ---- 32 sensors: slot mapping with and without an ID list; only
     // slots 1-4 are value sources (SRC_RF1..(SRC_RF1 + 3) keep their meaning) ----
     static_assert(RF_MAX_SENSORS == 32 && RF_SOURCE_SLOTS == 4, "32 received, 4 source slots");
@@ -362,6 +456,11 @@ int main()
     }
     delay(RF_HIDDEN_RANGE_MS + 1000);
     assert(rfHiddenInRange(millis()) == 0);
+    rfExpireValues(millis());   // out of range latched: 49.7 days later the old time stamp looks recent again
+    for (RfHiddenSeen& h : gRfHidden) if (h.id == N) h.lastMs = millis() - 1000;
+    assert(rfHiddenInRange(millis()) == 0);
+    rfNoteHidden(N, nullptr, -78.0f, millis());   // heard again: in range
+    assert(rfHiddenInRange(millis()) == 1);
     for (uint32_t k = 0; k < 20; k++) rfNoteHidden(0x60000000u + k, nullptr, -90.0f, millis());   // more than the list holds
     // parameters 55 / 56
     assert(applyParam(PARAM_RF_ONLY_MINE, 1) && gCfg.rfOnlyMine == 1 && !applyParam(PARAM_RF_ONLY_MINE, 2));
@@ -378,6 +477,21 @@ int main()
         assert(rfEcowittId(0x25000050, e) && e == 0x50);         // WN32P
         assert(rfEcowittId(0x5530CF55, e) && e == 0x30CF55);     // WH55: ID incl. its channel bits
         assert(!rfEcowittId(0x39582376, e) && !rfEcowittId(0x1700002C, e) && !rfEcowittId(0xDA000001, e));   // Bresser, IT+, Davis
+        assert(!rfEcowittId(0x1700012C, e));                     // IT+ with humidity
+        // IT+ twins: the humidity variant gets its own ID; the twin of a non-IT+ ID is 0
+        assert(rfItPlusId(true, 0x08, false) == 0x17000008 && rfItPlusId(true, 0x08, true) == 0x17000108);
+        assert(rfItPlusId(false, 0x48, false) == 0x09000048);                  // 9.579 kbit/s, second probe
+        assert(rfItPlusTwin(0x17000008) == 0x17000108 && rfItPlusTwin(0x17000108) == 0x17000008);
+        assert(rfItPlusTwin(0x09000048) == 0x09000148);
+        assert(!rfItPlusTwin(0x900181A2) && !rfItPlusTwin(0xDA000001) && !rfItPlusTwin(0x17010008));
+        {
+            for (auto& x : gRfSensors) x = RfSensorReading();
+            gRfSensors[3].used = true; gRfSensors[3].id = 0x17000008;
+            assert(rfTwinIndex(0x17000008) < 0);
+            gRfSensors[5].used = true; gRfSensors[5].id = 0x17000108;
+            assert(rfTwinIndex(0x17000008) == 5 && rfTwinIndex(0x17000108) == 3);
+            for (auto& x : gRfSensors) x = RfSensorReading();
+        }
         // short IDs in the lists are replaced by the full ID once the sensor is heard; order kept, no duplicates
         snprintf(gCfg.rfIds, sizeof(gCfg.rfIds), "39582376, 181A2, B2");
         snprintf(gCfg.rfIgnore, sizeof(gCfg.rfIgnore), "30CF55");

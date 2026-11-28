@@ -8,7 +8,7 @@ How to put the firmware on a new Heltec board from the browser, set the node up 
 
 The firmware is installed **once over USB, directly from the web browser** — no PlatformIO, no Python, no drivers on most computers. After that, updates go over Wi-Fi ([OTA](#firmware-update-ota)).
 
-> **Heltec V3 and V4** use the same firmware image. The board is detected at boot by its flash size (V3 8 MB, V4 16 MB). On the V4 the RF front end (V4.2 GC1109 / V4.3 KCT8103L) is switched automatically, and the radio's TX power is reduced by the amplifier gain so the radiated power stays at the LoRaWAN regional limit (EU868: 16 dBm). The **V4 runs [without PCB](minimal-build.md) or on [PCB v2.0](pcb.md)** (its V4 sockets; detected by the revision ID on GPIO15 — a V4 is never used on Rev 1.2 / 1.3); the **V4-R8** (ESP32-S3R8) is not supported. On the V4 the serial log goes over the native USB port (USB CDC, 115200 baud; UART0 stays off because GPIO43/44 carry 1-Wire and wind speed on the PCB) — the web log works too; the first flash may need the BOOT/PRG button held while plugging in. *V4 support is not yet tested on real hardware.*
+> **Heltec V3 and V4** use the same firmware image. The board is detected at boot by its flash size (V3 8 MB, V4 16 MB). On the V4 the RF front end (V4.2 GC1109 / V4.3 KCT8103L) is switched automatically, and the radio's TX power is reduced by the amplifier gain so the radiated power stays at the LoRaWAN regional limit (EU868: 16 dBm). The **V4 runs [without PCB](minimal-build.md) or on [PCB v2.0](pcb.md)** (its V4 sockets; detected by the revision ID on GPIO15 — a V4 is never used on Rev 1.2 / 1.3); the **V4-R8** (ESP32-S3R8) is not supported. On the V4 the serial log goes over the native USB port (USB CDC, 115200 baud; UART0 stays off because GPIO43/44 carry 1-Wire and wind speed on the PCB) — the web log works too; the first flash may need the BOOT/PRG button held while plugging in. *Confirmed on real V4.2 and V4.3 boards; the V4 sockets of PCB v2.0 are not yet tested on real hardware.*
 
 **Two files per release in [`firmware/`](../firmware/) — pick the right one:**
 
@@ -19,14 +19,14 @@ The firmware is installed **once over USB, directly from the web browser** — n
 
 > **Which file for OTA?** Nodes running **2.0.0-rc.1 or newer** accept **both** files: of a `-factory` file only the firmware part is written (bootloader and partition table can't be changed over OTA; if the file's partition table differs from the node's, the upload is refused — flash it over USB then). Nodes running **2.0.0-beta.3** refuse the `-factory` file, and **2.0.0-beta.2 or older must never get it** (they would write the bootloader into the firmware slot and no longer start) — for those, always use the file **without** `-factory`. When in doubt, take the file without `-factory`; it works everywhere.
 
-**You need:** a computer with **Chrome or Edge** (desktop; Firefox and Safari can't talk to USB devices), a **USB-C data cable** (some cables only charge — if no device shows up, try another one), the Heltec WiFi LoRa 32 V3 with its **868 MHz antenna screwed on** (never power the board without the antenna).
+**You need:** a computer with **Chrome or Edge** (desktop; Firefox and Safari can't talk to USB devices), a **USB-C data cable** (some cables only charge — if no device shows up, try another one), the Heltec WiFi LoRa 32 V3 or V4 with its **868 MHz antenna screwed on** (never power the board without the antenna).
 
 1. **Download the firmware.** In [`firmware/`](../firmware/) click the newest **`universal-weather-node-<version>-factory.bin`** and then the **download button** (*Download raw file*), or take the file from the release's *Assets*. Use the **`-factory`** file (see the table above).
    - **Check the file:** a `-factory.bin` is about 2–3 MB. A file of a few hundred KB, or one that opens as text, is the GitHub **web page** that some browsers (often Firefox with "Save link as …") save instead of the firmware — download it again with *Download raw file* or from the release assets.
 2. **Connect the board.** Plug the Heltec into the computer with the USB-C cable. On a v2.0 PCB: disconnect the external power and remove JP8 first.
 3. **Open the flasher.** In Chrome or Edge go to **[web.esphome.io](https://web.esphome.io)** (ESPHome's web flasher — it works for any ESP32 firmware, ESPHome itself is not needed).
-4. Click **CONNECT** and choose the serial port of the board in the browser's list, e.g. *CP2102 USB to UART*, *USB Serial*, *cu.usbserial-…* (macOS) or *COM3* (Windows), then *Connect*.
-   - **No port in the list?** Try another cable/USB port. On Windows, install the [Silicon Labs CP210x driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) once and try again.
+4. Click **CONNECT** and choose the serial port of the board in the browser's list, e.g. *CP2102 USB to UART* / *cu.usbserial-…* (V3), *USB JTAG/serial debug unit* / *cu.usbmodem…* (V4, native USB), or *COM3* (Windows), then *Connect*.
+   - **No port in the list?** Try another cable/USB port. On Windows with a V3, install the [Silicon Labs CP210x driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) once and try again.
 5. Click **INSTALL**, choose the downloaded **`…-factory.bin`** and confirm with **INSTALL**. Wait until *Installation complete* (about 1 minute). Don't unplug the board meanwhile.
    - **Another firmware ran on the board before** (e.g. Meshtastic)? Tick **Erase device** when asked, so no data of the old firmware is left in the flash (from 2.0.0-rc.7 the node would also clear its settings area by itself).
    - **Fails to connect / "failed to enter bootloader"?** Put the board into download mode by hand: hold the **PRG** button, press and release **RST**, release **PRG** — then click *INSTALL* again.
@@ -78,7 +78,7 @@ The firmware is installed **once over USB, directly from the web browser** — n
 
 ## Setup Wizard
 
-After the first start (and after a factory reset) the first visit of the dashboard opens the **setup wizard** (`/setup`) — in the browser's language. It never locks you out: every step has **Skip**, **Back** and **Later** (closes the wizard for good), and nothing in it is required.
+After the first start (and after a factory reset) the first visit of the dashboard opens the **setup wizard** (`/setup`) — in the browser's language. It opens once per browser session and start: after any restart (a reset, *Erase everything*) it comes again until it is finished or closed with *Later*. The browser remembers it in the session cookie `wnSetup` (an ID of the start, nothing else). The web pages use only such technically needed cookies (`wnSetup`, `wnDev` / `wnLang` for the language); they stay between your browser and the node, no tracking, so there is no cookie banner. It never locks you out: every step has **Skip**, **Back** and **Later** (closes the wizard for good), and nothing in it is required.
 
 | Step | What you do |
 |------|-------------|

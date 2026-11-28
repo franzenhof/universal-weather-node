@@ -1,10 +1,12 @@
 #include "config.h"
+#include "ha_groups.h"
 #include "oled_screens.h"
 #include "sources.h"
 #include "ha_rf.h"
 #include "loxone.h"
 #include "wind_window.h"
 #include "serial_log.h"
+#include <atomic>
 #include <Preferences.h>
 #include <memory>
 
@@ -144,6 +146,13 @@ void sanitizeConfig(Config& c)
     choice(c.unitSystem, d.unitSystem, 0, 1);
     rangeF(c.rainMmPerTip, d.rainMmPerTip, 0.001f, 5.0f);
     rangeF(c.windMsPerPps, d.windMsPerPps, 0.001f, 10.0f);
+    range (c.altitudeM, 0, 4000);              // the form and the portal store 0..4000
+    range (c.awekasIntervalSec, 300, 3600);    // the weather-network intervals: as the form accepts them
+    range (c.wuIntervalSec, 60, 3600);
+    range (c.wcloudIntervalSec, 60, 3600);
+    range (c.wnetproIntervalSec, 60, 3600);
+    range (c.windyIntervalSec, 300, 3600);
+    range (c.osemIntervalSec, 60, 3600);
     range (c.wowIntervalSec, 300, 3600);
     range (c.cwopIntervalSec, 300, 3600);
     range (c.cwopPasscode, -1, 32767);
@@ -319,6 +328,7 @@ void loadConfigInto(Config& c)
     c.dispNightTo      = prefs.getInt    ("dispnt",    c.dispNightTo);
     prefs.getString("rfcal", c.rfCal, sizeof(c.rfCal));
     prefs.getString("rfnames", c.rfNames, sizeof(c.rfNames));
+    prefs.getString("rfminrssi", c.rfMinRssi, sizeof(c.rfMinRssi));
     c.windDirSensorType = prefs.getInt   ("winddirtyp", c.windDirSensorType);
     c.windDirCalCount  = prefs.getInt    ("wdcalcnt",  c.windDirCalCount);
     prefs.getBytes("wdcaladc", c.windDirCalAdc, sizeof(c.windDirCalAdc));
@@ -428,8 +438,45 @@ Config loadConfig()
     return c;
 }
 
+namespace {
+std::atomic<bool> heldForRestart{false};
+bool sealedForReset = false;   // under settingsWriteMutex()
+
+SemaphoreHandle_t settingsWriteMutex()
+{
+    static SemaphoreHandle_t m = xSemaphoreCreateMutex();
+    return m;
+}
+}
+
+void configHoldForRestart() { heldForRestart.store(true); }
+bool configHeldForRestart() { return heldForRestart.load(); }
+
+SettingsWrite::SettingsWrite()
+{
+    xSemaphoreTake(settingsWriteMutex(), portMAX_DELAY);
+    ok_ = !sealedForReset;
+    if (!ok_) dbgSerial.println("Settings save skipped: a factory reset is restarting the node.");
+}
+
+SettingsWrite::~SettingsWrite() { xSemaphoreGive(settingsWriteMutex()); }
+
+void configSealForReset()
+{
+    xSemaphoreTake(settingsWriteMutex(), portMAX_DELAY);   // a save in progress ends first
+    sealedForReset = true;
+    heldForRestart.store(true);
+    xSemaphoreGive(settingsWriteMutex());
+}
+
 void saveConfig(const Config& c)
 {
+    if (heldForRestart.load()) {
+        dbgSerial.println("Config save skipped: settings saved for the pending restart stay as they are.");
+        return;
+    }
+    SettingsWrite w;
+    if (!w.ok()) return;
     Preferences prefs;
     if (!prefs.begin("config", false, "cfgdata")) {
         dbgSerial.println("Config save: FAILED to open NVS namespace 'config' in partition 'cfgdata' — nothing was saved.");
@@ -517,6 +564,7 @@ void saveConfig(const Config& c)
     ok &= checkWrite   ("dispnt",      prefs.putInt    ("dispnt",    c.dispNightTo), 4);
     ok &= checkWriteStr("rfcal",       prefs.putString ("rfcal",     c.rfCal), c.rfCal);
     ok &= checkWriteStr("rfnames",     prefs.putString ("rfnames",   c.rfNames), c.rfNames);
+    ok &= checkWriteStr("rfminrssi",   prefs.putString ("rfminrssi", c.rfMinRssi), c.rfMinRssi);
     ok &= checkWrite   ("winddirtyp",  prefs.putInt    ("winddirtyp", c.windDirSensorType), 4);
     ok &= checkWrite   ("wdcalcnt",    prefs.putInt    ("wdcalcnt",  c.windDirCalCount), 4);
     ok &= checkWrite   ("wdcaladc",    prefs.putBytes  ("wdcaladc",  c.windDirCalAdc, sizeof(c.windDirCalAdc)), sizeof(c.windDirCalAdc));
@@ -621,6 +669,8 @@ void saveConfig(const Config& c)
 
 void saveRfProto(int proto)
 {
+    SettingsWrite w;
+    if (!w.ok()) return;
     Preferences prefs;
     if (!prefs.begin("config", false, "cfgdata")) {
         dbgSerial.println("Config save: FAILED to open NVS namespace 'config' - wireless sensor type not saved.");
@@ -645,11 +695,34 @@ void loadHaRfIds(char* out, size_t len)
 
 void saveHaRfIds(const char* ids)
 {
+    SettingsWrite w;
+    if (!w.ok()) return;
     Preferences prefs;
     if (!prefs.begin("config", false, "cfgdata")) {
         dbgSerial.println("Config save: FAILED to open NVS namespace 'config' - HA wireless sensor list not saved.");
         return;
     }
     checkWriteStr("harfids", prefs.putString("harfids", ids), ids);
+    prefs.end();
+}
+
+// Value groups announced to Home Assistant (ha_groups.h): written only when a
+// group is seen for the first time; same namespace, so a reset clears it.
+uint8_t loadHaGroupsSeen()
+{
+    Preferences prefs;
+    if (!prefs.begin("config", true, "cfgdata")) return 0;
+    const uint8_t v = prefs.isKey("haseen") ? prefs.getUChar("haseen", 0) : 0;
+    prefs.end();
+    return v;
+}
+
+void saveHaGroupsSeen(uint8_t seen)
+{
+    SettingsWrite w;
+    if (!w.ok()) return;   // a reset is running: the next start announces from scratch
+    Preferences prefs;
+    if (!prefs.begin("config", false, "cfgdata")) return;
+    checkWrite("haseen", prefs.putUChar("haseen", seen), 1);
     prefs.end();
 }

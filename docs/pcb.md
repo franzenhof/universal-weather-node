@@ -424,7 +424,7 @@ J18 (DC jack) is optional. Solder from low to high: the pin sockets of **one** s
 
 The v2.0 board adds optional I/O. **AUX, UV, wind 2, heater/fan, tacho and VE.Direct are off by default**. Enable them in the portal, the web settings page (*Inputs & outputs*) or by MQTT/LoRaWAN (IDs 15–30, 33–40). The main wind-vane supply and hardware ID are still managed on v2.0 even with optional I/O disabled. Do not enable v2.0 functions on Rev 1.2/1.3.
 
-**Board detection:** at boot the firmware reads the revision ID divider on GPIO20 (before Wi-Fi starts, it is on ADC2). ≈ 1.65 V = v2.0; the board then always runs as PCB revision `20`, whatever is stored. Without an ID (Rev 1.x) the stored revision applies; `20` can also be set by hand there as an override. The status page shows *v2.0 (detected)* or *(set manually)*; the log shows the measured voltage.
+**Board detection:** at boot the firmware reads the revision ID divider on GPIO20 (V4: GPIO15; before Wi-Fi starts, it is on ADC2). ≈ 1.65 V = v2.0; the board then always runs as PCB revision `20`, whatever is stored. Without an ID (Rev 1.x) the stored revision applies; `20` can also be set by hand there as an override. The status page shows *v2.0 (detected)* or *(set manually)*; the log shows the measured voltage.
 
 | Function | Terminal | What the firmware does |
 |----------|----------|------------------------|

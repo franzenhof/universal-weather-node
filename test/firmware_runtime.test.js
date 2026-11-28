@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'weathernode-runtime-'));
-const common = ['src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/derived.cpp', 'src/derived_now.cpp', 'src/calibration.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp',
+const common = ['src/sensors.cpp', 'src/board_io.cpp', 'src/vedirect.cpp', 'src/sources.cpp', 'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/derived.cpp', 'src/derived_now.cpp', 'src/calibration.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp', 'src/rf_minrssi.cpp',
   'test/host/runtime.cpp'];
 try {
   // generated translation headers (include/i18n_*.h, also done by every PlatformIO build)
@@ -15,13 +15,14 @@ try {
     ['io', [...common, 'src/params.cpp']],
     ['lora', ['src/lora_transport.cpp', 'src/out_status.cpp', 'test/host/runtime.cpp']],
     ['windows', ['src/wind_window.cpp']],
+    ['button', []],
     ['derived', ['src/derived.cpp']],
     ['rainstats', ['src/rain_stats.cpp']],
     ['rfauto', [...common, 'src/params.cpp']],
     ['loxone', ['src/loxone_lines.cpp']],
     ['itplus', ['lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp']],
     ['fineoffset', ['lib/FineOffsetSensorReceiver/src/FineOffsetDecoder.cpp', 'lib/TfaWeatherSensorReceiver/src/ItPlusDecoder.cpp',
-      'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/calibration.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp']],
+      'src/rf_sensors_data.cpp', 'src/rf_schedule.cpp', 'src/calibration.cpp', 'src/rf_stats.cpp', 'src/rf_names.cpp', 'src/rf_minrssi.cpp']],
     ['davis', ['lib/DavisSensorReceiver/src/DavisDecoder.cpp', 'lib/DavisSensorReceiver/src/DavisHopper.cpp']],
     ['netids', []],
     ['otacheck', []],
@@ -42,7 +43,13 @@ try {
     ['statusled', ['src/status_led.cpp']],
     ['rfstats', ['src/rf_stats.cpp', 'test/host/runtime.cpp']],
     ['rfnames', ['src/rf_names.cpp', 'src/settings_backup.cpp', 'test/host/runtime.cpp']],
+    ['rfminrssi', ['src/rf_minrssi.cpp', 'src/settings_backup.cpp', 'test/host/runtime.cpp']],
     ['netcheck', ['src/net_check.cpp']],
+    ['mqttsession', []],
+    ['alarmqueue', []],
+    ['hagroups', []],
+    ['configmerge', ['src/config_merge.cpp']],
+    ['httputil', ['src/http_util.cpp']],
     ['tlsgate', ['src/tls_gate.cpp']],
     ['rfautosearch', ['src/rf_autosearch.cpp']],
     ['rfschedule', ['src/rf_schedule.cpp']],
@@ -67,6 +74,7 @@ try {
       '-I', 'lib/DavisSensorReceiver/src',
       '-I', '.pio/libdeps/heltec_wifi_lora_32_V3/ArduinoJson/src',
       '-I', '.pio/libdeps/heltec_wifi_lora_32_V3/CayenneLPP/src',
+      ...(process.env.HOST_CXXFLAGS ? process.env.HOST_CXXFLAGS.split(/\s+/).filter(Boolean) : []),   // e.g. sanitizers
       ...sources, `test/firmware_${name}.cpp`, '-o', exe,
     ], {cwd: root, stdio: 'pipe'});
     execFileSync(exe, [], {stdio: 'inherit'});

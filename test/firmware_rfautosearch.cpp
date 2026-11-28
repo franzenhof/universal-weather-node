@@ -61,6 +61,17 @@ int main()
     bool firstGone = true;
     for (const AutoCand& x : s.c) { if (x.id) n++; if (x.id == 1) firstGone = false; }
     assert(n == AUTO_CAND_MAX && firstGone);
+    // candidate list full across the millis() wrap: the one heard longest ago (before the wrap) makes room
+    const uint32_t MIN = 60000UL, START = 0xFFFFFFFFUL - 5 * MIN;   // wraps 5 min into the search
+    autoSearchStart(s, START);
+    autoSearchPacket(s, 100, ITP, -130, false, START + 1000, &c);
+    for (uint32_t k = 1; k < AUTO_CAND_MAX; k++) autoSearchPacket(s, 100 + k, ITP, -130, false, START + 6 * MIN + k * 1000, &c);
+    autoSearchPacket(s, 200, ITP, -130, false, START + 7 * MIN, &c);
+    {
+        bool has100 = false, has101 = false, has200 = false;
+        for (const AutoCand& x : s.c) { has100 |= x.id == 100; has101 |= x.id == 101; has200 |= x.id == 200; }
+        assert(!has100 && has101 && has200);
+    }
     puts("rfautosearch ok");
     return 0;
 }

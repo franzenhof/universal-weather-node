@@ -45,7 +45,7 @@ enum PressureTendency : int8_t {
     PT_STEADY = 0,
     PT_RISING_SLOWLY, PT_RISING, PT_RISING_QUICKLY, PT_RISING_VERY_RAPIDLY
 };
-PressureTendency pressureTendency(float delta3hHpa);
+PressureTendency pressureTendency(float delta3hHpa);   // non-finite: PT_STEADY
 const char* pressureTendencyText(PressureTendency t);   // "falling slowly", "steady", ...
 
 // Simple local trend from the 3-h tendency and the current QNH (no forecast
@@ -72,3 +72,9 @@ constexpr float SUNSHINE_LUX_THRESHOLD = 15000.0f;
 // (2.0.0-beta.3 < 2.0.0); pre-release tags compare case-insensitively.
 // Unparsable strings compare as equal (0).
 int compareVersions(const char* a, const char* b);
+
+// The update check of this line offers newer 2.x and 3.x versions (3.x: reserved
+// for a successor of 2.x for the same boards), never 4.x and later: that runs on
+// the Heltec V4 alone and needs one USB installation (other partition table).
+constexpr long UPDATE_MAX_MAJOR = 3;
+bool versionOffered(const char* candidate, const char* running);

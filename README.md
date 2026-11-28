@@ -1,6 +1,6 @@
-# Universal Weather Node — Wi-Fi Weather Station for Bresser, Ecowitt / Froggit and TFA Sensors
+# Universal Weather Node — Wireless Sensor Receiver, Weather Station and Gateway for Bresser, Ecowitt / Froggit, TFA and Davis Sensors
 
-**Turn a €20 ESP32 board into the hub of your weather station.** A **Heltec WiFi LoRa 32 V4** (or V3) receives your wireless outdoor station **directly on 868 MHz** — no console, no gateway, no Raspberry Pi, no cloud — computes dew point, trends and rain totals, and sends everything to **Home Assistant (MQTT)**, its own **web dashboard**, **weather networks** and, optionally, **LoRaWAN**.
+**Turn a €20 ESP32 board into the hub of your weather station.** A **Heltec WiFi LoRa 32 V4** (or V3) receives your wireless outdoor station **directly on 868 MHz** — no console, no vendor gateway, no Raspberry Pi, no cloud — measures with its own sensors where you add them, computes dew point, trends and rain totals, and passes everything on to **Home Assistant (MQTT)**, **Loxone**, its own **web dashboard**, **weather networks** and, optionally, **LoRaWAN**.
 
 <!-- help:skip -->
 <p align="center">
@@ -14,7 +14,7 @@ For a wireless station — no soldering, no custom PCB:
 
 | Part | Notes | Approx. price |
 |------|-------|---------------|
-| **Heltec WiFi LoRa 32 V4** *(recommended)* or **V3 / V3.1 / V3.2** | The **868 MHz** version (EU). The **V4** has an RF front end with a low-noise amplifier (helps with weak or distant sensors) and 2 MB PSRAM (ESP32-S3R2; used for the history, large buffers and HTTPS since 2.0.0-rc.9) plus 16 MB flash; the firmware detects it and switches the front end itself. The V3 works just as well today. For wired sensors (Davis cups and vane, reed switches, DS18B20 …) use the [custom PCB v2.0](docs/pcb.md#custom-pcb): it takes a **V3 or a V4** (one socket set each, see [Heltec V3 or V4 on the PCB](docs/pcb.md#heltec-v3-or-v4-on-the-pcb)); the older Rev 1.2 / 1.3 boards take the V3 only. Not supported: **V4-R8** (ESP32-S3R8): its 8 MB octal PSRAM takes GPIO33–37, which the board and the PCB need — buy the standard V4 with the **ESP32-S3R2**. | €20–30 |
+| **Heltec WiFi LoRa 32 V4** *(strongly recommended — firmware 4.x)* or **V3 / V3.1 / V3.2** *(legacy)* | The **868 MHz** version (EU). The **V4** has an RF front end with a low-noise amplifier (helps with weak or distant sensors) and 2 MB PSRAM (ESP32-S3R2; used for the history, large buffers and HTTPS since 2.0.0-rc.9) plus 16 MB flash; the firmware detects it and switches the front end itself. **The V4 is strongly recommended:** this 3.x line is legacy (bug fixes only); all new functions come with firmware 4.x, which runs on the V4 only. On a V3, 3.x keeps working. For wired sensors (Davis cups and vane, reed switches, DS18B20 …) use the [custom PCB v2.0](docs/pcb.md#custom-pcb): it takes a **V3 or a V4** (one socket set each, see [Heltec V3 or V4 on the PCB](docs/pcb.md#heltec-v3-or-v4-on-the-pcb)); the older Rev 1.2 / 1.3 boards take the V3 only. Not supported: **V4-R8** (ESP32-S3R8): its 8 MB octal PSRAM takes GPIO33–37, which the board and the PCB need — buy the standard V4 with the **ESP32-S3R2**. | €20–30 |
 | **868 MHz antenna** | The small antenna that comes with the board is fine for sensors nearby. For more range, an external 868 MHz antenna with a u.FL/IPEX-to-SMA pigtail (the [enclosure](docs/minimal-build.md) has an SMA bulkhead). **Never power the board without an antenna.** | €0–15 |
 | **USB-C power supply** 5 V, ≥ 1 A, with cable | any phone charger | €5–10 |
 | **BME280 module** (I²C, 3.3 V) — *recommended* | Adds the air pressure (pressure trend, weather networks); four jumper wires, see [Minimal Wireless Build](docs/minimal-build.md). Must be a BME280, not a BMP280. Not needed if an Ecowitt WS69 pressure module or a WN32P already sends pressure. | €5–10 |
@@ -37,7 +37,7 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 
 ## Features
 
-- 📻 **Up to 32 wireless sensors received directly** — Bresser 5/6/7-in-1 and other Bresser sensors, Ecowitt / Froggit (Fine Offset) outdoor arrays, thermo-hygro, soil, rain, lightning, air quality (PM2.5, CO₂), leak and leaf-wetness sensors, TFA / LaCrosse IT+, and Davis Vantage Pro2 / Vue (experimental); type detected automatically. Every sensor with all its values in the dashboard, REST API and MQTT; per value you choose the source for the main readings (board or wireless, automatic fallback). *(First Ecowitt sensors confirmed by a tester; most of the newer types and IT+ not yet tested with real sensors.)*
+- 📻 **Up to 32 wireless sensors received directly** — Bresser 5/6/7-in-1 and other Bresser sensors, Ecowitt / Froggit (Fine Offset) outdoor arrays, thermo-hygro, soil, rain, lightning, air quality (PM2.5, CO₂), leak and leaf-wetness sensors, TFA / LaCrosse IT+, and Davis Vantage Pro2 / Vue (experimental); type detected automatically. Every sensor with all its values in the dashboard, REST API and MQTT; per value you choose the source for the main readings (board or wireless, automatic fallback). *(Many Ecowitt / Froggit types and IT+ 17.241 kbit/s confirmed with real sensors; some types only decoded from published frames — see [Wireless Sensors](docs/wireless-sensors.md).)*
 - 🌐 **Built-in web dashboard** with live values, warnings, rain totals (hour … year), wind rose and trend charts — works without internet; plus a REST API
 - 🏠 **MQTT + Home Assistant** auto-discovery (TLS-capable) — every value, derived value and warning as an entity, plus one HA device per listed wireless sensor; **Loxone** via UDP push or HTTP
 - ☁️ **Direct uploads to weather networks** — AWEKAS, Weather Underground, Weathercloud, Wetternetzwerk.pro, Windy, openSenseMap, Met Office WOW, CWOP — plus your own HTTP uploads with placeholders
@@ -56,7 +56,7 @@ Wired sensors (Davis, reed switches, DS18B20 …) need one of the [custom PCBs](
 </p>
 <!-- /help:skip -->
 
-**Current release:** [2.0.5](firmware/universal-weather-node-2.0.5.bin) ([factory image](firmware/universal-weather-node-2.0.5-factory.bin) for the first installation) — see the [Changelog](CHANGELOG.md#205). Branches: **`2.x`** = the 2.0.x line (fixes for Heltec V3 and V4), **`main`** = the next major version (in development, Heltec V4 only), **`1.x`** = the old 1.x line (archive).
+**Current release:** [3.0.0](firmware/universal-weather-node-3.0.0.bin) ([factory image](firmware/universal-weather-node-3.0.0-factory.bin) for the first installation) — see the [Changelog](CHANGELOG.md#300). Legacy line: bug fixes only; the new functions are in [4.0.0](https://github.com/franzenhof/universal-weather-node) for the Heltec V4. Branches: **`3.x`** = the old line (Heltec V3 and V4; continuation of `2.x`), **`main`** = 4.x (Heltec V4 only), **`2.x`** = ended with 2.0.5, **`1.x`** = the old 1.x line (archive).
 
 ## Documentation
 
@@ -95,7 +95,7 @@ The node reads every sensor **directly** — 868 MHz radio decoded by its own Lo
                                                   or V3)    └─► LoRaWAN (optional) ──► ChirpStack / TTN ──► Grafana, ...
 ```
 
-The node runs continuously (no deep sleep). It samples the sensors every few seconds and combines the samples into one measurement per **cycle** (default 300 s), which it then sends out. Alarm rules are checked every 30 s and send their message as soon as a rule fires; MQTT can publish faster than the cycle (down to seconds).
+The node runs continuously (no deep sleep). It samples the sensors every few seconds and combines the samples into one measurement per **cycle** (default 30 s); each output sends on its own interval (LoRaWAN and MQTT default 300 s). Alarm rules are checked every 30 s and send their message as soon as a rule fires; MQTT can publish faster than the cycle (down to seconds).
 
 ## The Project in Pictures
 

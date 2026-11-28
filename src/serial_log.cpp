@@ -24,27 +24,32 @@ static Print* logOut = &Serial;
 void serialLogUseUsb() {}
 #endif
 
-size_t SerialLog::write(uint8_t c)
+// With the mutex held.
+static void ringAppend(const uint8_t* p, size_t n)
 {
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    logBuf[logHead] = (char)c;
-    logHead = (logHead + 1) % LOG_BUF_SIZE;
-    if (logHead == 0) logFull = true;
-    xSemaphoreGive(mutex_);
-    return logOut->write(c);
-}
-
-size_t SerialLog::write(const uint8_t* buffer, size_t size)
-{
-    xSemaphoreTake(mutex_, portMAX_DELAY);
-    for (size_t i = 0; i < size; i++) {
-        logBuf[logHead] = (char)buffer[i];
+    for (size_t i = 0; i < n; i++) {
+        logBuf[logHead] = (char)p[i];
         logHead = (logHead + 1) % LOG_BUF_SIZE;
         if (logHead == 0) logFull = true;
     }
-    xSemaphoreGive(mutex_);
-    return logOut->write(buffer, size);
 }
+
+// a and b (may be empty) to the ring and the port as one step
+size_t SerialLog::writeLine(const uint8_t* a, size_t an, const uint8_t* b, size_t bn)
+{
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    ringAppend(a, an);
+    ringAppend(b, bn);
+    size_t n = logOut->write(a, an);   // UART: waits only while its TX buffer is full
+    if (bn) n += logOut->write(b, bn);
+    xSemaphoreGive(mutex_);
+    return n;
+}
+
+size_t SerialLog::write(uint8_t c) { return writeLine(&c, 1, nullptr, 0); }
+size_t SerialLog::write(const uint8_t* buffer, size_t size) { return writeLine(buffer, size, nullptr, 0); }
+size_t SerialLog::println(const char* s) { return writeLine((const uint8_t*)s, strlen(s), (const uint8_t*)"\r\n", 2); }
+size_t SerialLog::println(const String& s) { return writeLine((const uint8_t*)s.c_str(), s.length(), (const uint8_t*)"\r\n", 2); }
 
 size_t SerialLog::snapshot(char* out, size_t outSize) const
 {

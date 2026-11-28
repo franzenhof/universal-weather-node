@@ -14,6 +14,7 @@ struct NotifyReq {
     char contentType[40] = "";
     char auth[80] = "";          // Authorization header value, "" = none
     char body[640] = "";
+    bool truncated = false;      // a rendered URL / body did not fit: not to be sent (it would be cut, e.g. invalid JSON)
 };
 
 // One message: title (rule name), text (rendered), priority 1-5

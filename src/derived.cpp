@@ -79,6 +79,7 @@ const char* windDirText(int deg)
 
 PressureTendency pressureTendency(float d)
 {
+    if (!isfinite(d)) return PT_STEADY;   // no tendency (every comparison on NaN is false)
     float a = fabsf(d);
     int k = a < 0.1f ? 0 : a < 1.6f ? 1 : a < 3.6f ? 2 : a < 6.0f ? 3 : 4;
     return (PressureTendency)(d < 0 ? -k : k);
@@ -158,6 +159,12 @@ int compareVersions(const char* a, const char* b)
     int c = strcasecmp(x.preTag, y.preTag);   // "RC.1" > "beta.3" like "rc.1"
     if (c) return c < 0 ? -1 : 1;
     return x.preNum == y.preNum ? 0 : (x.preNum < y.preNum ? -1 : 1);
+}
+
+bool versionOffered(const char* candidate, const char* running)
+{
+    Ver c;
+    return parseVersion(candidate, c) && c.n[0] <= UPDATE_MAX_MAJOR && compareVersions(candidate, running) > 0;
 }
 
 float seaLevelPressureHpa(float stationHpa, int altitudeM)

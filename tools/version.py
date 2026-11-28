@@ -15,21 +15,31 @@ def write_if_changed(path, text):
         path.write_text(text, encoding="utf-8")
 
 
+LINE_MAJOR = 3   # firmware line of this branch (3.x = Heltec V3 and V4; main = 4.x; 2.x ended with 2.0.5)
+
+
 def get_version_string():
     forced_version = os.getenv("FW_VERSION")
     if forced_version:
         return forced_version.strip()
 
+    # This branch is the 3.x line: only 3.* tags count, so a build after the
+    # 2.0.5 tag never calls itself 2.0.5-<n>. Before the first 3.* tag:
+    # "3.0.0-dev-<commits since 2.0.5>-g<hash>[-dirty]".
+    def git(*args):
+        return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
     try:
-        result = subprocess.run(
-            ["git", "describe", "--tags", "--dirty", "--always"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout.strip()
+        return git("describe", "--tags", "--dirty", "--match", f"{LINE_MAJOR}.*")
     except Exception:
-        return "dev"
+        pass
+    try:
+        tail = git("describe", "--tags", "--dirty", "--long", "--match", "2.0.5")   # 2.0.5-<n>-g<hash>[-dirty]
+        return f"{LINE_MAJOR}.0.0-dev-" + tail.split("-", 1)[1]
+    except Exception:
+        try:
+            return f"{LINE_MAJOR}.0.0-dev-g" + git("rev-parse", "--short", "HEAD")
+        except Exception:
+            return "dev"
 
 
 # Tags are written without a leading "v" (2.0.0-beta.1); strip it anyway so an old or

@@ -212,8 +212,13 @@ void updateOutputs()
     if (isnan(t))                          fanWant = false;
     else if (t >= above)                   fanWant = true;
     else if (t < above - HYSTERESIS_C)     fanWant = false;
-    bool pvOk = gCfg.fanMinPvW <= 0 ||
-                (gCfg.veDirectEn && gIo.veValid && isfinite(gIo.ve.pvW) && gIo.ve.pvW >= gCfg.fanMinPvW);
+    // PV condition: met from the limit, lost only below limit - max(1 W, 10 %),
+    // so PV power hovering around the limit does not switch the fan per block
+    static bool pvMet = false;
+    const float pvOff = gCfg.fanMinPvW - max(1.0f, gCfg.fanMinPvW / 10.0f);
+    pvMet = gCfg.veDirectEn && gIo.veValid && isfinite(gIo.ve.pvW) &&
+            gIo.ve.pvW >= (pvMet ? pvOff : (float)gCfg.fanMinPvW);
+    bool pvOk = gCfg.fanMinPvW <= 0 || pvMet;
     static bool pvBlocked = false;
     bool nowPvBlocked = gCfg.fanMode == 2 && fanWant && !pvOk;
     if (pvBlocked != nowPvBlocked)
@@ -387,7 +392,7 @@ void ioPoll()
     } else if (!gCfg.veDirectEn && veRunning) {
         Serial1.end();
         veRunning = false;
-        veTxIdle = false;   // driven high again below
+        veTxIdle = false;   // driven high (idle) again by the next ioPoll()
         gIo.ve = VeDirectValues{ NAN, NAN, NAN, NAN, NAN, NAN, NAN, -1, -1 };
         dbgSerial.println("VE.Direct: stopped.");
     }
@@ -532,7 +537,8 @@ void ioFinishCycle(unsigned long /*elapsedMs*/)
             dbgSerial.printf("UV sensor: %.3f V (index calculation disabled)\n", gIo.uvSensorVolts);
     }
     gIo.auxPulsesCycle = (auxPulseRunning && !gCfg.wind2Mode) ? auxPulsesAcc : 0;
-    if (gCfg.wind2Mode && wind2Samples > 0 && wind2MsSum > 0) {
+    gIo.wind2Valid = gCfg.wind2Mode && wind2Samples > 0 && wind2MsSum > 0;
+    if (gIo.wind2Valid) {
         gIo.wind2SpeedMs = (float)wind2PulseSum * 1000.0f / (float)wind2MsSum * gCfg.windMsPerPps;
         gIo.wind2GustMs  = max(wind2Gust, gIo.wind2SpeedMs);
         if (gCfg.wind2Mode == 2) {
@@ -540,7 +546,7 @@ void ioFinishCycle(unsigned long /*elapsedMs*/)
             gIo.wind2DirDeg = (uint16_t)((deg % 360 + 360) % 360);
         }
         dbgSerial.printf("Wind 2: %.1f m/s (gust %.1f), %u deg\n", gIo.wind2SpeedMs, gIo.wind2GustMs, gIo.wind2DirDeg);
-    } else if (!gCfg.wind2Mode) {
+    } else {   // no accepted sample this cycle: no current value (outputs leave wind 2 out)
         gIo.wind2SpeedMs = gIo.wind2GustMs = 0.0f;  gIo.wind2DirDeg = 0;
     }
 

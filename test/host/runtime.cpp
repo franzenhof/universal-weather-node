@@ -29,12 +29,15 @@ size_t internalLargest() { return 90000; }
 void*  bigAlloc(size_t n) { return malloc(n); }
 size_t bigAllocLargest() { return 90000; }
 void   psramLogStatus(int) {}
+#include <Preferences.h>
 #include "system_restart.h"   // the real one (rain flush) is in wx_upload.cpp, not built here
 void systemRestart(const char*) { ESP.restart(); }
 HostSerial Serial1;
 SerialLog dbgSerial;
 size_t SerialLog::write(uint8_t) { return 1; }
 size_t SerialLog::write(const uint8_t*,size_t n) { return n; }
+size_t SerialLog::println(const char* s) { return strlen(s) + 2; }
+size_t SerialLog::println(const String&) { return 0; }
 // The regression tests were written for a node with the PCB (Davis wind and
 // rain on, LoRaWAN on, no wireless sensors) - the defaults of a config stored
 // by an older firmware (ConfigLegacyDefaults). New-node defaults are checked
@@ -50,6 +53,8 @@ static Config hostLegacyConfig()
 Config gCfg = hostLegacyConfig();
 Config hostSavedConfig;
 void saveConfig(const Config& c) { hostSavedConfig=c; }
+size_t hostClearedAtSeal=~(size_t)0;   // namespaces cleared when configSealForReset() ran
+void configSealForReset() { hostClearedAtSeal=hostPrefsCleared().size(); }
 bool portalRequestedViaDownlink=false;
 uint8_t loopCount=42;
 int sendFailCount=1;

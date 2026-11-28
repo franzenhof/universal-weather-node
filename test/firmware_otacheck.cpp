@@ -55,6 +55,20 @@ int main()
 
     bool ok, isFactory;
     const char* err;
+    // firmware 4.x (ESP-IDF 5): refused before a byte is written, whatever the chunk size
+    for (const char* idf : { "5.5.6.261115", "v5.1" }) {
+        auto v4 = app;
+        memcpy(v4.data() + 0x90, idf, strlen(idf) + 1);
+        assert(otaImageIsV4Line(v4.data(), v4.size()));
+        for (size_t chunk : {(size_t)1, (size_t)7, (size_t)1436}) {
+            auto out = run(v4, chunk, devicePt.data(), ok, &err);
+            assert(!ok && out.empty() && strstr(err, "4.x"));
+        }
+    }
+    for (const char* f : { "firmware/universal-weather-node-1.1.1.bin", "firmware/universal-weather-node-2.0.5.bin" }) {
+        auto own = load(f);
+        assert(own.size() > 0x10000 && !otaImageIsV4Line(own.data(), own.size()));
+    }
     for (size_t chunk : {(size_t)1436, (size_t)7, (size_t)0x24, (size_t)0x10001, (size_t)65536, (size_t)1}) {
         // application image: passed through unchanged
         auto out = run(app, chunk, devicePt.data(), ok, &err, &isFactory);

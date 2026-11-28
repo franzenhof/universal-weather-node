@@ -40,3 +40,11 @@ struct RfSchedEntry {
 // that sensor's window closes and the next one is served); at the same
 // expected time the sensor that missed more intervals.
 int rfSchedDuePhase(const RfSchedEntry* e, int n, uint32_t nowMs);
+
+// Receive watchdog (rf_sensors.cpp): the receivers re-arm reception after each
+// frame without checking the result, so one lost restart (SPI / BUSY timeout)
+// would leave a receiver that is never switched (one phase, no LoRaWAN) deaf
+// until a reboot. A receiver that has neither delivered a frame of any kind
+// nor been (re)started for RF_RECEIVE_WATCHDOG_MS is restarted. Wrap-safe (unsigned difference).
+constexpr uint32_t RF_RECEIVE_WATCHDOG_MS = 600000;   // 10 min
+bool rfReceiverSilentTooLong(uint32_t nowMs, uint32_t lastLifeSignMs);

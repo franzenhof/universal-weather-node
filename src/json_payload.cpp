@@ -18,6 +18,8 @@
 #include "rf_names.h"
 #include <esp_timer.h>
 #include <time.h>
+#include <memory>
+#include <new>
 
 const char* gResetReason = "unknown";
 unsigned long gBaseCycleMs = 0;   // base cycle length, set by loop() (0 = not yet known)
@@ -112,6 +114,8 @@ void addRfSensorJson(JsonObject o, int i)
     unsigned long age = (millis() - r.lastMs) / 1000;
     if ((r.staleMask & RF_VAL_ANY) && age < rfFreshMs(r) / 1000) age = rfFreshMs(r) / 1000;
     o["ageSec"]    = age;
+    const int twin = rfTwinIndex(r.id);   // IT+: another sensor with the same IT+ ID is received too
+    if (twin >= 0) { char tw[9]; snprintf(tw, sizeof tw, "%08lX", (unsigned long)gRfSensors[twin].id); o["idTwin"] = tw; }
     o["batteryOk"] = r.batteryOk;
     if (r.batteryMv) o["batteryV"] = roundf(r.batteryMv / 10.0f) / 100.0f;   // the voltage the sensor reports (diagnostic)
     if (r.hasTemp)     o["temp"]     = temperatureForOutput(r.tempC, gCfg);
@@ -122,11 +126,10 @@ void addRfSensorJson(JsonObject o, int i)
         o["windDirDeg"] = (int)lroundf(r.windDirDeg);
     }
     if (r.hasRain)  o["rainTotal"] = rainForOutput(r.rainTotalMm, gCfg);   // the sensor's own counter (since battery change)
-    RfStat* st = (r.hasRain || r.hasLightning) ? rfStatFor(r.id, false) : nullptr;
-    uint32_t t = 0, ymd = 0;
-    if (st) rfStatsClock(t, ymd);
+    RfStat stat;   // a rolled copy (rf_stats.h: readers never roll the shared entry)
+    uint32_t t = 0;
+    RfStat* st = (r.hasRain || r.hasLightning) && rfStatSnapshot(r.id, stat, t) ? &stat : nullptr;
     if (st && r.hasRain) {   // from the counter's increments since the node started (rf_stats.h)
-        rfStatRoll(*st, t, ymd);
         const int dec = gCfg.unitSystem == 1 ? 2 : 1;
         const float k = dec == 2 ? 100.0f : 10.0f;
         if (st->ymd) o["rainToday"] = roundf(rainForOutput(st->rainTodayMm, gCfg) * k) / k;
@@ -142,7 +145,6 @@ void addRfSensorJson(JsonObject o, int i)
         o["lightningCount"] = r.lightningCount;   // the sensor's 8-bit counter (wraps): diagnostic
         if (r.lightningKm) o["lightningDistKm"] = r.lightningKm;
         if (st) {
-            rfStatRoll(*st, t, ymd);
             if (st->ymd) o["lightningToday"] = st->strikesToday;
             o["lightning1h"] = rfStatStrikes1h(*st, t);
             if (st->lastStrike) {
@@ -231,8 +233,10 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
         if (!astroJson(a)) doc.remove("astro");
     }
     {   // today's extremes (records.h) - the complete set: GET /api/records
-        static Records today;   // static: ~430 bytes, not on the loop task's stack
-        if (recordsToday(today)) {
+        // per call (~430 bytes, not on the stack): the loop task and the web task both build payloads
+        std::unique_ptr<Records> todayBuf(new (std::nothrow) Records());
+        if (todayBuf && recordsToday(*todayBuf)) {
+            const Records& today = *todayBuf;
             const RecVal& tn = today.mn[RQ_TEMP][RP_TODAY];
             const RecVal& tx = today.mx[RQ_TEMP][RP_TODAY];
             const RecVal& gx = today.mx[RQ_GUST][RP_TODAY];
@@ -280,7 +284,7 @@ void buildJsonPayload(JsonDocument& doc, const PathValues* pv)
             }
         }
         if (ioAuxAinActive()) doc["auxAnalogV"] = gIo.auxAinV;
-        if (gCfg.wind2Mode) {
+        if (gCfg.wind2Mode && gIo.wind2Valid) {   // no accepted sample this cycle: left out
             JsonObject w2 = doc["wind2"].to<JsonObject>();
             w2["speed"] = windSpeedForOutput(gIo.wind2SpeedMs, gCfg);
             w2["gust"]  = windSpeedForOutput(gIo.wind2GustMs,  gCfg);

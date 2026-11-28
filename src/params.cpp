@@ -329,12 +329,18 @@ void cmdRequestConfigPortal()
 void cmdFactoryReset()
 {
     dbgSerial.println("Command: factory reset — wiping config, restarting...");
-    // Only the settings: the rain statistics ("rainstat") are measurement
-    // data and stay (written once more by systemRestart()).
-    Preferences prefs;
-    if (prefs.begin("config", false, "cfgdata")) {
-        prefs.clear();
-        prefs.end();
+    // The settings: config, the alarm rules and channels (with their tokens)
+    // and the custom uploads (URLs may carry keys). Measurement data - rain
+    // statistics, records, chart history - stays (written once more by
+    // systemRestart()). Sealed first: no save of another task (web settings,
+    // star button) may write the old settings back before the restart.
+    configSealForReset();
+    for (const char* ns : { "config", "alarms", "cupload" }) {
+        Preferences prefs;
+        if (prefs.begin(ns, false, "cfgdata")) {
+            prefs.clear();
+            prefs.end();
+        }
     }
     delay(500);
     systemRestart("factory reset");

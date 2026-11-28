@@ -7,6 +7,7 @@
 
 #include <Arduino.h>
 #include <esp_sntp.h>
+#include <esp_timer.h>
 #include <mutex>
 
 namespace {
@@ -20,8 +21,10 @@ volatile bool tzPending = false;   // new gCfg.timeZone, applied by timeSyncPoll
 bool loggedValid = false;
 
 // newlib's TZ state (setenv/tzset vs. localtime_r) is not safe across
-// tasks: TZ is only changed on the main task (timeSyncPoll), and every
-// change and every localtime_r() here holds this lock.
+// tasks: TZ is only changed on the main task (timeSyncPoll) under this lock.
+// Other tasks convert through localTimeNow() / localTimeOf(), which take it;
+// main-task code (history.cpp, astro_store.cpp, loxone_lines.cpp) may call
+// localtime_r / mktime directly.
 std::mutex tzLock;
 
 } // namespace
@@ -93,9 +96,14 @@ bool localTimeNow(struct tm& out)
 {
     time_t now = time(nullptr);
     if (now < MIN_VALID_EPOCH) return false;
-    std::lock_guard<std::mutex> g(tzLock);
-    localtime_r(&now, &out);
+    localTimeOf(now, out);
     return true;
+}
+
+void localTimeOf(time_t t, struct tm& out)
+{
+    std::lock_guard<std::mutex> g(tzLock);
+    localtime_r(&t, &out);
 }
 
 // Clock of the per-sensor rain / lightning statistics (rf_stats.h): UTC
@@ -109,7 +117,7 @@ bool rfStatsClock(uint32_t& t, uint32_t& ymd)
         ymd = (uint32_t)((lt.tm_year + 1900) * 10000 + (lt.tm_mon + 1) * 100 + lt.tm_mday);
         return true;
     }
-    t = millis() / 1000;
+    t = (uint32_t)(esp_timer_get_time() / 1000000LL);   // 64-bit uptime: millis() / 1000 wraps after 49.7 days
     ymd = 0;
     return false;
 }

@@ -28,9 +28,11 @@ struct PhValue {
 // name -> value; false = unknown / not available now
 typedef bool (*PhLookup)(const char* name, PhValue& out, void* ctx);
 
-// Renders tpl into out (always terminated, cut at len - 1). Returns the
-// number of placeholders that rendered empty (unknown or unavailable).
-int phRender(const char* tpl, char* out, size_t len, PhEnc enc, PhLookup lookup, void* ctx);
+// Renders tpl into out (always terminated, cut at len - 1; never in the
+// middle of an escape sequence). Returns the number of placeholders that
+// rendered empty (unknown or unavailable). *cut (optional) = the output did
+// not fit and was cut. A text value is inserted whole (no length limit of its own).
+int phRender(const char* tpl, char* out, size_t len, PhEnc enc, PhLookup lookup, void* ctx, bool* cut = nullptr);
 
 // A value with one placeholder's suffix applied ("f", "kmh:.0", ...) -> text.
 void phFormat(const PhValue& v, const char* suffix, char* out, size_t len);

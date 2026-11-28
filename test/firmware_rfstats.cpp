@@ -7,6 +7,9 @@
 
 static bool near(float a, float b) { return std::fabs(a - b) < 0.001f; }
 
+static uint32_t clockT = 0, clockYmd = 0;
+bool rfStatsClock(uint32_t& t, uint32_t& ymd) { t = clockT; ymd = clockYmd; return ymd != 0; }
+
 int main()
 {
     const uint32_t D1 = 20261120, D2 = 20261121;
@@ -51,6 +54,23 @@ int main()
     assert(!rfStatFor(999, true) && rfStatFor(3, false) && rfStatFor(3, false)->id == 3);
     rfStatsPrune([](uint32_t id) { return id != 3; });
     assert(!rfStatFor(3, false) && rfStatFor(999, true));
+
+    // readers (outputs, web pages) get a rolled copy; the table itself is
+    // changed only by the receiving task (no day / bucket roll from a reader)
+    rfStatsClear();
+    clockT = t; clockYmd = D1;
+    rfStatsLock();
+    RfStat* w = rfStatFor(7, true);
+    rfStatRain(*w, 0.6f, t, D1);
+    rfStatsUnlock();
+    RfStat view;
+    uint32_t viewT = 0;
+    assert(!rfStatSnapshot(8, view, viewT));
+    assert(rfStatSnapshot(7, view, viewT) && viewT == t && near(view.rainTodayMm, 0.6f) && near(rfStatRain1h(view, viewT), 0.6f));
+    clockT = t + 86400; clockYmd = D2;                       // next day, no new rain yet
+    assert(rfStatSnapshot(7, view, viewT) && view.ymd == D2 && near(view.rainTodayMm, 0.0f) && near(rfStatRain1h(view, viewT), 0.0f));
+    const RfStat* table = rfStatFor(7, false);
+    assert(table->ymd == D1 && near(table->rainTodayMm, 0.6f) && table->bucket == t / 600);   // untouched
     puts("rfstats ok");
     return 0;
 }

@@ -33,7 +33,8 @@ Hardware alongside: at least **two own V4 (S3R2)** as test nodes before mileston
 
 ### Versioning
 
-- Normal semantic versions, **not** tied to the Heltec board generation (a future board without a firmware break, or a firmware break on the same board, would not fit; "V4" also includes V4.2 / V4.3 but not V4-R8).
+- **Decided 2026-11-25: the major version follows the Heltec board.** At the **next release of the 2.x line** a branch **`3.x`** is created from `2.x` as its continuation (Heltec V3 / V4 as today, same code base, stays on ESP-IDF 4): the next version there is 3.0.0 instead of 2.0.7, `2.x` ends. 4.x = Heltec V4 only (`main`). Then: adapt the docs (README table and current-release line, changelog, installation, forum note), and `tools/version.py` on `3.x` (dev builds `3.0.0-dev-…`). The update check of 2.0.6 already offers 3.x (never 4.x), so 2.x nodes are offered the 3.x releases.
+- *Superseded 2026-11-25:* "normal semantic versions, not tied to the Heltec board generation".
 - **Board in the file names**, e.g. `universal-weather-node-2.0.3-heltec-v3-v4.bin`, `universal-weather-node-3.0.0-heltec-v4.bin` (and `-factory.bin`).
 - **Compatibility table** at the top of the README: Heltec V3 → 2.x · Heltec V4 (S3R2) → next major (2.x runs too) · V4-R8 → not supported.
 - Status page / portal show the board and the firmware line.

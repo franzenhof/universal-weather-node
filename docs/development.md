@@ -42,7 +42,7 @@ Host-side, no hardware needed: Node.js and a C++11 compiler (`c++`, `g++` or `cl
 node --test test/*.test.js           # all test files: firmware runtime regressions, API contract, doc links, PCB v2.0 BOM/CPL checks
 ```
 
-The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 design/BOM/CPL consistency (needs python3), and five real-module C++ regression programs with deterministic hardware fakes (sensors, I/O, LoRa transport, telemetry and payloads). The **API contract test** (`test/api_contract.test.js`) regenerates the [example responses](api.md#example-responses) of `/api/data`, `/api/history` and `/api/info` with the real serializers, compares them with `docs/api/examples/`, validates them against `docs/api/schemas/` and fails on any JSON key the schemas don't describe — after an intended change: `UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js`. The **translation check** (`test/i18n.test.js`) fails if a key is missing in a language, placeholders or HTML tags differ from English, an ASCII apostrophe would break an attribute, or the sources use an unknown / leave an unused key. The **link check** (`test/doc_links.test.js`) resolves every relative link and `#anchor` in the Markdown files. See [test/README](../test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
+The suite covers decoding/encoder round trips, VE.Direct parsing, PCB v2.0 design/BOM/CPL consistency (needs python3), and about 50 real-module C++ regression programs (`test/firmware_*.cpp`, registered in `test/firmware_runtime.test.js`) with deterministic hardware fakes (sensors, I/O, LoRa transport, wireless decoders, telemetry and payloads). The **API contract test** (`test/api_contract.test.js`) regenerates the [example responses](api.md#example-responses) of `/api/data`, `/api/history` and `/api/info` with the real serializers, compares them with `docs/api/examples/`, validates them against `docs/api/schemas/` and fails on any JSON key the schemas don't describe — after an intended change: `UPDATE_API_EXAMPLES=1 node --test test/api_contract.test.js`. The **translation check** (`test/i18n.test.js`) fails if a key is missing in a language, placeholders or HTML tags differ from English, an ASCII apostrophe would break an attribute, or the sources use an unknown / leave an unused key. The **link check** (`test/doc_links.test.js`) resolves every relative link and `#anchor` in the Markdown files. See [test/README](../test/README) for individual commands. It does not qualify real radio timing, wiring, thermal behavior or physical board compatibility.
 
 ## Robustness
 
@@ -91,9 +91,9 @@ OTA updates never rewrite the partition table. A board OTA-updated from firmware
 │   ├── payload.h            # Measurements struct + compact binary layout
 │   ├── payload_binary.cpp   # Compact binary encoder (host-testable)
 │   ├── lora_payload.h/.cpp  # CayenneLPP encoder
-│   ├── history.h/.cpp       # In-RAM history for the dashboard
+│   ├── history.h/.cpp       # History for the dashboard (RAM / PSRAM; saved by history_store.cpp)
 │   ├── wind_window.h/.cpp   # Wind ring buffer, 3-s gust, per-path windows (host-tested)
-│   ├── rf_sensors.h/.cpp    # Bresser 868 MHz wireless sensors on the shared SX1262
+│   ├── rf_sensors.h/.cpp    # 868 MHz wireless sensors (Bresser, IT+, Fine Offset, Davis) on the shared SX1262
 │   ├── sources.h/.cpp       # value sources: board or wireless sensor per measured group
 │   ├── derived.h/.cpp       # dew point, feels like, cloud base, tendency, warnings, version compare (pure)
 │   ├── derived_now.h/.cpp   # snapshot of the derived values from history and daily totals

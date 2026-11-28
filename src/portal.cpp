@@ -544,6 +544,8 @@ void runConfigPortal(Config& cfg)
                 sendI18nTemplate(*wm.server, OTA_PAGE_HTML, OTA_TEXTS, sizeof(OTA_TEXTS) / sizeof(OTA_TEXTS[0]));
             });
             wm.server->on("/u", HTTP_POST, [&wm]() {
+                // the whole request is in: only now may a checked image become the boot one
+                otaUploadCommit();
                 const OtaOutcome o = otaUploadOutcome();
                 if (o == OTA_OUT_NOT_AUTHORIZED || (o == OTA_OUT_NONE && otaPass[0])) {
                     otaUploadReset();

@@ -52,6 +52,7 @@ int main()
     assert(pressureTendency(2.0f) == PT_RISING);
     assert(pressureTendency(-4.0f) == PT_FALLING_QUICKLY);
     assert(pressureTendency(7.0f) == PT_RISING_VERY_RAPIDLY);
+    assert(pressureTendency(NAN) == PT_STEADY);   // no tendency, not "rising very rapidly"
     assert(!strcmp(pressureTendencyText(PT_FALLING_SLOWLY), "falling slowly"));
     assert(!strcmp(weatherTrendText(-6.5f, 1000.0f), "storm warning"));
     assert(!strcmp(weatherTrendText(-2.0f, 1010.0f), "worsening"));
@@ -68,6 +69,12 @@ int main()
 
     // versions
     assert(compareVersions("2.0.0-beta.3", "2.0.0-beta.2") > 0);
+    assert(versionOffered("2.0.6", "2.0.5") && versionOffered("2.1.0-beta.1", "2.0.5") && !versionOffered("2.0.5", "2.0.5"));
+    assert(versionOffered("3.0.0", "2.0.6") && versionOffered("v3.1.2", "2.0.6") && versionOffered("3.0.0-beta.1", "2.0.6"));
+    assert(versionOffered("3.0.1", "3.0.0") && !versionOffered("2.9.9", "3.0.0") && !versionOffered("4.0.0", "3.0.0"));
+    assert(!versionOffered("10.0.0", "2.0.6") && !versionOffered("5.0.0", "2.0.6"));
+    assert(!versionOffered("4.0.0", "2.0.5") && !versionOffered("4.0.0-beta.1", "2.0.5") && !versionOffered("v1.1.0", "2.0.5"));
+    assert(!versionOffered("dev", "2.0.5") && !versionOffered("4.0.0", "dev"));
     assert(compareVersions("2.0.0", "2.0.0-beta.9") > 0);
     assert(compareVersions("2.0.0-beta.10", "2.0.0-beta.9") > 0);
     assert(compareVersions("2.0.0-beta.2-3-gabc1234-dirty", "2.0.0-beta.2") == 0);

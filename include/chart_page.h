@@ -214,16 +214,19 @@ box-shadow:0 6px 18px rgba(0,0,0,0.18);white-space:nowrap;}
 <div id="charts"></div>
 
 <script>
+// Storage may throw (blocked site data, some kiosk views): the page must work without it
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 (function () {
   var root = document.documentElement;
-  var stored = localStorage.getItem('wnTheme');
+  var stored = lsGet('wnTheme');
   if (stored) root.setAttribute('data-theme', stored);
   document.getElementById('theme').addEventListener('click', function () {
     var dark = matchMedia('(prefers-color-scheme: dark)').matches;
     var cur = root.getAttribute('data-theme') || (dark ? 'dark' : 'light');
     var next = cur === 'dark' ? 'light' : 'dark';
     root.setAttribute('data-theme', next);
-    localStorage.setItem('wnTheme', next);
+    lsSet('wnTheme', next);
     if (lastHist) render(lastHist, lastCurrent);   // canvases read the theme colours at draw time
   });
 })();
@@ -430,8 +433,7 @@ function setLangCookie(v) {
   try { document.cookie = 'wnLang=' + v + ';path=/;max-age=' + (v ? 31536000 : 0) + ';SameSite=Lax'; } catch (e) {}
 }
 function detectLang() {
-  var stored = null;
-  try { stored = localStorage.getItem('wnLang'); } catch (e) {}
+  var stored = lsGet('wnLang');
   if (stored && SUPPORTED_LANGS.indexOf(stored) !== -1) { setLangCookie(stored); return stored; }
   if (SUPPORTED_LANGS.indexOf(SERVER_LANG) !== -1) return SERVER_LANG;
   var browserLang = (navigator.language || 'en').slice(0, 2).toLowerCase();
@@ -462,7 +464,7 @@ function translateStatic() {
   translateStatic();
   sel.addEventListener('change', function () {
     lang = sel.value;
-    try { localStorage.setItem('wnLang', lang); } catch (e) {}
+    lsSet('wnLang', lang);
     setLangCookie(lang);   // the status and settings pages follow
     translateStatic();
     translateDynamicTitles();
@@ -476,7 +478,7 @@ function translateStatic() {
 })();
 
 // --- Units (Metric/Imperial): client-side conversion, same formulas as units.cpp (see header note) ---
-var unitPrefStored = localStorage.getItem('wnUnitPref');
+var unitPrefStored = lsGet('wnUnitPref');
 var unitPref = unitPrefStored || 'metric'; // corrected to match the device on first-ever load, see render()
 function convTemp(v, from, to) {
   if (v === null || v === undefined || from === to) return v;
@@ -560,7 +562,7 @@ function applyUnitPref(raw, dev) {
       o.temp = convTemp(s.temp, dev.tempUnit, target.tempUnit);
       o.windSpeed = convWind(s.windSpeed, dev.windUnit, target.windUnit);
       o.windGust = convWind(s.windGust, dev.windUnit, target.windUnit);
-      o.rainTotal = convMm(s.rainTotal, dev.rainUnit, target.rainUnit);
+      ['rainTotal', 'rainToday', 'rain1h'].forEach(function (k) { o[k] = convMm(s[k], dev.rainUnit, target.rainUnit); });
       o.pressure = convPressure(s.pressure, dev.pressureUnit, target.pressureUnit);
       return o;
     });
@@ -573,39 +575,39 @@ function updateUnitsButtonLabel() {
 document.getElementById('units').addEventListener('click', function () {
   unitPref = unitPref === 'imperial' ? 'metric' : 'imperial';
   unitPrefStored = unitPref;
-  localStorage.setItem('wnUnitPref', unitPref);
+  lsSet('wnUnitPref', unitPref);
   updateUnitsButtonLabel();
   if (lastHist) render(lastHist, lastCurrent);
 });
 
 // --- Time range (24h fine tier / 7d coarse tier): separate ring buffers, so switching re-fetches ---
-var timeRange = localStorage.getItem('wnRange') || '24h';
+var timeRange = lsGet('wnRange') === '7d' ? '7d' : '24h';
 function updateRangeButtonLabel() {
   document.getElementById('range').textContent = t(timeRange === '7d' ? 'range7d' : 'range24h');
 }
 document.getElementById('range').addEventListener('click', function () {
   timeRange = timeRange === '7d' ? '24h' : '7d';
-  localStorage.setItem('wnRange', timeRange);
+  lsSet('wnRange', timeRange);
   updateRangeButtonLabel();
-  refresh();
+  refresh(true);
 });
 
 // --- Chart x-axis: absolute (browser clock minus ageSec — the device has no NTP) or relative "ago" ---
 var LOCALES = { en: 'en-US', de: 'de-DE', fr: 'fr-FR', es: 'es-ES', pt: 'pt-BR' };
-var timeMode = localStorage.getItem('wnTimeMode') || 'absolute';
+var timeMode = lsGet('wnTimeMode') || 'absolute';
 function updateTimeModeLabel() {
   document.getElementById('timeMode').textContent = t(timeMode === 'absolute' ? 'timeAbsolute' : 'timeRelative');
 }
 document.getElementById('timeMode').addEventListener('click', function () {
   timeMode = timeMode === 'absolute' ? 'relative' : 'absolute';
-  localStorage.setItem('wnTimeMode', timeMode);
+  lsSet('wnTimeMode', timeMode);
   updateTimeModeLabel();
   if (lastHist) render(lastHist, lastCurrent);
 });
 
 // --- Auto-refresh interval: fixed steps, "Off" (0) pauses ---
 var REFRESH_STEPS_SEC = [0, 1, 5, 10, 30, 60];
-var autoRefreshSec = parseInt(localStorage.getItem('wnAutoRefreshSec'), 10);
+var autoRefreshSec = parseInt(lsGet('wnAutoRefreshSec'), 10);
 if (isNaN(autoRefreshSec) || REFRESH_STEPS_SEC.indexOf(autoRefreshSec) === -1) autoRefreshSec = 10;
 var refreshTimer = null;
 // durationLabel() is a hoisted function declaration further below
@@ -621,7 +623,7 @@ function refreshStepLabel(sec) { return sec === 0 ? t('refreshOff') : durationLa
   sel.value = autoRefreshSec;
   sel.addEventListener('change', function () {
     autoRefreshSec = parseInt(sel.value, 10);
-    localStorage.setItem('wnAutoRefreshSec', String(autoRefreshSec));
+    lsSet('wnAutoRefreshSec', String(autoRefreshSec));
     applyAutoRefreshTimer();
     if (autoRefreshSec > 0) refresh();
   });
@@ -634,7 +636,7 @@ function updateAutoRefreshOptions() {
 }
 function applyAutoRefreshTimer() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
-  if (autoRefreshSec > 0) refreshTimer = setInterval(refresh, autoRefreshSec * 1000);
+  if (autoRefreshSec > 0) refreshTimer = setInterval(function () { if (!document.hidden) refresh(); }, autoRefreshSec * 1000);
 }
 
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -863,6 +865,7 @@ function addChartEl(c) {
   chartsEl.appendChild(div);
   var canvas = div.querySelector('canvas');
   canvases[c.id] = canvas;
+  canvas.setAttribute('role', 'img');   // named with the chart title (setChartTitle)
   chartTitleEls[c.id] = div.querySelector('h4');
   chartContainerEls[c.id] = div;
   tipEls[c.id] = div.querySelector('.tip');
@@ -892,7 +895,9 @@ function syncSeriesCharts(raw) {
     c.unitKey = c.isTemp ? 'tempUnit' : null;
     c.unit = c.isTemp ? null : (s.unit || '');
     c.decimals = s.decimals;
-    c.minZero = !c.isTemp;
+    // Zero-based axis for amounts, counts, per-bucket sums, percentages and concentrations; level values
+    // (pressure, voltage, CO2) auto-scale, or a 10 hPa swing is a flat line at the top of a 0..1015 axis.
+    c.minZero = !c.isTemp && (!!s.perBucket || !/^(hPa|V|ppm)$/.test(s.unit || ''));
     c.rangeSum = !!s.perBucket;   // lightning: strikes per bucket, the range total in the title
   });
   CHARTS = CHARTS.filter(function (c) {
@@ -906,10 +911,14 @@ document.addEventListener('pointerdown', function (e) {
   if (!(e.target.classList && e.target.classList.contains('trend'))) setHover(null, null);
 });
 
+function setChartTitle(c, title) {
+  chartTitleEls[c.id].textContent = title;
+  canvases[c.id].setAttribute('aria-label', title);
+}
 // Card/chart titles depend on the language: set here and on every change
 function translateDynamicTitles() {
   CARDS.forEach(function (c) { cardRefs[c.key].label.textContent = t(c.titleKey); });
-  CHARTS.forEach(function (c) { chartTitleEls[c.id].textContent = c.title || t(c.titleKey); });
+  CHARTS.forEach(function (c) { setChartTitle(c, c.title || t(c.titleKey)); });
 }
 translateDynamicTitles();
 
@@ -1097,7 +1106,7 @@ function rangeSumPeriod(data) {
 function groupBuckets(ageSec, vals, nowMs, daily) {
   var key = [], sum = {};
   ageSec.forEach(function (a, i) {
-    var d = new Date(nowMs - a * 1000 - 1000), k = d.toDateString() + (daily ? '' : ' ' + d.getHours());
+    var d = new Date(nowMs - a * 1000 - 1000), k = d.toDateString() + (daily ? '' : ' ' + d.getHours() + ' ' + d.getTimezoneOffset());   // the UTC offset keeps the two 02:xx hours of the autumn DST change apart
     key.push(k);
     if (has(vals[i])) sum[k] = (sum[k] || 0) + vals[i];
   });
@@ -1423,7 +1432,7 @@ function render(rawHist, rawCurrent) {
     if (c.id === 'pressure' && has(current.pressureTrend3h)) {
       title += ' · ' + (ptArrow(current.pressureTendency) || '') + ' ' + sgn(current.pressureTrend3h, decimals) + ' ' + unit + ' ' + t('per3h');
     }
-    chartTitleEls[c.id].textContent = title;
+    setChartTitle(c, title);
     chartState[c.id] = { ageSec: data.ageSec || [], series: series, anchorMs: nowMs, minZero: c.minZero,
                          unit: (c.isTemp ? '°' : '') + unit, decimals: decimals, barLabel: barLabel,
                          bars: c.bars ? groupBuckets(data.ageSec || [], series[0].data, nowMs, timeRange === '7d') : null,
@@ -1441,7 +1450,7 @@ function renderAstro(current) {
     document.getElementById('astroPanel').style.display = '';
     return;
   }
-  function hm(iso) { return iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : t('none'); }
+  function hm(iso) { return iso ? new Date(iso).toLocaleTimeString(LOCALES[lang] || 'en-US', { hour: '2-digit', minute: '2-digit' }) : t('none'); }
   var dl = a.dayLengthMin;
   fillKv('astroList', 'astroPanel', [
     a.polar ? [t(a.polar === 'day' ? 'polarDay' : 'polarNight'), ''] : null,
@@ -1471,10 +1480,10 @@ function renderRecords() {
     ['rainRate', null, 'rainRateMax', function (v) { return convMm(v, r.rainRateUnit, tg.rainRateUnit).toFixed(tg.rainUnit === 'in' ? 2 : 1); }],
     ['rainDay', null, 'rainDayMax', function (v) { return convMm(v, r.rainUnit, tg.rainUnit).toFixed(tg.rainUnit === 'in' ? 2 : 1); }]
   ];
-  var unit = { temperature: tg.tempUnit, pressureQnh: tg.pressureUnit, gust: tg.windUnit, rainRate: tg.rainRateUnit, rainDay: tg.rainUnit };
+  var unit = { temperature: '°' + tg.tempUnit, pressureQnh: tg.pressureUnit, gust: tg.windUnit, rainRate: tg.rainRateUnit, rainDay: tg.rainUnit };
   function cell(e, f) {
     if (!e) return '–';
-    var when = e.time ? new Date(e.time).toLocaleString() : e.date;
+    var when = e.time ? new Date(e.time).toLocaleString(LOCALES[lang] || 'en-US') : e.date;
     return '<span title="' + when + '">' + f(e.value) + '</span>';
   }
   var h = '<table><tr><th></th>' + PL.map(function (k) { return '<th>' + t(k) + '</th>'; }).join('') + '</tr>', rows = 0;
@@ -1495,7 +1504,8 @@ function renderRecords() {
 var lastRenderSig = null;
 function renderSignature(histText, current) {
   var c = Object.assign({}, current);
-  delete c.nextCycleInSec; delete c.cpuTemp; delete c.freeHeapKiB; delete c.uptimeH;
+  delete c.nextCycleInSec; delete c.cpuTemp; delete c.freeHeapKiB; delete c.uptimeH; delete c.davis;
+  if (c.rfSensors) c.rfSensors = c.rfSensors.map(function (x) { var o = Object.assign({}, x); delete o.ageSec; return o; });   // updateAges shows it
   return histText + '|' + JSON.stringify(c);
 }
 // Offline (installed app over https, the service worker answered from its cache)
@@ -1510,15 +1520,26 @@ function showOffline(cachedAt) {
 if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('/sw.js').catch(function () {});
 }
-function refresh() {
-  // records separately: an older firmware without /api/records just hides the panel
-  fetch('/api/records').then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (j) { lastRecords = j; renderRecords(); }).catch(function () {});
-  var histUrl = '/api/history' + (timeRange === '7d' ? '?range=7d' : '');
+var refreshBusy = 0, refreshStartMs = 0, lastRecMs = 0, lastHistMs = 0, lastHistText = null, lastHistRange = '';
+function refresh(force) {
+  var now = Date.now();
+  if (refreshBusy && force !== true && now - refreshStartMs < 15000) return;   // no overlapping fetches on a slow link
+  // records separately (an older firmware without /api/records just hides the panel); they change slowly
+  if (force === true || now - lastRecMs >= 60000) {
+    lastRecMs = now;
+    fetch('/api/records').then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { lastRecords = j; renderRecords(); }).catch(function () {});
+  }
+  // history: buckets are 5 min / 1 h, so it is fetched again at most once a minute (or when the range changes)
+  var seq = ++refreshBusy, range = timeRange;
+  refreshStartMs = now;
+  var needHist = force === true || lastHistText === null || lastHistRange !== range || now - lastHistMs >= 60000;
+  var histUrl = '/api/history' + (range === '7d' ? '?range=7d' : '');
   Promise.all([
-    fetch(histUrl).then(function (r) { return r.text(); }),
+    needHist ? fetch(histUrl).then(function (r) { return r.text(); }) : Promise.resolve(lastHistText),
     fetch('/api/data').then(function (r) { showOffline(r.headers.get('X-UWN-Cached')); return r.json(); })
   ]).then(function (results) {
+    if (needHist) { lastHistText = results[0]; lastHistRange = range; lastHistMs = Date.now(); }
     lastFetchMs = Date.now();
     updateUpdatedLabel();
     var sig = renderSignature(results[0], results[1]);
@@ -1529,8 +1550,9 @@ function refresh() {
     var empty = document.getElementById('empty');
     empty.style.display = 'block';
     empty.textContent = t('failedLoad') + e;
-  });
+  }).then(function () { if (refreshBusy === seq) refreshBusy = 0; });
 }
+document.addEventListener('visibilitychange', function () { if (!document.hidden && autoRefreshSec > 0) refresh(); });
 // Redraw from cached data on resize
 window.addEventListener('resize', function () { if (lastHist) render(lastHist, lastCurrent); });
 // Sync the buttons to the persisted preferences (autoRefresh builds its own options)

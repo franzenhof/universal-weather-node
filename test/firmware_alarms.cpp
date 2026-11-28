@@ -20,6 +20,27 @@ int main()
     assert(alarmStep(r, s, true, 1.0f, 190) == AE_CLEAR && !s.active);  // clear at the clear threshold
     assert(alarmStep(r, s, true, 0.5f, 220) == AE_NONE && !s.active);   // between: does not raise again
 
+    {   // the alarm clock (seconds since boot from the 64-bit timer) runs on where
+        // millis() / 1000 wraps (4294967 s = 49.7 days), so minimum duration and
+        // repeat hold across that day; alarmStep's unsigned deltas also hold across 2^32 s
+        const int64_t millisWrapSec = 4294967;
+        assert(alarmClockSecFrom((millisWrapSec + 30) * 1000000LL) == millisWrapSec + 30);
+        AlarmRule held = r; held.minDurationMin = 30;
+        AlarmState hs;
+        assert(alarmStep(held, hs, true, -1.0f, alarmClockSecFrom((millisWrapSec - 60) * 1000000LL)) == AE_NONE);
+        assert(alarmStep(held, hs, true, -1.0f, alarmClockSecFrom((millisWrapSec + 30) * 1000000LL)) == AE_NONE);   // 90 s pending
+        assert(alarmStep(held, hs, true, -1.0f, alarmClockSecFrom((millisWrapSec - 60 + 1800) * 1000000LL)) == AE_RAISE);
+        AlarmRule rep = r; rep.minDurationMin = 0; rep.repeatMin = 60;
+        AlarmState rs;
+        assert(alarmStep(rep, rs, true, -1.0f, alarmClockSecFrom((millisWrapSec - 120) * 1000000LL)) == AE_RAISE);
+        assert(alarmStep(rep, rs, true, -1.0f, alarmClockSecFrom((millisWrapSec + 30) * 1000000LL)) == AE_NONE);    // 150 s later
+        assert(alarmStep(rep, rs, true, -1.0f, alarmClockSecFrom((millisWrapSec - 120 + 3600) * 1000000LL)) == AE_REPEAT);
+        AlarmState ws;   // across 2^32 s
+        assert(alarmStep(held, ws, true, -1.0f, 0xFFFFFFF0u) == AE_NONE);
+        assert(alarmStep(held, ws, true, -1.0f, 100) == AE_NONE);
+        assert(alarmStep(held, ws, true, -1.0f, 0xFFFFFFF0u + 1800) == AE_RAISE);
+    }
+
     // minimum duration: pending, interrupted, then held long enough
     r.minDurationMin = 5;
     s = AlarmState();

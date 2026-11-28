@@ -35,3 +35,8 @@ int rfSchedDuePhase(const RfSchedEntry* e, int n, uint32_t nowMs)
     }
     return best;
 }
+
+bool rfReceiverSilentTooLong(uint32_t nowMs, uint32_t lastLifeSignMs)
+{
+    return nowMs - lastLifeSignMs >= RF_RECEIVE_WATCHDOG_MS;
+}

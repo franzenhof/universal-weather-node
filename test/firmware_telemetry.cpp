@@ -150,6 +150,8 @@ int main()
     gCfg.rfEn=0;
     gCfg.uvEn=gCfg.auxAinEn=gCfg.auxPulseEn=0;gCfg.wind2Mode=2;
     srcUpdateCycle();buildJsonPayload(doc);
+    assert(doc["wind2"].isNull());                    // no accepted wind 2 sample this cycle: left out
+    gIo.wind2Valid=true;buildJsonPayload(doc);
     assert(!doc["wind2"].isNull() && doc["uvIndex"].isNull());
 
     // VPD from the selected temperature/humidity (BME280: 23.46 C / 49.6 %)

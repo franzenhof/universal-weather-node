@@ -19,7 +19,8 @@ void timeSyncPoll();
 // gCfg.ntpServer on the next timeSyncPoll() — for the web settings page.
 void timeSyncReconfigure();
 
-// true once SNTP has delivered a plausible time at least once since boot.
+// true while the clock shows a plausible time (2024 or later): set by SNTP,
+// or kept by the RTC over a software reset.
 bool timeIsValid();
 
 // Seconds since 1970 (UTC). Returns false (out untouched) if the clock
@@ -29,3 +30,7 @@ bool epochNow(int64_t& out);
 // Current local time (gCfg.timeZone). Returns false (out untouched) if the
 // clock isn't valid yet.
 bool localTimeNow(struct tm& out);
+// Local time of t - localtime_r() for every task: holds the lock the main
+// task changes TZ under (setenv() rewrites the TZ string another task's
+// localtime_r() may be reading).
+void localTimeOf(time_t t, struct tm& out);

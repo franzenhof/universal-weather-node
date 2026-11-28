@@ -68,6 +68,20 @@ int main()
     char v[8];
     backupValue(JsonVariantConst(), v, sizeof(v));
     assert(v[0] == '\0');
+    {   // every field the current page does not have is dropped - not only the first 96
+        JsonDocument in2, cur2, changes2;
+        JsonObject set = in2["settings"].to<JsonObject>();
+        cur2["devname"] = "x";
+        cur2["altitude"] = "560";
+        set["devname"] = "y";
+        char k[16];
+        for (int i = 0; i < 120; i++) { snprintf(k, sizeof(k), "unk%d", i); set[k] = "1"; }
+        set["altitude"] = "600";   // a known field after them
+        set["wukey"] = "secret";   // secrets stay: the page renders them empty
+        const int n = backupPrepare(set, cur2.as<JsonObjectConst>(), changes2.to<JsonArray>(), nullptr);
+        assert(n == 3 && set.size() == 3);
+        assert(!strcmp(set["devname"] | "", "y") && !strcmp(set["altitude"] | "", "600") && set["wukey"].is<const char*>());
+    }
     puts("backup ok");
     return 0;
 }

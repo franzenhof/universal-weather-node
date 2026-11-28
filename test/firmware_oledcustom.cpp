@@ -39,6 +39,8 @@ int main()
     oledCustomClean("abcdef\xC2\xB0", out, sizeof(out));    assert(!strcmp(out, "abcdef"));          // 2-byte char would not
     oledCustomClean("ab\xC2", out, sizeof(out));            assert(!strcmp(out, "ab"));              // broken sequence
     oledCustomClean(nullptr, out, sizeof(out));             assert(!out[0]);
+    oledCustomClean("a\x80" "b\xFF" "c\xF8", out, sizeof(out)); assert(!strcmp(out, "abc"));          // stray continuation, never-valid bytes
+    oledCustomClean("\xE2\x82\xAC\xBF", out, sizeof(out));  assert(!strcmp(out, "\xE2\x82\xAC"));  // a valid sequence kept
     // pack never overruns
     char tiny[6];
     oledCustomPack(c, tiny, sizeof(tiny));

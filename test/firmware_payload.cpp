@@ -25,7 +25,7 @@ int main()
 {
     gCfg.pcbVersion=20;
     gCfg.windEn=gCfg.rainEn=0;
-    gIo.wind2SpeedMs=4.56f;gIo.wind2GustMs=9.87f;gIo.wind2DirDeg=271;
+    gIo.wind2Valid=true;gIo.wind2SpeedMs=4.56f;gIo.wind2GustMs=9.87f;gIo.wind2DirDeg=271;
     for (int mode=1;mode<=2;mode++) {
         gCfg.wind2Mode=mode;
         buildBinaryPacket(BIN_MAX_SIZE);

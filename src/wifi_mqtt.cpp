@@ -2,8 +2,7 @@
 #include "out_status.h"
 #include "astro.h"
 #include "alarms.h"
-#include <memory>
-#include <new>
+#include "mqtt_session.h"
 #include "globals.h"
 #include "params.h"
 #include "board_io.h"
@@ -15,6 +14,7 @@
 #include "serial_log.h"
 #include "api_info.h"
 #include "ha_rf.h"
+#include "ha_groups.h"
 
 #include <WiFi.h>
 #include <esp_wifi.h>
@@ -26,6 +26,7 @@
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <atomic>
 #include <memory>
 #include <new>
 
@@ -40,11 +41,7 @@ enum class WifiState { Idle, Connecting, Up, Backoff, Testing };
 constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 8000;
 constexpr unsigned long WIFI_BACKOFF_MS         = 30000;
 constexpr unsigned long WIFI_DROP_BACKOFF_MS    = 5000;
-// MQTT reconnect: 15 s after a failure, doubling up to 5 min while the
-// broker stays unreachable (each attempt can block loop() for a few seconds),
-// back to 15 s after a successful connection.
-constexpr unsigned long MQTT_RETRY_MIN_MS       = 15000;
-constexpr unsigned long MQTT_RETRY_MAX_MS       = 300000;
+// MQTT reconnect backoff: mqtt_session.h (each attempt can block loop() for a few seconds).
 
 // WiFiClientSecure/PubSubClient default to a 30 s TCP connect timeout, a
 // 120 s TLS handshake timeout, and a 15 s MQTT CONNACK wait respectively —
@@ -70,8 +67,11 @@ PubSubClient     mqttClient(secureClient);
 WifiState     wifiState          = WifiState::Idle;
 unsigned long wifiStateAtMs      = 0;
 unsigned long wifiBackoffUntilMs = 0;
-unsigned long lastMqttAttemptMs  = 0;
-unsigned long mqttRetryMs        = 0;   // 0 = no failed attempt yet (connect right away)
+MqttReconnectBackoff mqttBackoff;
+// mqttClient and its TCP / TLS client belong to the loop task alone (an mbedTLS
+// context is not thread-safe; PubSubClient::connected() reads from the socket
+// and may stop the client). Other tasks read this flag, refreshed by the loop task.
+std::atomic<bool> mqttConnectedForOtherTasks{false};
 
 // WiFi change request (web task -> pollWifi). changeMux guards the strings.
 portMUX_TYPE  changeMux          = portMUX_INITIALIZER_UNLOCKED;
@@ -139,14 +139,28 @@ const char* mqttClientId()
     return id;
 }
 
-// Publishes one Home Assistant MQTT-discovery config (retained) for a sensor
-// entity that reads `valueTemplate` out of the shared telemetry JSON on
-// topicData. All entities share one HA "device" so they group together.
-bool haDiscoveryFailed = false;
-bool alarmsMqttAll = true;   // one config of the current discovery run failed (out_status.h)
+bool haDiscoveryFailed = false;   // one config of the current discovery run failed (out_status.h)
+bool alarmsMqttAll = true;       // publish all alarm states (again) on the next service call
+
+// Entities of a function that is switched off are removed (an empty retained
+// config), not just left without values: while a DiscoveryCondition that is
+// false is in scope, publishDiscoveryEntity() clears the entity's config.
+// Conditions nest (an inner one only counts while the outer one holds).
+bool discoveryWanted = true;
+struct DiscoveryCondition {
+    explicit DiscoveryCondition(bool wanted) : outer_(discoveryWanted) { discoveryWanted = outer_ && wanted; }
+    ~DiscoveryCondition() { discoveryWanted = outer_; }
+    DiscoveryCondition(const DiscoveryCondition&) = delete;
+    DiscoveryCondition& operator=(const DiscoveryCondition&) = delete;
+private:
+    bool outer_;
+};
 
 const char* discoveryStateTopic = nullptr;   // != nullptr: the entity's own state topic, no value template
 
+// Publishes one Home Assistant MQTT-discovery config (retained) for a sensor
+// entity that reads `valueTemplate` out of the shared telemetry JSON on
+// topicData. All entities share one HA "device" so they group together.
 void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
                              const char* deviceClass, const char* valueTemplate, bool binary = false,
                              const char* stateClass = nullptr)
@@ -154,6 +168,14 @@ void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
     char configTopic[160];
     snprintf(configTopic, sizeof(configTopic), "%s/%s/%s/%s/config",
              HA_DISCOVERY_PREFIX, binary ? "binary_sensor" : "sensor", mqttClientId(), key);
+
+    if (!discoveryWanted) {   // switched off: the entity is removed
+        if (!mqttClient.publish(configTopic, (const uint8_t*)"", 0, /*retain=*/true)) {
+            outReport(OUT_HA, false, mqttClient.state(), "publish failed");
+            haDiscoveryFailed = true;
+        }
+        return;
+    }
 
     char uniqueId[80];
     snprintf(uniqueId, sizeof(uniqueId), "%s_%s", mqttClientId(), key);
@@ -198,12 +220,67 @@ void publishDiscoveryEntity(const char* key, const char* name, const char* unit,
     }
 }
 
-// Publishes discovery configs for every entity whose backing sensor is
-// currently enabled, so HA doesn't show entities for hardware that isn't
-// present. Safe/idempotent to call again on every reconnect (retained).
+// HA state classes: "measurement" gives a numeric entity long-term
+// statistics; "total_increasing" is a counter / sum whose decrease starts a
+// new cycle (daily / weekly sums, totals since start). ("total" would need last_reset.)
+constexpr const char* SC_MEASUREMENT = "measurement";
+constexpr const char* SC_TOTAL_INCREASING = "total_increasing";
+
+// "{{ (value_json.<parent> | default({})).<child> | default(None) }}": a value
+// inside an object of the telemetry JSON that may be missing as a whole (an
+// attribute of an undefined parent would be a template error in HA).
+const char* nestedTemplate(char* out, size_t len, const char* parent, const char* child)
+{
+    snprintf(out, len, "{{ (value_json.%s | default({})).%s | default(None) }}", parent, child);
+    return out;
+}
+
+// Publishes discovery configs for every entity whose function is currently
+// enabled (and removes those of disabled functions), so HA doesn't show
+// entities for hardware that isn't in use. Safe/idempotent to call again on
+// every reconnect (retained). Entities that depend only on a detected sensor
+// (BME280) are not removed when it is missing at a reconnect - they show as
+// unavailable until it is back.
+// Value groups for the discovery (ha_groups.h): seen (NVS, loaded once) and
+// the wanted set the last discovery run announced.
+int16_t  haSeen = -1;            // -1 = not loaded yet
+uint8_t  haWantedAnnounced = 0;
+uint32_t haGroupsCheckMs = 0;    // last check (every 10 s; a source cycle is longer)
+
+uint8_t haGroupsWantedNow()
+{
+    if (haSeen < 0) haSeen = loadHaGroupsSeen();
+    bool off[SG_COUNT];
+    for (int g = 0; g < SG_COUNT; g++) off[g] = gCfg.srcSel[g] == SRC_OFF;
+    return haGroupsWanted((uint8_t)haSeen, off);
+}
+
+void publishHomeAssistantDiscovery();
+
+// Every 10 s: a group delivering for the first time is stored and
+// announced at once (a new wireless sensor with more values, a source set back
+// from Off); a source set to Off removes its group.
+void haGroupsCheck()
+{
+    if (millis() - haGroupsCheckMs < 10000) return;
+    haGroupsCheckMs = millis();
+    if (haSeen < 0) haSeen = loadHaGroupsSeen();
+    HaGroupsNow n;
+    n.temp = gSrc.tempValid;  n.hum = gSrc.humValid;
+    n.wind = srcActive(SG_WIND);  n.rain = srcActive(SG_RAIN);
+    n.uv = gSrc.uvBoard || gSrc.uvRadio;  n.light = gSrc.lightValid;  n.press = gSrc.pressValid;
+    const uint8_t seen = (uint8_t)haSeen | haGroupsDelivering(n);
+    if (seen != (uint8_t)haSeen) {
+        haSeen = seen;
+        saveHaGroupsSeen(seen);
+    }
+    if (haGroupsWantedNow() != haWantedAnnounced) publishHomeAssistantDiscovery();
+}
+
 void publishHomeAssistantDiscovery()
 {
     haDiscoveryFailed = false;
+    discoveryWanted = true;
     // HA's unit_of_measurement wants the degree sign for temperature; the
     // JSON payload's own unit fields (tempUnit etc., see json_payload.cpp)
     // stay plain ASCII ("C"/"F") since they're just machine-readable labels.
@@ -212,204 +289,226 @@ void publishHomeAssistantDiscovery()
     const char* rainUnit = rainUnitLabel(gCfg);
     const char* rainRateUnit = rainRateUnitLabel(gCfg);
     const char* pressureUnit = pressureUnitLabel(gCfg);
+    char tmpl[96];
 
-    // Discovery runs once per connection, before wireless sensors may have
-    // been received: with wireless sensors on, their groups are always
-    // announced (values missing in the JSON just show as unavailable).
+    // Wireless sensors: a group is announced once a source delivered it
+    // (ha_groups.h, sticky in NVS - not removed while a sensor is silent or
+    // before the first packet after a start), not while its source is Off.
     const bool rf = gCfg.rfEn != 0;
-    if (gCfg.windEn || rf) {
+    const uint8_t wanted = haGroupsWantedNow();
+    haWantedAnnounced = wanted;
+    auto rfHas = [&](uint8_t bit) { return rf && (wanted & bit); };
+    {
+        const DiscoveryCondition wind(gCfg.windEn || rfHas(HG_WIND));
         publishDiscoveryEntity("wind_dir", "Wind Direction", "\xC2\xB0", nullptr,
                                 "{{ value_json.windDirDeg | default(None) }}");
-        publishDiscoveryEntity("wind_speed", "Wind Speed", windUnit, nullptr,
-                                "{{ value_json.windSpeed | default(None) }}");
-        publishDiscoveryEntity("wind_gust", "Wind Gust", windUnit, nullptr,
-                                "{{ value_json.windGust | default(None) }}");
-    }
-    if (gCfg.rainEn || rf) {
-        publishDiscoveryEntity("rain_rate", "Rain Rate", rainRateUnit, nullptr,
-                                "{{ value_json.rainRate | default(None) }}");
-        publishDiscoveryEntity("rain_mm", "Rain (cycle)", rainUnit, nullptr,
-                                "{{ value_json.rain | default(None) }}");
-        publishDiscoveryEntity("rain_since_start", "Rain Since Start", rainUnit, nullptr,
-                                "{{ value_json.rainSinceStart | default(None) }}");
-    }
-    if (bme280Present || rf) {
-        publishDiscoveryEntity("temp", "Temperature", tempUnit, "temperature",
-                                "{{ value_json.temp | default(None) }}");
-        publishDiscoveryEntity("humidity", "Humidity", "%", "humidity",
-                                "{{ value_json.humidityPct | default(None) }}");
-        // today's records (records.h); the complete set: GET /api/records
-        publishDiscoveryEntity("temp_min_today", "Temperature Min Today", tempUnit, "temperature",
-                                "{{ value_json.tempMinToday | default(None) }}");
-        publishDiscoveryEntity("temp_max_today", "Temperature Max Today", tempUnit, "temperature",
-                                "{{ value_json.tempMaxToday | default(None) }}");
-    }
-    if (gCfg.windEn || rf)
-        publishDiscoveryEntity("gust_max_today", "Gust Max Today", windUnit, nullptr,
-                                "{{ value_json.gustMaxToday | default(None) }}");
-    if (rf) {
-        publishDiscoveryEntity("light", "Illuminance", "lx", "illuminance",
-                                "{{ value_json.lightLux | default(None) }}");
-        publishDiscoveryEntity("uv_index", "UV Index", "index", nullptr,
-                                "{{ value_json.uvIndex | default(None) }}");
-    }
-    if (bme280Present || rf) {   // the pressure source may be a wireless sensor (unavailable while none delivers)
-        publishDiscoveryEntity("pressure_abs", "Pressure (absolute)", pressureUnit, "pressure",
-                                "{{ value_json.pressureAbs | default(None) }}");
-        publishDiscoveryEntity("pressure_qnh", "Pressure (QNH)", pressureUnit, "pressure",
-                                "{{ value_json.pressureQnh | default(None) }}");
-        publishDiscoveryEntity("pressure_trend", "Pressure Change (3 h)", pressureUnit, nullptr,
-                                "{{ value_json.pressureTrend3h | default(None) }}");
-        publishDiscoveryEntity("pressure_tendency", "Pressure Tendency", nullptr, nullptr,
-                                "{{ value_json.pressureTendency | default(None) }}");
-        publishDiscoveryEntity("weather_trend", "Weather Trend", nullptr, nullptr,
-                                "{{ value_json.weatherTrend | default(None) }}");
-    }
-    // Derived values (derived.h)
-    if (bme280Present || rf) {
-        publishDiscoveryEntity("dew_point", "Dew Point", tempUnit, "temperature",
-                                "{{ value_json.dewPoint | default(None) }}");
-        publishDiscoveryEntity("vpd", "Vapour Pressure Deficit", "kPa", "pressure",
-                                "{{ value_json.vpd | default(None) }}");
-        publishDiscoveryEntity("feels_like", "Feels Like", tempUnit, "temperature",
-                                "{{ value_json.feelsLike | default(None) }}");
-        publishDiscoveryEntity("temp_trend", "Temperature Change (1 h)", gCfg.unitSystem == 1 ? "\xC2\xB0" "F" : "K", nullptr,
-                                "{{ value_json.tempTrend1h | default(None) }}");
-        publishDiscoveryEntity("cloud_base", "Cloud Base", gCfg.unitSystem == 1 ? "ft" : "m", "distance",
-                                "{{ value_json.cloudBase | default(None) }}");
-        publishDiscoveryEntity("warn_frost", "Frost", nullptr, "cold",
-                                "{{ 'ON' if value_json.warnings is defined and value_json.warnings.frost else 'OFF' }}", true);
-        publishDiscoveryEntity("warn_fog", "Fog / Dew", nullptr, "moisture",
-                                "{{ 'ON' if value_json.warnings is defined and value_json.warnings.fog else 'OFF' }}", true);
-        publishDiscoveryEntity("warn_sultry", "Sultry", nullptr, "heat",
-                                "{{ 'ON' if value_json.warnings is defined and value_json.warnings.sultry else 'OFF' }}", true);
-    }
-    if (gCfg.windEn || rf)
+        publishDiscoveryEntity("wind_speed", "Wind Speed", windUnit, "wind_speed",
+                                "{{ value_json.windSpeed | default(None) }}", false, SC_MEASUREMENT);
+        publishDiscoveryEntity("wind_gust", "Wind Gust", windUnit, "wind_speed",
+                                "{{ value_json.windGust | default(None) }}", false, SC_MEASUREMENT);
+        publishDiscoveryEntity("gust_max_today", "Gust Max Today", windUnit, "wind_speed",
+                                "{{ value_json.gustMaxToday | default(None) }}", false, SC_MEASUREMENT);
         publishDiscoveryEntity("wind_dir_text", "Wind Direction (compass)", nullptr, nullptr,
                                 "{{ value_json.windDirText | default(None) }}");
-    if (gCfg.rainEn || rf) {
+    }
+    {
+        const DiscoveryCondition rain(gCfg.rainEn || rfHas(HG_RAIN));
+        publishDiscoveryEntity("rain_rate", "Rain Rate", rainRateUnit, "precipitation_intensity",
+                                "{{ value_json.rainRate | default(None) }}", false, SC_MEASUREMENT);
+        publishDiscoveryEntity("rain_mm", "Rain (cycle)", rainUnit, "precipitation",
+                                "{{ value_json.rain | default(None) }}", false, SC_MEASUREMENT);
+        publishDiscoveryEntity("rain_since_start", "Rain Since Start", rainUnit, "precipitation",
+                                "{{ value_json.rainSinceStart | default(None) }}", false, SC_TOTAL_INCREASING);
         publishDiscoveryEntity("rain_1h", "Rain Last Hour", rainUnit, "precipitation",
-                                "{{ value_json.rain1h | default(None) }}");
+                                "{{ value_json.rain1h | default(None) }}", false, SC_MEASUREMENT);
         publishDiscoveryEntity("rain_24h", "Rain Last 24 h", rainUnit, "precipitation",
-                                "{{ value_json.rain24h | default(None) }}");
+                                "{{ value_json.rain24h | default(None) }}", false, SC_MEASUREMENT);
+        // Sums that restart at 0 each day / week / month / year: exactly HA's
+        // "total_increasing" (a decrease = new meter cycle).
         publishDiscoveryEntity("rain_today", "Rain Today", rainUnit, "precipitation",
-                                "{{ value_json.rainToday | default(None) }}");
+                                "{{ value_json.rainToday | default(None) }}", false, SC_TOTAL_INCREASING);
         publishDiscoveryEntity("rain_yesterday", "Rain Yesterday", rainUnit, "precipitation",
-                                "{{ value_json.rainYesterday | default(None) }}");
-        // Sums that restart at 0 each week / month / year: exactly HA's
-        // "total_increasing" (a decrease = new meter cycle), which also gives
-        // them long-term statistics. ("total" would need last_reset.)
+                                "{{ value_json.rainYesterday | default(None) }}", false, SC_MEASUREMENT);
         publishDiscoveryEntity("rain_week", "Rain This Week", rainUnit, "precipitation",
-                                "{{ value_json.rainWeek | default(None) }}", false, "total_increasing");
+                                "{{ value_json.rainWeek | default(None) }}", false, SC_TOTAL_INCREASING);
         publishDiscoveryEntity("rain_month", "Rain This Month", rainUnit, "precipitation",
-                                "{{ value_json.rainMonth | default(None) }}", false, "total_increasing");
+                                "{{ value_json.rainMonth | default(None) }}", false, SC_TOTAL_INCREASING);
         publishDiscoveryEntity("rain_year", "Rain This Year", rainUnit, "precipitation",
-                                "{{ value_json.rainYear | default(None) }}", false, "total_increasing");
+                                "{{ value_json.rainYear | default(None) }}", false, SC_TOTAL_INCREASING);
         publishDiscoveryEntity("last_rain", "Last Rain", nullptr, "timestamp",
                                 "{{ value_json.lastRain | default(None) }}");
     }
-    if (rf) {
-        publishDiscoveryEntity("sunshine_today", "Sunshine Today", "min", "duration",
-                                "{{ value_json.sunshineTodayMin | default(None) }}");
-        publishDiscoveryEntity("sunshine_yesterday", "Sunshine Yesterday", "min", "duration",
-                                "{{ value_json.sunshineYesterdayMin | default(None) }}");
+    // The BME280 (a detected sensor, not a setting - never removed, see above)
+    // or the wireless groups seen (ha_groups.h).
+    if (bme280Present || rf) {
+        {
+            const DiscoveryCondition temp(bme280Present || rfHas(HG_TEMP));
+            publishDiscoveryEntity("temp", "Temperature", tempUnit, "temperature",
+                                    "{{ value_json.temp | default(None) }}", false, SC_MEASUREMENT);
+            publishDiscoveryEntity("temp_min_today", "Temperature Min Today", tempUnit, "temperature",
+                                    "{{ value_json.tempMinToday | default(None) }}", false, SC_MEASUREMENT);
+            publishDiscoveryEntity("temp_max_today", "Temperature Max Today", tempUnit, "temperature",
+                                    "{{ value_json.tempMaxToday | default(None) }}", false, SC_MEASUREMENT);
+            publishDiscoveryEntity("feels_like", "Feels Like", tempUnit, "temperature",
+                                    "{{ value_json.feelsLike | default(None) }}", false, SC_MEASUREMENT);
+            publishDiscoveryEntity("temp_trend", "Temperature Change (1 h)", gCfg.unitSystem == 1 ? "\xC2\xB0" "F" : "K", nullptr,
+                                    "{{ value_json.tempTrend1h | default(None) }}", false, SC_MEASUREMENT);
+            publishDiscoveryEntity("warn_frost", "Frost", nullptr, "cold",
+                                    "{{ 'ON' if value_json.warnings is defined and value_json.warnings.frost else 'OFF' }}", true);
+            {   // humidity and the values derived from it
+                const DiscoveryCondition hum(bme280Present || rfHas(HG_HUM));
+                publishDiscoveryEntity("humidity", "Humidity", "%", "humidity",
+                                        "{{ value_json.humidityPct | default(None) }}", false, SC_MEASUREMENT);
+                publishDiscoveryEntity("dew_point", "Dew Point", tempUnit, "temperature",
+                                        "{{ value_json.dewPoint | default(None) }}", false, SC_MEASUREMENT);
+                publishDiscoveryEntity("vpd", "Vapour Pressure Deficit", "kPa", "pressure",
+                                        "{{ value_json.vpd | default(None) }}", false, SC_MEASUREMENT);
+                publishDiscoveryEntity("cloud_base", "Cloud Base", gCfg.unitSystem == 1 ? "ft" : "m", "distance",
+                                        "{{ value_json.cloudBase | default(None) }}", false, SC_MEASUREMENT);
+                publishDiscoveryEntity("warn_fog", "Fog / Dew", nullptr, "moisture",
+                                        "{{ 'ON' if value_json.warnings is defined and value_json.warnings.fog else 'OFF' }}", true);
+                publishDiscoveryEntity("warn_sultry", "Sultry", nullptr, "heat",
+                                        "{{ 'ON' if value_json.warnings is defined and value_json.warnings.sultry else 'OFF' }}", true);
+            }
+        }
+        {
+            const DiscoveryCondition press(bme280Present || rfHas(HG_PRESS));
+            publishDiscoveryEntity("pressure_abs", "Pressure (absolute)", pressureUnit, "pressure",
+                                    "{{ value_json.pressureAbs | default(None) }}", false, SC_MEASUREMENT);
+            publishDiscoveryEntity("pressure_qnh", "Pressure (QNH)", pressureUnit, "pressure",
+                                    "{{ value_json.pressureQnh | default(None) }}", false, SC_MEASUREMENT);
+            publishDiscoveryEntity("pressure_trend", "Pressure Change (3 h)", pressureUnit, nullptr,
+                                    "{{ value_json.pressureTrend3h | default(None) }}", false, SC_MEASUREMENT);
+            publishDiscoveryEntity("pressure_tendency", "Pressure Tendency", nullptr, nullptr,
+                                    "{{ value_json.pressureTendency | default(None) }}");
+            publishDiscoveryEntity("weather_trend", "Weather Trend", nullptr, nullptr,
+                                    "{{ value_json.weatherTrend | default(None) }}");
+        }
     }
-    if (gCfg.updateCheckEn)
+    {
+        const DiscoveryCondition wireless(rfHas(HG_LIGHT));
+        publishDiscoveryEntity("light", "Illuminance", "lx", "illuminance",
+                                "{{ value_json.lightLux | default(None) }}", false, SC_MEASUREMENT);
+        publishDiscoveryEntity("sunshine_today", "Sunshine Today", "min", "duration",
+                                "{{ value_json.sunshineTodayMin | default(None) }}", false, SC_TOTAL_INCREASING);
+        publishDiscoveryEntity("sunshine_yesterday", "Sunshine Yesterday", "min", "duration",
+                                "{{ value_json.sunshineYesterdayMin | default(None) }}", false, SC_MEASUREMENT);
+    }
+    // UV index: from a wireless sensor, or from the PCB v2.0 UV input when calibrated
+    const bool uvFromInput = !rf && ioV2() && ioUvActive() && gCfg.uvIndexEn == 1 &&
+                             uvCalibrationValid(gCfg.uvCalibrated == 1, gCfg.uvIndexSlope, gCfg.uvIndexOffset);
+    {
+        const DiscoveryCondition uv(rfHas(HG_UV) || uvFromInput);
+        publishDiscoveryEntity("uv_index", "UV Index", "index", nullptr,
+                                "{{ value_json.uvIndex | default(None) }}", false, SC_MEASUREMENT);
+    }
+    {
+        const DiscoveryCondition updateCheck(gCfg.updateCheckEn);
         publishDiscoveryEntity("firmware_update", "Firmware Update", nullptr, nullptr,
                                 "{{ value_json.firmwareUpdate | default('none') }}");
+    }
     // DS18B20 probes are hot-pluggable and only auto-detected once per uplink
     // cycle, so all 3 slots are always published; an unconnected probe just
-    // shows as unavailable in HA instead of flapping the entity list.
+    // shows as unavailable in HA instead of flapping the entity list (the
+    // array itself is left out of the JSON while no probe is found).
     // (3 matches MAX_SENSORS_PER_BUS in main.cpp.)
     constexpr int kMaxDs18b20 = 3;
     for (int i = 0; i < kMaxDs18b20; i++) {
-        char key[16], name[24], tmpl[48];
+        char key[16], name[24];
         snprintf(key,  sizeof(key),  "ds18b20_%d", i);
         snprintf(name, sizeof(name), "Temperature Probe %d", i);
-        snprintf(tmpl, sizeof(tmpl), "{{ value_json.ds18b20[%d] | default(None) }}", i);
-        publishDiscoveryEntity(key, name, tempUnit, "temperature", tmpl);
+        snprintf(tmpl, sizeof(tmpl), "{{ (value_json.ds18b20 | default([]))[%d] | default(None) }}", i);
+        publishDiscoveryEntity(key, name, tempUnit, "temperature", tmpl, false, SC_MEASUREMENT);
     }
-    if (gCfg.lipoEn) {
+    {
+        const DiscoveryCondition lipo(gCfg.lipoEn);
         publishDiscoveryEntity("battery", "Battery Voltage", "V", "voltage",
-                                "{{ value_json.batteryVolt | default(None) }}");
+                                "{{ value_json.batteryVolt | default(None) }}", false, SC_MEASUREMENT);
     }
-    // PCB v2.0 I/O block
-    if (ioV2()) {
-        if (ioUvActive()) {
+    {   // PCB v2.0 I/O block
+        const DiscoveryCondition full(ioV2());
+        {
+            const DiscoveryCondition uvInput(ioUvActive());
             publishDiscoveryEntity("uv_sensor_volts", "UV Sensor Voltage", "V", "voltage",
-                                    "{{ value_json.uvSensorVolts | default(None) }}");
-            if (!rf && gCfg.uvIndexEn == 1 &&
-                uvCalibrationValid(gCfg.uvCalibrated == 1, gCfg.uvIndexSlope, gCfg.uvIndexOffset))
-                publishDiscoveryEntity("uv_index", "UV Index", "index", nullptr,
-                                        "{{ value_json.uvIndex | default(None) }}");
+                                    "{{ value_json.uvSensorVolts | default(None) }}", false, SC_MEASUREMENT);
         }
-        if (gCfg.wind2Mode) {
-            publishDiscoveryEntity("wind2_speed", "Wind 2 Speed", windUnit, nullptr,
-                                    "{{ value_json.wind2.speed | default(None) }}");
-            publishDiscoveryEntity("wind2_gust", "Wind 2 Gust", windUnit, nullptr,
-                                    "{{ value_json.wind2.gust | default(None) }}");
-            if (ioWind2DirActive())
-                publishDiscoveryEntity("wind2_dir", "Wind 2 Direction", "\xC2\xB0", nullptr,
-                                        "{{ value_json.wind2.dirDeg | default(None) }}");
+        {
+            const DiscoveryCondition wind2(gCfg.wind2Mode != 0);
+            publishDiscoveryEntity("wind2_speed", "Wind 2 Speed", windUnit, "wind_speed",
+                                    nestedTemplate(tmpl, sizeof(tmpl), "wind2", "speed"), false, SC_MEASUREMENT);
+            publishDiscoveryEntity("wind2_gust", "Wind 2 Gust", windUnit, "wind_speed",
+                                    nestedTemplate(tmpl, sizeof(tmpl), "wind2", "gust"), false, SC_MEASUREMENT);
+            const DiscoveryCondition wind2Dir(ioWind2DirActive());
+            publishDiscoveryEntity("wind2_dir", "Wind 2 Direction", "\xC2\xB0", nullptr,
+                                    nestedTemplate(tmpl, sizeof(tmpl), "wind2", "dirDeg"));
         }
-        if (ioAuxAinActive())
+        {
+            const DiscoveryCondition auxAnalog(ioAuxAinActive());
             publishDiscoveryEntity("aux_analog", "AUX Analog Input", "V", "voltage",
-                                    "{{ value_json.auxAnalogV | default(None) }}");
-        if (gCfg.auxPulseEn && !gCfg.wind2Mode) {
-            publishDiscoveryEntity("aux_pulses", "AUX Pulses (cycle)", nullptr, nullptr,
-                                    "{{ value_json.auxPulses | default(None) }}");
-            publishDiscoveryEntity("aux_pulses_total", "AUX Pulses Total", nullptr, nullptr,
-                                    "{{ value_json.auxPulsesTotal | default(None) }}");
+                                    "{{ value_json.auxAnalogV | default(None) }}", false, SC_MEASUREMENT);
         }
-        if (gCfg.heaterMode)
+        {
+            const DiscoveryCondition auxPulses(gCfg.auxPulseEn && !gCfg.wind2Mode);
+            publishDiscoveryEntity("aux_pulses", "AUX Pulses (cycle)", nullptr, nullptr,
+                                    "{{ value_json.auxPulses | default(None) }}", false, SC_MEASUREMENT);
+            publishDiscoveryEntity("aux_pulses_total", "AUX Pulses Total", nullptr, nullptr,
+                                    "{{ value_json.auxPulsesTotal | default(None) }}", false, SC_TOTAL_INCREASING);
+        }
+        {
+            const DiscoveryCondition heater(gCfg.heaterMode != 0);
             publishDiscoveryEntity("heater_duty", "Heater", "%", nullptr,
-                                    "{{ value_json.heater.dutyPct | default(None) }}");
-        if (gCfg.fanMode)
+                                    nestedTemplate(tmpl, sizeof(tmpl), "heater", "dutyPct"), false, SC_MEASUREMENT);
+        }
+        {
+            const DiscoveryCondition fan(gCfg.fanMode != 0);
             publishDiscoveryEntity("fan_duty", "Fan", "%", nullptr,
-                                    "{{ value_json.fan.dutyPct | default(None) }}");
-        if (gCfg.tachoEn)
+                                    nestedTemplate(tmpl, sizeof(tmpl), "fan", "dutyPct"), false, SC_MEASUREMENT);
+        }
+        {
+            const DiscoveryCondition tacho(gCfg.tachoEn != 0);
             publishDiscoveryEntity("fan_rpm", "Fan Speed", "rpm", nullptr,
-                                    "{{ value_json.fan.rpm | default(None) }}");
-        if (gCfg.veDirectEn) {
+                                    nestedTemplate(tmpl, sizeof(tmpl), "fan", "rpm"), false, SC_MEASUREMENT);
+        }
+        {
+            const DiscoveryCondition victron(gCfg.veDirectEn != 0);
             publishDiscoveryEntity("victron_battery_v", "Victron Battery Voltage", "V", "voltage",
-                                    "{{ value_json.victron.batteryV | default(None) }}");
+                                    nestedTemplate(tmpl, sizeof(tmpl), "victron", "batteryV"), false, SC_MEASUREMENT);
             publishDiscoveryEntity("victron_battery_a", "Victron Battery Current", "A", "current",
-                                    "{{ value_json.victron.batteryA | default(None) }}");
+                                    nestedTemplate(tmpl, sizeof(tmpl), "victron", "batteryA"), false, SC_MEASUREMENT);
             publishDiscoveryEntity("victron_pv_w", "Victron PV Power", "W", "power",
-                                    "{{ value_json.victron.pvW | default(None) }}");
+                                    nestedTemplate(tmpl, sizeof(tmpl), "victron", "pvW"), false, SC_MEASUREMENT);
             publishDiscoveryEntity("victron_yield_today", "Victron Yield Today", "kWh", "energy",
-                                    "{{ value_json.victron.yieldTodayKWh | default(None) }}");
+                                    nestedTemplate(tmpl, sizeof(tmpl), "victron", "yieldTodayKWh"), false, SC_TOTAL_INCREASING);
             publishDiscoveryEntity("victron_soc", "Victron State of Charge", "%", "battery",
-                                    "{{ value_json.victron.socPct | default(None) }}");
+                                    nestedTemplate(tmpl, sizeof(tmpl), "victron", "socPct"), false, SC_MEASUREMENT);
             publishDiscoveryEntity("victron_load_a", "Victron Load Current", "A", "current",
-                                    "{{ value_json.victron.loadA | default(None) }}");
+                                    nestedTemplate(tmpl, sizeof(tmpl), "victron", "loadA"), false, SC_MEASUREMENT);
         }
     }
     publishDiscoveryEntity("cpu_temp", "CPU Temperature", tempUnit, "temperature",
-                            "{{ value_json.cpuTemp | default(None) }}");
+                            "{{ value_json.cpuTemp | default(None) }}", false, SC_MEASUREMENT);
     publishDiscoveryEntity("reset_reason", "Last Restart", nullptr, nullptr,
                             "{{ value_json.resetReason | default(None) }}");
-    if (gCfg.debugMode) {
+    {
+        const DiscoveryCondition debug(gCfg.debugMode != 0);
         publishDiscoveryEntity("free_heap", "Free Heap", "KiB", nullptr,
-                                "{{ value_json.freeHeapKiB | default(None) }}");
+                                "{{ value_json.freeHeapKiB | default(None) }}", false, SC_MEASUREMENT);
         publishDiscoveryEntity("uptime", "Uptime", "h", nullptr,
-                                "{{ value_json.uptimeH | default(None) }}");
+                                "{{ value_json.uptimeH | default(None) }}", false, SC_TOTAL_INCREASING);
         publishDiscoveryEntity("cycle", "Cycle Counter", nullptr, nullptr,
-                                "{{ value_json.cycle | default(None) }}");
+                                "{{ value_json.cycle | default(None) }}", false, SC_TOTAL_INCREASING);
     }
-    double lat, lon;
-    if (astroLocation(lat, lon)) {   // sun / moon (astro.h): /api/data "astro"
+    {   // sun / moon (astro.h): /api/data "astro", left out until the clock is set
+        double lat, lon;
+        const DiscoveryCondition astro(astroLocation(lat, lon));
         static const char* const ev[][2] = { { "sunrise", "Sunrise" }, { "sunset", "Sunset" },
                                              { "moonrise", "Moonrise" }, { "moonset", "Moonset" } };
-        char tpl[64];
-        for (const auto& e : ev) {
-            snprintf(tpl, sizeof(tpl), "{{ value_json.astro.%s | default(None) }}", e[0]);
-            publishDiscoveryEntity(e[0], e[1], nullptr, "timestamp", tpl);
-        }
+        for (const auto& e : ev)
+            publishDiscoveryEntity(e[0], e[1], nullptr, "timestamp", nestedTemplate(tmpl, sizeof(tmpl), "astro", e[0]));
         publishDiscoveryEntity("moon_phase", "Moon Phase", nullptr, nullptr,
-                                "{{ value_json.astro.moonPhase | default(None) }}");
+                                nestedTemplate(tmpl, sizeof(tmpl), "astro", "moonPhase"));
         publishDiscoveryEntity("moon_illumination", "Moon Illumination", "%", nullptr,
-                                "{{ value_json.astro.moonIlluminationPct | default(None) }}");
+                                nestedTemplate(tmpl, sizeof(tmpl), "astro", "moonIlluminationPct"), false, SC_MEASUREMENT);
     }
     {   // one binary sensor per alarm rule (alarms.h): state <prefix>/alarm/<n> ON / OFF
         std::unique_ptr<AlarmRule[]> rules(new (std::nothrow) AlarmRule[ALARM_RULES]);   // ~2 KB while announcing
@@ -430,7 +529,7 @@ void publishHomeAssistantDiscovery()
         }
     }
     publishDiscoveryEntity("send_fail_count", "Send Fail Count", nullptr, nullptr,
-                            "{{ value_json.status.sendFailCount | default(None) }}");
+                            nestedTemplate(tmpl, sizeof(tmpl), "status", "sendFailCount"), false, SC_MEASUREMENT);
     if (!haDiscoveryFailed) outReport(OUT_HA, true);
 }
 
@@ -492,8 +591,18 @@ unsigned long           lastHaRfPollMs = 0;
 // (see params.h). Two accepted shapes:
 //   {"cmd":"resetRain"|"resetAuxPulses"|"restart"|"debugOn"|"debugOff"|"portal"|"factoryReset"}
 //   {"params":[{"id":1,"value":300}, ...]}   (same paramId scheme as FPort1 0x10)
-void handleCommandMessage(char* /*topic*/, byte* payload, unsigned int length)
+//
+// Only live messages are executed: a retained message on the command topic
+// (left on the broker, delivered again on every reconnect) is ignored, so a
+// retained "restart" can never cause a restart loop. Nothing is executed
+// while "MQTT commands" is off.
+void handleCommandMessage(char* topic, byte* payload, unsigned int length)
 {
+    if (strcmp(topic, topicCmd) != 0 || !gCfg.mqttCtrlEn) return;
+    if (mqttReceivedRetained(topic)) {
+        if (length) dbgSerial.println("MQTT cmd: retained message ignored (commands must be sent without retain)");
+        return;
+    }
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload, length);
     if (err) {
@@ -517,6 +626,10 @@ void handleCommandMessage(char* /*topic*/, byte* payload, unsigned int length)
     bool anyApplied = false;
     for (JsonObject p : doc["params"].as<JsonArray>()) {
         uint8_t paramId = p["id"].as<uint8_t>();
+        if (p["value"].isNull()) {   // a missing value is refused, never applied as 0
+            dbgSerial.printf("MQTT cmd: param %u without a value -> INVALID\n", paramId);
+            continue;
+        }
         // as<long>() + clamp: as<int16_t>() returns 0 for out-of-range input,
         // which would be applied as a valid value for some parameters.
         int16_t value   = clampToParamValue(p["value"].as<long>());
@@ -816,12 +929,14 @@ void pollMqtt(unsigned long now)
     if (!gCfg.wifiEn || !gCfg.mqttEn || wifiState != WifiState::Up) return;
 
     if (mqttClient.connected()) {
+        mqttBackoff.stillConnected(now);
         mqttClient.loop();
         // alarm states (retained) and events (alarms.h)
         alarmsMqttService([](const char* t, const char* p, bool retain) {
             return mqttClient.publish(t, (const uint8_t*)p, strlen(p), retain); }, topicPrefix(), alarmsMqttAll);
         alarmsMqttAll = false;
         if (alarmsConfigChanged()) publishHomeAssistantDiscovery();   // rules renamed / added / deleted
+        else haGroupsCheck();   // a value group seen for the first time, a source set to / from Off
         if (now - lastHaRfPollMs >= HA_RF_POLL_MS) {
             lastHaRfPollMs = now;
             haRfPoll(haRfOut(), HA_RF_CONFIGS_PER_POLL);
@@ -829,17 +944,20 @@ void pollMqtt(unsigned long now)
         return;
     }
 
-    if (mqttRetryMs && now - lastMqttAttemptMs < mqttRetryMs) return;
-    lastMqttAttemptMs = now;
+    mqttBackoff.sessionLost(now);
+    if (!mqttBackoff.attemptAllowed(now)) return;
+    mqttBackoff.attemptStarted(now);
 
     switch (gCfg.mqttTlsMode) {
         case MQTT_TLS_VERIFY:
-            if (gCfg.mqttCaCert[0] != '\0') {
-                secureClient.setCACert(gCfg.mqttCaCert);
-            } else {
-                dbgSerial.println("MQTT: mqtttls=2 (verify) but no CA cert configured — falling back to insecure TLS.");
-                secureClient.setInsecure();
+            // "verified" without a CA certificate: no connection (never a silent fall-back to unverified TLS)
+            if (gCfg.mqttCaCert[0] == '\0') {
+                mqttBackoff.attemptFailed();
+                outReport(OUT_MQTT, false, 0, "verified TLS: no CA certificate");
+                dbgSerial.println("MQTT: security 'verified' but no CA certificate configured - not connecting.");
+                return;
             }
+            secureClient.setCACert(gCfg.mqttCaCert);
             mqttClient.setClient(secureClient);
             break;
         case MQTT_TLS_INSECURE:
@@ -864,7 +982,7 @@ void pollMqtt(unsigned long now)
                               topicAvail, 0, true, AVAIL_OFFLINE);
 
     if (connected) {
-        mqttRetryMs = 0;
+        mqttBackoff.connected(millis());   // after connect(): its (TLS) handshake time is not session time
         dbgSerial.printf("MQTT connected as '%s', topic prefix '%s'\n", mqttClientId(), topicPrefix());
         mqttClient.publish(topicAvail, AVAIL_ONLINE, /*retain=*/true);
         if (gCfg.mqttCtrlEn) mqttClient.subscribe(topicCmd);
@@ -873,10 +991,10 @@ void pollMqtt(unsigned long now)
         alarmsMqttAll = true;     // all alarm states again (retained)
         lastHaRfPollMs = now;
     } else {
-        mqttRetryMs = mqttRetryMs ? min(mqttRetryMs * 2, MQTT_RETRY_MAX_MS) : MQTT_RETRY_MIN_MS;
+        mqttBackoff.attemptFailed();
         outReport(OUT_MQTT, false, mqttClient.state(), "connect failed");
         dbgSerial.printf("MQTT connect failed, rc=%d (retry in %lus)\n",
-                      mqttClient.state(), mqttRetryMs / 1000);
+                      mqttClient.state(), mqttBackoff.retryMs / 1000);
     }
 }
 
@@ -928,18 +1046,25 @@ String wifiCurrentPassword()
     pass[sizeof(conf.sta.password)] = '\0';   // a 64-char PSK has no terminator
     return String(pass);
 }
-bool mqttIsConnected() { return gCfg.mqttEn && mqttClient.connected(); }
+bool mqttIsConnected() { return gCfg.mqttEn && mqttConnectedForOtherTasks.load(); }
+
+namespace {
+// loop task only
+bool mqttSessionLive() { return gCfg.wifiEn && gCfg.mqttEn && wifiState == WifiState::Up && mqttClient.connected(); }
+void refreshMqttConnectedFlag() { mqttConnectedForOtherTasks.store(mqttSessionLive()); }
+}
 
 void wifiMqttPoll()
 {
     const unsigned long now = millis();
     pollWifi(now);
     pollMqtt(now);
+    refreshMqttConnectedFlag();
 }
 
 void mqttPublishTelemetry(const PathValues* pv)
 {
-    if (!mqttIsConnected()) return;
+    if (!mqttSessionLive()) return;
 
     JsonDocument doc;
     buildJsonPayload(doc, pv);
@@ -959,6 +1084,7 @@ void mqttPublishTelemetry(const PathValues* pv)
         ok = out.written() == n && mqttClient.endPublish();
         if (!ok) mqttClient.disconnect();   // a cut-off packet: the stream is out of step, reconnect
     }
+    refreshMqttConnectedFlag();
     dbgSerial.printf("MQTT publish to '%s' (%u bytes): %s\n", topicData, (unsigned)n, ok ? "OK" : "FAILED");
     outReport(OUT_MQTT, ok, ok ? 0 : mqttClient.state(), "publish failed");
     doc.clear();   // free before the per-sensor documents

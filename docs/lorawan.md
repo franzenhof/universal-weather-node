@@ -48,7 +48,7 @@ Works the same way, no firmware changes needed:
 2. In TTN, create an **OTAA** device (LoRaWAN 1.0.x, or 1.1 with NwkKey = AppKey) and copy DevEUI / JoinEUI / AppKey into the portal.
 3. Use the logic of `decoder.js` as the TTN payload formatter.
 
-**Fair use:** TTN's public Sandbox limits each node to **30 seconds uplink airtime and 10 downlinks per day**. Choose the interval from the actual payload size and data rate using an [airtime calculator](https://avbentem.github.io/airtime-calculator/ttn/eu868); **60–300 s is not automatically compliant**, especially at high spreading factors. Disable unused sensors and debug fields. A 35-byte binary payload fits every EU868 data rate, but not every region/data rate. Private networks still have regional duty-cycle limits. See [TTN's policy](https://www.thethingsnetwork.org/docs/lorawan/duty-cycle/).
+**Fair use:** TTN's public Sandbox limits each node to **30 seconds uplink airtime and 10 downlinks per day**. Choose the interval from the actual payload size and data rate using an [airtime calculator](https://avbentem.github.io/airtime-calculator/ttn/eu868); **60–300 s is not automatically compliant**, especially at high spreading factors. Disable unused sensors and debug fields. The 34-byte binary payload (wind + rain + BME280 + 3 × DS18B20 + LiPo) fits every EU868 data rate, but not every region/data rate. Private networks still have regional duty-cycle limits. See [TTN's policy](https://www.thethingsnetwork.org/docs/lorawan/duty-cycle/).
 
 ## Join and Session
 

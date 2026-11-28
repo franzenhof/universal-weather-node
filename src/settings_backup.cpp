@@ -41,17 +41,13 @@ void backupValue(JsonVariantConst v, char* out, size_t len)
 
 int backupPrepare(JsonObject set, JsonObjectConst cur, JsonArray changes, bool (*secretSame)(const char*, const char*))
 {
-    const char* drop[96];
-    size_t ndrop = 0;
+    auto notOnThisPage = [&](const char* key) { return cur[key].isNull() && !backupIsSecret(key); };
     int n = 0;
     char num[32];
     for (JsonPair kv : set) {
         const char* key = kv.key().c_str();
+        if (notOnThisPage(key)) continue;   // dropped below
         const bool secret = backupIsSecret(key);
-        if (cur[key].isNull() && !secret) {
-            if (ndrop < sizeof(drop) / sizeof(drop[0])) drop[ndrop++] = key;
-            continue;
-        }
         // strings as they are (the CA certificate is long), anything else as the form sends it
         const char* v = kv.value().as<const char*>();
         if (!v) { backupValue(kv.value(), num, sizeof(num)); v = num; }
@@ -68,6 +64,19 @@ int backupPrepare(JsonObject set, JsonObjectConst cur, JsonArray changes, bool (
         c["key"] = key; c["old"] = old; c["new"] = v;
         n++;
     }
-    for (size_t i = 0; i < ndrop; i++) set.remove(drop[i]);
+    // Drop every field the page does not have, however many: one at a time
+    // (a removal invalidates the iterator), each search resuming at the
+    // position of the last removal - the fields before it are known ones.
+    size_t resumeAt = 0;
+    for (;;) {
+        size_t position = 0;
+        JsonObject::iterator unknown = set.end();
+        for (JsonObject::iterator it = set.begin(); it != set.end(); ++it, ++position) {
+            if (position >= resumeAt && notOnThisPage(it->key().c_str())) { unknown = it; break; }
+        }
+        if (unknown == set.end()) break;
+        set.remove(unknown);
+        resumeAt = position;
+    }
     return n;
 }

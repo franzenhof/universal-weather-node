@@ -16,6 +16,11 @@ static bool lookup(const char* n, PhValue& o, void*)
     if (!strcmp(n, "hum"))  { o.kind = PK_PLAIN; o.v = 63.4f;  return true; }
     if (!strcmp(n, "uv"))   { o.kind = PK_PLAIN; o.v = 3.25f; o.decimals = 1; return true; }
     if (!strcmp(n, "name")) { o.kind = PK_TEXT;  o.text = "Frost & \"ice\"/1"; return true; }
+    if (!strcmp(n, "message")) {   // an alarm message: up to 199 characters
+        static std::string longText(150, 'm');
+        longText[0] = '"';
+        o.kind = PK_TEXT; o.text = longText.c_str(); return true;
+    }
     return false;   // unknown, or "missing" (not available now)
 }
 
@@ -61,6 +66,25 @@ int main()
     char tiny[1];
     phRender("{temp}", tiny, sizeof(tiny), PE_NONE, lookup, nullptr);
     assert(tiny[0] == '\0');
+    // a text value is never cut short of the output buffer (it used to stop at 95 characters)
+    {
+        const std::string msg = r("{message}");
+        assert(msg.size() == 150 && msg[0] == '"' && msg[149] == 'm');
+        assert(r("{\"t\":\"{message}\"}", PE_JSON).size() == 150 + 1 + 8);   // the quote escaped
+    }
+    // cut at the buffer: reported, and never in the middle of an escape
+    {
+        char out[16];
+        bool cut = false;
+        phRender("{temp}", out, sizeof(out), PE_NONE, lookup, nullptr, &cut);
+        assert(!cut && std::string(out) == "21.4");
+        phRender("x={name}", out, sizeof(out), PE_URL, lookup, nullptr, &cut);
+        assert(cut && std::string(out) == "x=Frost%20%26");   // the next "%20" did not fit whole: left out
+        phRender("{\"n\":\"{name}\"}", out, 13, PE_JSON, lookup, nullptr, &cut);
+        assert(cut && std::string(out) == "{\"n\":\"Frost ");
+        phRender("0123456789abcdefgh", out, sizeof(out), PE_NONE, lookup, nullptr, &cut);
+        assert(cut && strlen(out) == sizeof(out) - 1);
+    }
     puts("placeholders ok");
     // default unit (defUnit): applied without a unit suffix, an explicit one wins
     {

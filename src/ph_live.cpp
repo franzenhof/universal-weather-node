@@ -26,7 +26,7 @@ void phLiveInit(PhLive& l, const WindStats* w10)
         time_t t = (time_t)e;
         struct tm u, lt;
         gmtime_r(&t, &u);
-        localtime_r(&t, &lt);
+        localTimeOf(t, lt);
         strftime(l.timeUtc, sizeof(l.timeUtc), "%Y-%m-%d %H:%M:%S", &u);
         strftime(l.timeLocal, sizeof(l.timeLocal), "%Y-%m-%d %H:%M:%S", &lt);
         snprintf(l.epoch, sizeof(l.epoch), "%lld", (long long)e);

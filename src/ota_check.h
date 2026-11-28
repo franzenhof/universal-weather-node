@@ -21,7 +21,7 @@
 
 enum OtaImageKind : uint8_t { OTA_IMAGE_APP, OTA_IMAGE_FACTORY_OR_BOOTLOADER, OTA_IMAGE_NOT_ESP32, OTA_IMAGE_TOO_SHORT };
 
-constexpr size_t OTA_APP_HEADER_LEN    = 0x24;
+constexpr size_t OTA_APP_HEADER_LEN    = 0x94;     // up to the start of the descriptor's ESP-IDF version (0x90)
 constexpr size_t OTA_FACTORY_PT_OFFSET = 0x8000;    // partition table in the factory image
 constexpr size_t OTA_FACTORY_PT_LEN    = 0xC00;     // ESP_PARTITION_TABLE_MAX_LEN
 constexpr size_t OTA_FACTORY_APP_OFFSET = 0x10000;  // app0 = first OTA slot (partitions.csv)
@@ -32,6 +32,19 @@ inline OtaImageKind otaImageKind(const uint8_t* d, size_t n)
     if (d[0] != 0xE9) return OTA_IMAGE_NOT_ESP32;
     if (d[0x20] == 0x32 && d[0x21] == 0x54 && d[0x22] == 0xCD && d[0x23] == 0xAB) return OTA_IMAGE_APP;
     return OTA_IMAGE_FACTORY_OR_BOOTLOADER;
+}
+
+// Firmware 4.x (Heltec V4 only, other partition table): built with ESP-IDF 5,
+// 1.x / 2.x with ESP-IDF 4 - the app descriptor (0x20) has the version at +0x70
+// ("v4.4.7-dirty", "5.5.6..."). A 3.x from this code base stays on ESP-IDF 4 and is accepted.
+// Over the air 4.x would leave a V3 without a
+// working firmware.
+inline bool otaImageIsV4Line(const uint8_t* d, size_t n)
+{
+    if (otaImageKind(d, n) != OTA_IMAGE_APP) return false;
+    const uint8_t* v = d + 0x90;
+    if (*v == 'v') v++;
+    return *v >= '5' && *v <= '9';
 }
 
 // Compares the partition entries (32-byte records with magic 0xAA50, up to
@@ -71,6 +84,8 @@ public:
                 pos_ += k; d += k; n -= k;
                 if (hdrLen_ < OTA_APP_HEADER_LEN) return true;
                 OtaImageKind kind = otaImageKind(hdr_, hdrLen_);
+                if (otaImageIsV4Line(hdr_, hdrLen_))
+                    return reject("this is firmware 4.x for the Heltec V4 only - on a V4 install its -factory.bin over USB; a V3 stays on 2.x");
                 if (kind == OTA_IMAGE_APP) {
                     mode_ = APP; factory_ = false;
                     if (!write(hdr_, hdrLen_, ctx)) return reject("write failed");

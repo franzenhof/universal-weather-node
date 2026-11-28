@@ -45,7 +45,7 @@ const char HELP_PAGE_HTML[] PROGMEM = R"HELPPAGE(
 <p><a href="/">&larr; Back</a></p>
 <div id="content">Loading...</div>
 <script>
-function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // Matches GitHub's own heading-slug algorithm: each space becomes its own
 // hyphen (runs of spaces are NOT collapsed), so ids agree with the README's
 // own markdown links whether viewed on GitHub/git server or on this page —
@@ -53,12 +53,12 @@ function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').repla
 // become "--", not "-".
 function slugify(t){return t.toLowerCase().replace(/[^a-z0-9 -]/g,'').trim().replace(/ /g,'-');}
 function renderInline(t){
-  t=escapeHtml(t);
-  t=t.replace(/`([^`]+)`/g,function(_,c){return '<code>'+c+'</code>';});
+  var codes=[];
+  t=escapeHtml(t).replace(/`([^`]+)`/g,function(_,c){codes.push('<code>'+c+'</code>');return '\u0000'+(codes.length-1)+'\u0000';});   // code spans stay literal
   t=t.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2">$1</a>');
   t=t.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
   t=t.replace(/\*([^*]+)\*/g,'<em>$1</em>');
-  return t;
+  return t.replace(/\u0000(\d+)\u0000/g,function(_,i){return codes[i];});
 }
 function splitRow(l){var s=l.trim().replace(/^\|/,'').replace(/\|$/,'');return s.split('|').map(function(c){return c.trim();});}
 function renderTable(rows){

@@ -1,6 +1,7 @@
 #include "gz_send.h"
 #include "psram.h"
 #include "serial_log.h"
+#include "http_util.h"
 #include <WebServer.h>
 #include <esp_heap_caps.h>
 #include <esp32s3/rom/miniz.h>
@@ -12,12 +13,7 @@ namespace {
 // deflate data, 8-byte trailer (CRC32, size)
 constexpr size_t GZ_HEADER = 10, GZ_TRAILER = 8;
 
-bool acceptsGzip(WebServer& srv)
-{
-    String ae = srv.header("Accept-Encoding");
-    ae.toLowerCase();
-    return ae.indexOf("gzip") >= 0;
-}
+bool acceptsGzip(WebServer& srv) { return httpAcceptsGzip(srv.header("Accept-Encoding").c_str()); }
 
 // Fallback: inflate into a 32 KB wrapping window (the LZ dictionary) and send
 // every filled part. Heap: tinfl state (~11 KB) + window, freed afterwards.
@@ -35,14 +31,18 @@ bool sendInflated(WebServer& srv, const uint8_t* gz, size_t gzLen, size_t rawLen
     size_t inLeft = gzLen - GZ_HEADER - GZ_TRAILER;
     size_t ofs = 0;
     tinfl_status st;
+    bool sent = true;   // false = the client is gone
     do {
         size_t inBytes = inLeft, outBytes = TINFL_LZ_DICT_SIZE - ofs;
         st = tinfl_decompress(d, in, &inBytes, win, win + ofs, &outBytes, 0);   // all input present, wrapping window
         in += inBytes; inLeft -= inBytes;
-        if (outBytes) srv.sendContent((const char*)win + ofs, outBytes);
+        if (outBytes) { srv.sendContent((const char*)win + ofs, outBytes); sent = srv.client().connected(); }
         ofs = (ofs + outBytes) & (TINFL_LZ_DICT_SIZE - 1);
-    } while (st == TINFL_STATUS_HAS_MORE_OUTPUT);
-    if (st != TINFL_STATUS_DONE) dbgSerial.printf("gzip asset: inflate failed (%d)\n", (int)st);
+    } while (sent && st == TINFL_STATUS_HAS_MORE_OUTPUT);
+    if (!sent || st != TINFL_STATUS_DONE) {   // a body cut short must not end as a complete response: closed
+        if (sent) dbgSerial.printf("gzip asset: inflate failed (%d)\n", (int)st);
+        srv.client().stop();
+    }
     free(win);
     free(d);
     return true;

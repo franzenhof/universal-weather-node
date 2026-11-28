@@ -2,6 +2,7 @@
 #include "system_restart.h"
 #include "globals.h"
 #include "params.h"
+#include "config_merge.h"
 #include "board_io.h"
 #include "heltec_board.h"
 #include "psram.h"
@@ -24,6 +25,7 @@
 #include "serial_log.h"
 #include "units.h"
 #include "time_sync.h"
+#include "rain_stats.h"
 #include "wx_upload.h"
 #include "lora_transport.h"
 #include "wind_window.h"
@@ -40,6 +42,7 @@
 #include "astro.h"
 #include "rf_stats.h"
 #include "rf_names.h"
+#include "rf_minrssi.h"
 #include "ph_live.h"
 #include "series.h"
 #include "history.h"
@@ -57,6 +60,7 @@
 #include "portal_pages.h"   // /decoder, /calibrate*: the portal's pages and handlers
 
 #include <Arduino.h>
+#include <esp_random.h>
 #include <new>
 #include <WebServer.h>
 #include <ESPmDNS.h>
@@ -71,6 +75,14 @@ namespace {
 
 WebServer server(80);
 bool      serverStarted = false;
+
+// This start's ID for the wizard cookie (setup_wizard.h); esp_random() is a
+// true random number once the radio runs, the first call comes from a request.
+uint32_t wizardBootId()
+{
+    static uint32_t id = esp_random();
+    return id;
+}
 
 // Guards `server` (begin/stop/handleClient) and `serverStarted` themselves —
 // separate from history.cpp's own mutex, which guards different data (the
@@ -604,24 +616,49 @@ void addWeatherNetworkRows(HtmlOut& html)
 }
 
 // Status page box "Davis": receiver state and the last value per message type.
-// Status page: per-sensor buttons Mine / not Mine and Hide (POST
-// /api/rf/sensor, Digest like the settings, back to the status page).
-// back: "setup" = return to the wizard (step 2) instead of the status page
-String rfQuickActions(uint32_t id, const char* back = nullptr)
+// Per-sensor buttons Mine / not Mine and Hide (POST /api/rf/sensor, Digest
+// like the settings). Status page: one small form per sensor, back to the
+// status page (rfQuickActions). Setup wizard step 2: its rows are inside the
+// wizard's own form, and a form inside a form is dropped by the HTML parser
+// (the first row's buttons would post the wizard form) - so there the
+// buttons point with form='qa<ID>' to a form rendered after the wizard's
+// (rfQuickActionButtons + rfQuickActionForm, back = "setup": to step 2).
+namespace {
+// formId: nullptr = the buttons belong to the form around them
+String rfQuickActionButtons(uint32_t id, const char* formId)
+{
+    String owner;
+    if (formId) { owner = " form='"; owner += formId; owner += "'"; }
+    String f;
+    if (rfStateOf(id) == RF_STATE_MINE)
+        f += String("<button class='sb'") + owner + " name='action' value='received' title='" + T(T_st_qa_unmine) + "'>&#9734;</button>";
+    else
+        f += String("<button class='sb'") + owner + " name='action' value='mine' title='" + T(T_st_qa_mine) + "'>&#9733;</button>";
+    f += String("<button class='sb'") + owner + " name='action' value='hide' title='" + T(T_st_qa_hide) + "'>&#10005;</button>";
+    return f;
+}
+
+// The form with the sensor's hidden fields; formId: its id attribute (or nullptr)
+String rfQuickActionFormStart(uint32_t id, const char* back, const char* formId)
 {
     char ids[12];
     snprintf(ids, sizeof(ids), "%08lX", (unsigned long)id);
-    String f = " <form class='inl' method='POST' action='/api/rf/sensor'><input type='hidden' name='redirect' value='1'>";
+    String f = "<form class='inl' method='POST' action='/api/rf/sensor'";
+    if (formId) { f += " id='"; f += formId; f += "'"; }
+    f += "><input type='hidden' name='redirect' value='1'>";
     if (back) { f += "<input type='hidden' name='back' value='"; f += back; f += "'>"; }
     f += "<input type='hidden' name='id' value='";
     f += ids;
     f += "'>";
-    if (rfStateOf(id) == RF_STATE_MINE)
-        f += String("<button class='sb' name='action' value='received' title='") + T(T_st_qa_unmine) + "'>&#9734;</button>";
-    else
-        f += String("<button class='sb' name='action' value='mine' title='") + T(T_st_qa_mine) + "'>&#9733;</button>";
-    f += String("<button class='sb' name='action' value='hide' title='") + T(T_st_qa_hide) + "'>&#10005;</button></form>";
     return f;
+}
+
+void quickActionFormId(uint32_t id, char out[12]) { snprintf(out, 12, "qa%08lX", (unsigned long)id); }
+} // namespace
+
+String rfQuickActions(uint32_t id)
+{
+    return " " + rfQuickActionFormStart(id, nullptr, nullptr) + rfQuickActionButtons(id, nullptr) + "</form>";
 }
 
 // radio trace (defined further down)
@@ -779,13 +816,11 @@ void handleStatusPage()
         addRow(html, T(T_st_rain_since_start),   String(doc["rainSinceStart"].as<float>(), 2) + " " + doc["rainUnit"].as<const char*>());
         if (doc["lastRain"].is<const char*>()) {
             String lr = doc["lastRain"].as<const char*>();
-            time_t t = 0;
-            struct tm u = {};
-            if (sscanf(lr.c_str(), "%d-%d-%dT%d:%d", &u.tm_year, &u.tm_mon, &u.tm_mday, &u.tm_hour, &u.tm_min) == 5) {
-                u.tm_year -= 1900; u.tm_mon -= 1;
-                t = mktime(&u);   // UTC string, TZ-independent difference below
-                struct tm nowU; time_t now = time(nullptr); gmtime_r(&now, &nowU);
-                long ageMin = (long)difftime(mktime(&nowU), t) / 60;
+            int y, mo, d, h, mi;
+            if (sscanf(lr.c_str(), "%d-%d-%dT%d:%d", &y, &mo, &d, &h, &mi) == 5) {
+                // UTC string: no TZ (mktime() would read it on this task)
+                const int64_t t = (int64_t)rainYmdDayNumber(y * 10000 + mo * 100 + d) * 86400 + h * 3600 + mi * 60;
+                long ageMin = (long)(((int64_t)time(nullptr) - t) / 60);
                 addRow(html, T(T_st_last_rain), ageMin < 60   ? TF(T_st_ago_min, String(ageMin)) :
                                                 ageMin < 2880 ? TF(T_st_ago_hours, String(ageMin / 60)) :
                                                                 TF(T_st_ago_days, String(ageMin / 1440)));
@@ -865,7 +900,7 @@ void handleStatusPage()
         if (doc["uvIndex"].is<float>())
             addRow(html, T(T_st_uv_index), String(doc["uvIndex"].as<float>(), 2));
     }
-    if (ioV2() && gCfg.wind2Mode) {
+    if (ioV2() && gCfg.wind2Mode && gIo.wind2Valid) {
         const char* wu = windSpeedUnitLabel(gCfg);
         if (ioWind2DirActive()) addRow(html, T(T_st_wind_2_direction), String(gIo.wind2DirDeg) + "&deg;");
         addRow(html, T(T_st_wind_2_speed), String(windSpeedForOutput(gIo.wind2SpeedMs, gCfg), 1) + " " + wu);
@@ -1011,7 +1046,7 @@ void handleStatusPage()
                     String name;
                     appendEscaped(name, rules[i].name[0] ? rules[i].name : alarmSrcKey(rules[i].src));
                     addStateRow(html, rules[i].priority >= 4 ? "bad" : "warn", name.c_str(),
-                                TF(T_st_al_active, agoSeconds(millis() / 1000 - st[i].since)));
+                                TF(T_st_al_active, agoSeconds(alarmClockSec() - st[i].since)));
                 }
                 if (!active) addStateRow(html, "ok", T(T_st_alarms), TF(T_st_al_none, String(defined)));
                 const bool conf[4] = { ch->ntfyTopic[0] != 0, ch->poToken[0] && ch->poUser[0], ch->tgToken[0] && ch->tgChat[0], ch->whUrl[0] != 0 };
@@ -1117,9 +1152,9 @@ void handleStatusPage()
                                     String(windSpeedForOutput(r.windGustMs, gCfg), 1)) + " " + windSpeedUnitLabel(gCfg) +
                                     " &middot; " + trCompass(windDirText((int)lroundf(r.windDirDeg))) + " " +
                                     String((int)lroundf(r.windDirDeg)) + "&deg;" + stale("wind");
-            RfStat* rst = (r.hasRain || r.hasLightning) ? rfStatFor(r.id, false) : nullptr;
-            uint32_t st_t = 0, st_ymd = 0;
-            if (rst) { rfStatsClock(st_t, st_ymd); rfStatRoll(*rst, st_t, st_ymd); }
+            RfStat rstCopy;   // a rolled copy (rf_stats.h)
+            uint32_t st_t = 0;
+            RfStat* rst = (r.hasRain || r.hasLightning) && rfStatSnapshot(r.id, rstCopy, st_t) ? &rstCopy : nullptr;
             if (r.hasRain) {
                 const int dec = gCfg.unitSystem == 1 ? 2 : 1;
                 const String ru = String(" ") + rainUnitLabel(gCfg);
@@ -1137,7 +1172,7 @@ void handleStatusPage()
                 if (rst) v += " &middot; " + TF(T_st_strikes_1h, String(rfStatStrikes1h(*rst, st_t)));
                 if (rst && rst->lastStrike) {
                     time_t tt = (time_t)rst->lastStrike;
-                    struct tm lt; localtime_r(&tt, &lt);
+                    struct tm lt; localTimeOf(tt, lt);
                     char hm[8]; strftime(hm, sizeof(hm), "%H:%M", &lt);
                     v += " &middot; " + TF(T_st_last_strike, hm);
                 }
@@ -1473,6 +1508,7 @@ String rfTraceReceiverInfo()
              : rfSensorsReceiving() ? String("receiving, now listening to ") + rfSensorsListening()
              : String("not receiving (last radio error ") + String(rfSensorsLastError()) + ")";
     r += ", " + String(rfSensorsPacketsTotal()) + " packets since start";
+    if (rfSensorsWatchdogRestarts()) r += ", " + String(rfSensorsWatchdogRestarts()) + " receiver restarts by the receive watchdog";
     if (rfSensorsDetectedProto()) r += ", auto search found type " + String(rfSensorsDetectedProto());
     if (rfSensorsScheduled()) r += ", timed reception for " + String(rfSensorsScheduled()) + " sensors";
     return r;
@@ -1641,7 +1677,7 @@ void handleApiHistory()
 void handleChartPage()
 {
     // first visits after a new start / factory reset: the setup wizard (once per browser session)
-    if (wizardAutoStart(gCfg, server.header("Cookie").indexOf("wnSetup=1") >= 0)) {
+    if (wizardAutoStart(gCfg, wizardCookieShown(server.header("Cookie").c_str(), wizardBootId()))) {
         server.sendHeader("Location", "/setup");
         server.send(302);
         return;
@@ -1852,9 +1888,9 @@ String rfValuesShort(const RfSensorReading& r)
     if (r.hasTemp)      add(String(temperatureForOutput(r.tempC, gCfg), 1) + "&deg;" + temperatureUnitLabel(gCfg));
     if (r.hasHumidity)  add(String(r.humidity) + " %");
     if (r.hasWind)      add(TF(T_set_tv_wind, String(windSpeedForOutput(r.windAvgMs, gCfg), 1) + " " + windSpeedUnitLabel(gCfg)));
-    RfStat* st = (r.hasRain || r.hasLightning) ? rfStatFor(r.id, false) : nullptr;   // today (rf_stats.h)
-    uint32_t t = 0, ymd = 0;
-    if (st) { rfStatsClock(t, ymd); rfStatRoll(*st, t, ymd); }
+    RfStat stCopy;   // today (rf_stats.h): a rolled copy
+    uint32_t t = 0;
+    const RfStat* st = (r.hasRain || r.hasLightning) && rfStatSnapshot(r.id, stCopy, t) ? &stCopy : nullptr;
     if (r.hasRain && st && st->ymd) add(TF(T_st_rf_rain_today, String(rainForOutput(st->rainTodayMm, gCfg), 1) + " " + rainUnitLabel(gCfg)));
     else if (r.hasRain) add(TF(T_st_rain_total, String(rainForOutput(r.rainTotalMm, gCfg), 1) + " " + rainUnitLabel(gCfg)));
     if (r.hasPressure)  add(String(pressureForOutput(r.pressureHpa, gCfg), gCfg.unitSystem == 1 ? 2 : 1) + " " + pressureUnitLabel(gCfg));
@@ -1886,7 +1922,8 @@ void addRfSensorTable(HtmlOut& html)
     sectionStart(html, T(T_set_wireless_sensors), false,
                  T(T_set_9733_mine_numbered_first_in));
     html += "<table class='rft'><tr><th>#</th><th>"; html += T(T_set_th_state); html += "</th><th>ID</th><th>";
-    html += T(T_set_th_name); html += "</th><th>";
+    html += T(T_set_th_name); html += "</th><th class='adv' title='"; html += T(T_set_th_minrssi_hint); html += "'>";
+    html += T(T_set_th_minrssi); html += "</th><th>";
     html += T(T_set_th_sensor); html += "</th><th class='hm'>"; html += T(T_set_th_signal); html += "</th><th class='hm'>";
     html += T(T_set_th_values); html += "</th><th></th></tr>";
     const std::vector<uint32_t> mine = rfParseIds(gCfg.rfIds);
@@ -1906,9 +1943,17 @@ void addRfSensorTable(HtmlOut& html)
             char e[8]; snprintf(e, sizeof(e), "%lX", (unsigned long)eco);
             html += "<br><small class='dim'>Ecowitt "; html += e; html += "</small>";
         }
+        if (rfTwinIndex(id) >= 0) {   // IT+ ID shared with another received sensor (rfItPlusTwin())
+            html += "<br><small style='color:var(--warn)' title='"; html += T(T_set_rf_twin_hint); html += "'>&#9888; ";
+            html += T(T_set_rf_twin); html += "</small>";
+        }
         // user-defined name (rf_names.h)
         html += "</td><td><input name='rfnm_"; html += ids; html += "' maxlength='24' size='10' value='";
-        appendEscaped(html, rfNameOf(id)); html += "'></td><td>";
+        appendEscaped(html, rfNameOf(id)); html += "'></td>";
+        // minimum signal (rf_minrssi.h), advanced only
+        html += "<td class='adv'><input name='rfmr_"; html += ids; html += "' maxlength='4' size='4' placeholder='&ndash;' value='";
+        if (const int mr = rfMinRssiOf(id)) html += String(mr);
+        html += "'></td><td>";
         if (idx >= 0) {
             const RfSensorReading& r = gRfSensors[idx];
             html += rfKindText(r) + "</td><td class='hm'>" + String(r.rssi, 0) + " dBm &middot; " + agoText(r.lastMs) +
@@ -1943,12 +1988,12 @@ void addRfSensorTable(HtmlOut& html)
 
     int hiddenNear = 0;
     for (const RfHiddenSeen& h : gRfHidden)
-        if (h.id && now - h.lastMs <= RF_HIDDEN_RANGE_MS && rfStateOf(h.id) == RF_STATE_HIDDEN) hiddenNear++;
+        if (rfHiddenSeenInRange(h, now)) hiddenNear++;
     html += "<details><summary>" + TF(T_set_hidden_in_range, String(hiddenNear)) + "</summary>";
     if (hiddenNear) {
         html += "<table class='rft'>";
         for (const RfHiddenSeen& h : gRfHidden) {
-            if (!h.id || now - h.lastMs > RF_HIDDEN_RANGE_MS || rfStateOf(h.id) != RF_STATE_HIDDEN) continue;
+            if (!rfHiddenSeenInRange(h, now)) continue;
             char ids[12];
             snprintf(ids, sizeof(ids), "%08lX", (unsigned long)h.id);
             html += "<tr><td>";
@@ -2241,8 +2286,28 @@ void renderCustomUploads(HtmlOut& html)
 
 String gRestoreReport;   // what a settings restore changed: shown once on the next settings page
 
+// A copy of gCfg taken under the locks of the fields other tasks read and
+// the web task writes (weather networks, location / time: wxUploadLock;
+// Loxone host / prefix: loxoneLock). The pages are streamed from it, so no
+// lock is held across socket sends (a slow client would stall the main
+// loop, which takes the same locks). On the heap, not the stack.
+std::unique_ptr<Config> lockedConfigCopy()
+{
+    std::unique_ptr<Config> c(new (std::nothrow) Config());
+    if (!c) return c;
+    wxUploadLock();
+    loxoneLock();
+    *c = gCfg;
+    loxoneUnlock();
+    wxUploadUnlock();
+    return c;
+}
+
 void renderSettings(const String& message, bool isError, int httpCode)
 {
+    std::unique_ptr<Config> lockedBuf = lockedConfigCopy();
+    if (!lockedBuf) { server.send(503, "text/plain", "low memory"); return; }
+    const Config& locked = *lockedBuf;
     const Option unitSystems[] = { { 0, T(T_opt_metric_c_mm_hpa) }, { 1, T(T_opt_imperial_f_in_inhg_mph) } };
     const Option windUnits[]  = { { 1, "m/s" }, { 0, "km/h" } };
     const Option windSamples[] = { { 1, "1 s" }, { 3, T(T_opt_3_s_less_wake_ups) } };
@@ -2323,20 +2388,18 @@ void renderSettings(const String& message, bool isError, int httpCode)
 
     sectionStart(html, T(T_set_location), false, T(T_set_altitude_for_the_sea_level));
     fieldText  (html, "altitude",  T(T_set_altitude_above_sea_level_m), String(gCfg.altitudeM), 5, T(T_set_0_4000_for_sea_level), "number");
-    wxUploadLock();
-    fieldText  (html, "lat", T(T_set_latitude), gCfg.latitude, sizeof(gCfg.latitude) - 1, T(T_set_decimal_degrees_e_g_47));
-    fieldText  (html, "lon", T(T_set_longitude), gCfg.longitude, sizeof(gCfg.longitude) - 1, T(T_set_decimal_degrees_e_g_11));
+    fieldText  (html, "lat", T(T_set_latitude), locked.latitude, sizeof(locked.latitude) - 1, T(T_set_decimal_degrees_e_g_47));
+    fieldText  (html, "lon", T(T_set_longitude), locked.longitude, sizeof(locked.longitude) - 1, T(T_set_decimal_degrees_e_g_11));
     {
         double la, lo;
         if (!astroLocation(la, lo)) fieldReadonly(html, T(T_set_astro), T(T_set_astro_needs_loc));
     }
     html += "</section>";
     sectionStart(html, T(T_set_time), false);
-    fieldText(html, "tz",  T(T_set_time_zone_posix_tz), gCfg.timeZone, sizeof(gCfg.timeZone) - 1,
+    fieldText(html, "tz",  T(T_set_time_zone_posix_tz), locked.timeZone, sizeof(locked.timeZone) - 1,
               T(T_set_central_europe_cet_1cest_m3));
-    fieldText(html, "ntp", T(T_set_ntp_server), gCfg.ntpServer, sizeof(gCfg.ntpServer) - 1);
+    fieldText(html, "ntp", T(T_set_ntp_server), locked.ntpServer, sizeof(locked.ntpServer) - 1);
     html += "</section>";
-    wxUploadUnlock();
 
     sectionStart(html, T(T_set_units), false, T(T_set_device_wide_also_affects_mqtt));
     fieldSelect(html, "unitsys",  T(T_set_unit_system), gCfg.unitSystem, OPTS(unitSystems));
@@ -2383,6 +2446,7 @@ void renderSettings(const String& message, bool isError, int httpCode)
     fieldText  (html, "rfignore", T(T_set_hidden_ids_as_text), gCfg.rfIgnore, sizeof(gCfg.rfIgnore) - 1,
                 T(T_set_hex_comma_separated_max_322));
     fieldText  (html, "rfnames",  T(T_set_names_as_text), gCfg.rfNames, sizeof(gCfg.rfNames) - 1, T(T_set_names_as_text_hint));
+    fieldText  (html, "rfminrssi", T(T_set_rf_minrssi_as_text), gCfg.rfMinRssi, sizeof(gCfg.rfMinRssi) - 1, T(T_set_rf_minrssi_as_text_hint));
     advField = false;
     html += "</section>";
     addRfSensorTable(html);
@@ -2628,67 +2692,63 @@ void renderSettings(const String& message, bool isError, int httpCode)
     html += "</textarea></label></section>";
 
 
-    wxUploadLock();
     sectionStart(html, T(T_set_weather_networks), false,
                  T(T_set_direct_uploads_over_wifi_each));
-    fieldText  (html, "awkuser", T(T_set_awekas_user_name), gCfg.awekasUser, sizeof(gCfg.awekasUser) - 1);
+    fieldText  (html, "awkuser", T(T_set_awekas_user_name), locked.awekasUser, sizeof(locked.awekasUser) - 1);
     { DepScope dep("awkuser!=");
-    fieldSecret(html, "awkpass", T(T_set_awekas_password), gCfg.awekasPass[0], true, sizeof(gCfg.awekasPass) - 1);
-    fieldText  (html, "awkint",  T(T_set_awekas_interval_s), String(gCfg.awekasIntervalSec), 4, "300&ndash;3600", "number");
+    fieldSecret(html, "awkpass", T(T_set_awekas_password), locked.awekasPass[0], true, sizeof(locked.awekasPass) - 1);
+    fieldText  (html, "awkint",  T(T_set_awekas_interval_s), String(locked.awekasIntervalSec), 4, "300&ndash;3600", "number");
     }
-    fieldText  (html, "wuid",    T(T_set_weather_underground_station_id), gCfg.wuStationId, sizeof(gCfg.wuStationId) - 1);
+    fieldText  (html, "wuid",    T(T_set_weather_underground_station_id), locked.wuStationId, sizeof(locked.wuStationId) - 1);
     { DepScope dep("wuid!=");
-    fieldSecret(html, "wukey",   T(T_set_weather_underground_station_key), gCfg.wuStationKey[0], true, sizeof(gCfg.wuStationKey) - 1);
-    fieldText  (html, "wuint",   T(T_set_weather_underground_interval_s), String(gCfg.wuIntervalSec), 4, "60&ndash;3600", "number");
+    fieldSecret(html, "wukey",   T(T_set_weather_underground_station_key), locked.wuStationKey[0], true, sizeof(locked.wuStationKey) - 1);
+    fieldText  (html, "wuint",   T(T_set_weather_underground_interval_s), String(locked.wuIntervalSec), 4, "60&ndash;3600", "number");
     }
-    fieldText  (html, "wcid",    T(T_set_weathercloud_id), gCfg.wcloudId, sizeof(gCfg.wcloudId) - 1);
+    fieldText  (html, "wcid",    T(T_set_weathercloud_id), locked.wcloudId, sizeof(locked.wcloudId) - 1);
     { DepScope dep("wcid!=");
-    fieldSecret(html, "wckey",   T(T_set_weathercloud_key), gCfg.wcloudKey[0], true, sizeof(gCfg.wcloudKey) - 1);
-    fieldText  (html, "wcint",   T(T_set_weathercloud_interval_s), String(gCfg.wcloudIntervalSec), 4, T(T_set_60_3600_free_accounts_600), "number");
+    fieldSecret(html, "wckey",   T(T_set_weathercloud_key), locked.wcloudKey[0], true, sizeof(locked.wcloudKey) - 1);
+    fieldText  (html, "wcint",   T(T_set_weathercloud_interval_s), String(locked.wcloudIntervalSec), 4, T(T_set_60_3600_free_accounts_600), "number");
     }
-    fieldText  (html, "wnpid",   T(T_set_wetternetzwerk_pro_station_id), gCfg.wnetproId, sizeof(gCfg.wnetproId) - 1);
+    fieldText  (html, "wnpid",   T(T_set_wetternetzwerk_pro_station_id), locked.wnetproId, sizeof(locked.wnetproId) - 1);
     { DepScope dep("wnpid!=");
-    fieldSecret(html, "wnpkey",  T(T_set_wetternetzwerk_pro_station_key), gCfg.wnetproKey[0], true, sizeof(gCfg.wnetproKey) - 1);
-    fieldText  (html, "wnpint",  T(T_set_wetternetzwerk_pro_interval_s), String(gCfg.wnetproIntervalSec), 4, "60&ndash;3600", "number");
+    fieldSecret(html, "wnpkey",  T(T_set_wetternetzwerk_pro_station_key), locked.wnetproKey[0], true, sizeof(locked.wnetproKey) - 1);
+    fieldText  (html, "wnpint",  T(T_set_wetternetzwerk_pro_interval_s), String(locked.wnetproIntervalSec), 4, "60&ndash;3600", "number");
     }
-    fieldText  (html, "windyid", T(T_set_windy_station_id), gCfg.windyId, sizeof(gCfg.windyId) - 1, T(T_set_stations_windy_com_my_stations));
+    fieldText  (html, "windyid", T(T_set_windy_station_id), locked.windyId, sizeof(locked.windyId) - 1, T(T_set_stations_windy_com_my_stations));
     { DepScope dep("windyid!=");
-    fieldSecret(html, "windypw", T(T_set_windy_station_password), gCfg.windyPass[0], true, sizeof(gCfg.windyPass) - 1);
-    fieldText  (html, "windyint",T(T_set_windy_interval_s), String(gCfg.windyIntervalSec), 4, "300&ndash;3600", "number");
+    fieldSecret(html, "windypw", T(T_set_windy_station_password), locked.windyPass[0], true, sizeof(locked.windyPass) - 1);
+    fieldText  (html, "windyint",T(T_set_windy_interval_s), String(locked.windyIntervalSec), 4, "300&ndash;3600", "number");
     }
-    fieldText  (html, "osemid",  T(T_set_opensensemap_sensebox_id), gCfg.osemBoxId, sizeof(gCfg.osemBoxId) - 1);
+    fieldText  (html, "osemid",  T(T_set_opensensemap_sensebox_id), locked.osemBoxId, sizeof(locked.osemBoxId) - 1);
     { DepScope dep("osemid!=");
-    fieldSecret(html, "osemtok", T(T_set_opensensemap_access_token), gCfg.osemToken[0], true, sizeof(gCfg.osemToken) - 1,
+    fieldSecret(html, "osemtok", T(T_set_opensensemap_access_token), locked.osemToken[0], true, sizeof(locked.osemToken) - 1,
                 T(T_set_only_for_boxes_with_authentication));
-    fieldText  (html, "osemmap", T(T_set_opensensemap_sensor_ids), gCfg.osemSensors, sizeof(gCfg.osemSensors) - 1,
+    fieldText  (html, "osemmap", T(T_set_opensensemap_sensor_ids), locked.osemSensors, sizeof(locked.osemSensors) - 1,
                 T(T_set_osem_hint));
-    fieldText  (html, "osemint", T(T_set_opensensemap_interval_s), String(gCfg.osemIntervalSec), 4, "60&ndash;3600", "number");
+    fieldText  (html, "osemint", T(T_set_opensensemap_interval_s), String(locked.osemIntervalSec), 4, "60&ndash;3600", "number");
     }
-    fieldText  (html, "wowid",   T(T_set_wow_id), gCfg.wowSiteId, sizeof(gCfg.wowSiteId) - 1, T(T_set_wow_hint));
+    fieldText  (html, "wowid",   T(T_set_wow_id), locked.wowSiteId, sizeof(locked.wowSiteId) - 1, T(T_set_wow_hint));
     { DepScope dep("wowid!=");
-    fieldSecret(html, "wowpin",  T(T_set_wow_pin), gCfg.wowPin[0], true, sizeof(gCfg.wowPin) - 1);
-    fieldText  (html, "wowint",  T(T_set_wow_int), String(gCfg.wowIntervalSec), 4, "300&ndash;3600", "number");
+    fieldSecret(html, "wowpin",  T(T_set_wow_pin), locked.wowPin[0], true, sizeof(locked.wowPin) - 1);
+    fieldText  (html, "wowint",  T(T_set_wow_int), String(locked.wowIntervalSec), 4, "300&ndash;3600", "number");
     }
-    fieldText  (html, "cwopcall", T(T_set_cwop_call), gCfg.cwopCall, sizeof(gCfg.cwopCall) - 1, T(T_set_cwop_hint));
+    fieldText  (html, "cwopcall", T(T_set_cwop_call), locked.cwopCall, sizeof(locked.cwopCall) - 1, T(T_set_cwop_hint));
     { DepScope dep("cwopcall!=");
-    fieldText  (html, "cwoppass", T(T_set_cwop_pass), String(gCfg.cwopPasscode), 6, T(T_set_cwop_pass_hint), "number");
-    fieldText  (html, "cwopint",  T(T_set_cwop_int), String(gCfg.cwopIntervalSec), 4, "300&ndash;3600", "number");
+    fieldText  (html, "cwoppass", T(T_set_cwop_pass), String(locked.cwopPasscode), 6, T(T_set_cwop_pass_hint), "number");
+    fieldText  (html, "cwopint",  T(T_set_cwop_int), String(locked.cwopIntervalSec), 4, "300&ndash;3600", "number");
     }
     html += "</section>";
 
-    wxUploadUnlock();
     renderCustomUploads(html);
 
     sectionStart(html, T(T_set_loxone_udp), false,
                  T(T_set_sends_every_value_as_its));
     fieldCheck (html, "loxen",     T(T_set_loxone_udp_output), gCfg.loxEn);
-    loxoneLock();
     { DepScope dep("loxen=1");
-    fieldText  (html, "loxhost",   T(T_set_miniserver_ip_or_host_name), gCfg.loxHost, sizeof(gCfg.loxHost) - 1,
+    fieldText  (html, "loxhost",   T(T_set_miniserver_ip_or_host_name), locked.loxHost, sizeof(locked.loxHost) - 1,
                 T(T_set_a_host_name_is_resolved));
-    fieldText  (html, "loxprefix", T(T_set_name_prefix), gCfg.loxPrefix, sizeof(gCfg.loxPrefix) - 1,
+    fieldText  (html, "loxprefix", T(T_set_name_prefix), locked.loxPrefix, sizeof(locked.loxPrefix) - 1,
                 T(T_set_optional_a_z_a_z));
-    loxoneUnlock();
     fieldText  (html, "loxport",   T(T_set_udp_port), String(gCfg.loxPort), 5, T(T_set_1_65535_default_7000), "number");
     fieldText  (html, "loxsec",    T(T_set_loxone_interval_s), String(gCfg.loxSec), 5,
                 T(T_set_0_every_measurement_cycle_else), "number");
@@ -2999,9 +3059,11 @@ void addAutoSearchRowsWizard(HtmlOut& html)
     }
 }
 
-void wizardSensorRows(HtmlOut& html)
+// ids: the sensors listed (their quick-action forms follow the wizard's form)
+void wizardSensorRows(HtmlOut& html, uint32_t ids[RF_MAX_SENSORS], int& idCount)
 {
     bool any = false;
+    idCount = 0;
     html += "<table class='rft'>";
     for (int i = 0; i < RF_MAX_SENSORS; i++) {
         const RfSensorReading& r = gRfSensors[i];
@@ -3021,7 +3083,10 @@ void wizardSensorRows(HtmlOut& html)
         // name (rf_names.h), saved with "Save and next"
         html += "<br><input name='rfnm_"; html += id; html += "' maxlength='24' size='14' placeholder='";
         html += T(T_set_th_name); html += "' value='"; appendEscaped(html, rfNameOf(r.id)); html += "'></td><td>";
-        html += rfQuickActions(r.id, "setup");
+        char formId[12];
+        quickActionFormId(r.id, formId);
+        html += rfQuickActionButtons(r.id, formId);
+        ids[idCount++] = r.id;
         html += "</td></tr>";
     }
     html += "</table>";
@@ -3047,8 +3112,16 @@ void wizardSensorRows(HtmlOut& html)
 void renderWizard(int step, const String& message, int httpCode)
 {
     step = wizardClampStep(step);
-    // the dashboard sends a browser here only once per session (wizardAutoStart())
-    server.sendHeader("Set-Cookie", "wnSetup=1; Path=/; SameSite=Lax");
+    std::unique_ptr<Config> lockedBuf = lockedConfigCopy();
+    if (!lockedBuf) { server.send(503, "text/plain", "low memory"); return; }
+    const Config& locked = *lockedBuf;
+    uint32_t quickActionIds[RF_MAX_SENSORS];
+    int quickActionCount = 0;
+    // the dashboard sends a browser here only once per session and start (wizardAutoStart())
+    char cookie[48];
+    wizardCookieValue(wizardBootId(), cookie, sizeof(cookie));
+    strlcat(cookie, "; Path=/; SameSite=Lax", sizeof(cookie));
+    server.sendHeader("Set-Cookie", cookie);
     HtmlOut html(server, httpCode);
     pageStart(html, T(T_wz_title), "/setup", 0);
     // step 2: the sensor list reloads every 10 s - not while a name is being typed
@@ -3087,7 +3160,7 @@ void renderWizard(int step, const String& message, int httpCode)
                 html += "<p><b>"; html += T(T_wz_rf_off); html += "</b> <button name='rfen' value='1'>";
                 html += T(T_wz_rf_on); html += "</button></p>";
             } else {
-                wizardSensorRows(html);
+                wizardSensorRows(html, quickActionIds, quickActionCount);
                 html += "<p><button name='rfen' value='0' class='sb'>"; html += T(T_wz_no_sensors); html += "</button></p>";
             }
             break;
@@ -3095,11 +3168,9 @@ void renderWizard(int step, const String& message, int httpCode)
             html += "<p>"; html += T(T_wz_location_intro); html += "</p>";
             fieldText(html, "devname", T(T_set_device_name), gCfg.deviceName, sizeof(gCfg.deviceName) - 1, T(T_wz_name_hint));
             fieldText(html, "altitude", T(T_set_altitude_above_sea_level_m), String(gCfg.altitudeM), 5, T(T_wz_altitude_hint), "number");
-            wxUploadLock();
-            fieldText(html, "lat", T(T_set_latitude), gCfg.latitude, sizeof(gCfg.latitude) - 1, T(T_set_decimal_degrees_e_g_47));
-            fieldText(html, "lon", T(T_set_longitude), gCfg.longitude, sizeof(gCfg.longitude) - 1, T(T_set_decimal_degrees_e_g_11));
-            fieldText(html, "tz", T(T_set_time_zone_posix_tz), gCfg.timeZone, sizeof(gCfg.timeZone) - 1, T(T_set_central_europe_cet_1cest_m3));
-            wxUploadUnlock();
+            fieldText(html, "lat", T(T_set_latitude), locked.latitude, sizeof(locked.latitude) - 1, T(T_set_decimal_degrees_e_g_47));
+            fieldText(html, "lon", T(T_set_longitude), locked.longitude, sizeof(locked.longitude) - 1, T(T_set_decimal_degrees_e_g_11));
+            fieldText(html, "tz", T(T_set_time_zone_posix_tz), locked.timeZone, sizeof(locked.timeZone) - 1, T(T_set_central_europe_cet_1cest_m3));
             // position: only where the browser allows it (secure context: https or localhost - mostly not on http://<ip>/);
             // time zone: browser zone -> POSIX TZ for the common zones
             html += "<p id='geo' style='display:none'><button type='button' class='sb' onclick='wzGeo()'>"; html += T(T_wz_geo);
@@ -3151,29 +3222,25 @@ void renderWizard(int step, const String& message, int httpCode)
                 fieldSelect(html, "mqtttls",  T(T_set_security), gCfg.mqttTlsMode, tlsModes, 3);
             }
             html += "</details>";
-            wxUploadLock();
-            const bool wx = gCfg.awekasUser[0] || gCfg.wuStationId[0] || gCfg.wcloudId[0] || gCfg.wnetproId[0] || gCfg.windyId[0] || gCfg.osemBoxId[0];
+            const bool wx = locked.awekasUser[0] || locked.wuStationId[0] || locked.wcloudId[0] || locked.wnetproId[0] || locked.windyId[0] || locked.osemBoxId[0];
             html += wx ? "<details open><summary>" : "<details><summary>"; html += T(T_set_weather_networks); html += "</summary>";
-            fieldText  (html, "awkuser", T(T_set_awekas_user_name), gCfg.awekasUser, sizeof(gCfg.awekasUser) - 1);
-            fieldSecret(html, "awkpass", T(T_set_awekas_password), gCfg.awekasPass[0], true, sizeof(gCfg.awekasPass) - 1);
-            fieldText  (html, "wuid",    T(T_set_weather_underground_station_id), gCfg.wuStationId, sizeof(gCfg.wuStationId) - 1);
-            fieldSecret(html, "wukey",   T(T_set_weather_underground_station_key), gCfg.wuStationKey[0], true, sizeof(gCfg.wuStationKey) - 1);
-            fieldText  (html, "wcid",    T(T_set_weathercloud_id), gCfg.wcloudId, sizeof(gCfg.wcloudId) - 1);
-            fieldSecret(html, "wckey",   T(T_set_weathercloud_key), gCfg.wcloudKey[0], true, sizeof(gCfg.wcloudKey) - 1);
-            fieldText  (html, "wnpid",   T(T_set_wetternetzwerk_pro_station_id), gCfg.wnetproId, sizeof(gCfg.wnetproId) - 1);
-            fieldSecret(html, "wnpkey",  T(T_set_wetternetzwerk_pro_station_key), gCfg.wnetproKey[0], true, sizeof(gCfg.wnetproKey) - 1);
-            fieldText  (html, "windyid", T(T_set_windy_station_id), gCfg.windyId, sizeof(gCfg.windyId) - 1);
-            fieldSecret(html, "windypw", T(T_set_windy_station_password), gCfg.windyPass[0], true, sizeof(gCfg.windyPass) - 1);
-            fieldText  (html, "osemid",  T(T_set_opensensemap_sensebox_id), gCfg.osemBoxId, sizeof(gCfg.osemBoxId) - 1);
-            fieldSecret(html, "osemtok", T(T_set_opensensemap_access_token), gCfg.osemToken[0], true, sizeof(gCfg.osemToken) - 1);
-            fieldText  (html, "osemmap", T(T_set_opensensemap_sensor_ids), gCfg.osemSensors, sizeof(gCfg.osemSensors) - 1, T(T_set_osem_hint));
-            wxUploadUnlock();
+            fieldText  (html, "awkuser", T(T_set_awekas_user_name), locked.awekasUser, sizeof(locked.awekasUser) - 1);
+            fieldSecret(html, "awkpass", T(T_set_awekas_password), locked.awekasPass[0], true, sizeof(locked.awekasPass) - 1);
+            fieldText  (html, "wuid",    T(T_set_weather_underground_station_id), locked.wuStationId, sizeof(locked.wuStationId) - 1);
+            fieldSecret(html, "wukey",   T(T_set_weather_underground_station_key), locked.wuStationKey[0], true, sizeof(locked.wuStationKey) - 1);
+            fieldText  (html, "wcid",    T(T_set_weathercloud_id), locked.wcloudId, sizeof(locked.wcloudId) - 1);
+            fieldSecret(html, "wckey",   T(T_set_weathercloud_key), locked.wcloudKey[0], true, sizeof(locked.wcloudKey) - 1);
+            fieldText  (html, "wnpid",   T(T_set_wetternetzwerk_pro_station_id), locked.wnetproId, sizeof(locked.wnetproId) - 1);
+            fieldSecret(html, "wnpkey",  T(T_set_wetternetzwerk_pro_station_key), locked.wnetproKey[0], true, sizeof(locked.wnetproKey) - 1);
+            fieldText  (html, "windyid", T(T_set_windy_station_id), locked.windyId, sizeof(locked.windyId) - 1);
+            fieldSecret(html, "windypw", T(T_set_windy_station_password), locked.windyPass[0], true, sizeof(locked.windyPass) - 1);
+            fieldText  (html, "osemid",  T(T_set_opensensemap_sensebox_id), locked.osemBoxId, sizeof(locked.osemBoxId) - 1);
+            fieldSecret(html, "osemtok", T(T_set_opensensemap_access_token), locked.osemToken[0], true, sizeof(locked.osemToken) - 1);
+            fieldText  (html, "osemmap", T(T_set_opensensemap_sensor_ids), locked.osemSensors, sizeof(locked.osemSensors) - 1, T(T_set_osem_hint));
             html += "</details>";
             html += gCfg.loxEn ? "<details open><summary>" : "<details><summary>"; html += T(T_set_loxone_udp); html += "</summary>";
             fieldCheck(html, "loxen",   T(T_set_loxone_udp_output), gCfg.loxEn);
-            loxoneLock();
-            fieldText (html, "loxhost", T(T_set_miniserver_ip_or_host_name), gCfg.loxHost, sizeof(gCfg.loxHost) - 1);
-            loxoneUnlock();
+            fieldText (html, "loxhost", T(T_set_miniserver_ip_or_host_name), locked.loxHost, sizeof(locked.loxHost) - 1);
             fieldText (html, "loxport", T(T_set_udp_port), String(gCfg.loxPort), 5, T(T_set_1_65535_default_7000), "number");
             html += "</details>";
             break;
@@ -3187,15 +3254,15 @@ void renderWizard(int step, const String& message, int httpCode)
             v = String(); appendEscaped(v, gCfg.deviceName[0] ? gCfg.deviceName : "&ndash;");
             addRow(html, T(T_set_device_name), v);
             v = String(gCfg.altitudeM) + " m";
-            if (gCfg.latitude[0]) { v += " &middot; "; appendEscaped(v, gCfg.latitude); v += ", "; appendEscaped(v, gCfg.longitude); }
+            if (locked.latitude[0]) { v += " &middot; "; appendEscaped(v, locked.latitude); v += ", "; appendEscaped(v, locked.longitude); }
             addRow(html, T(T_set_location), v);
-            v = String(); appendEscaped(v, gCfg.timeZone);
+            v = String(); appendEscaped(v, locked.timeZone);
             addRow(html, T(T_set_time_zone_posix_tz), v);
             addRow(html, T(T_set_units), T(gCfg.unitSystem ? T_opt_imperial_f_in_inhg_mph : T_opt_metric_c_mm_hpa));
             addRow(html, T(T_set_admin_password), gCfg.webAdminPass[0] ? String(T(T_wz_sum_set)) : String("<b>") + T(T_wz_sum_not_set) + "</b>");
             String out;
             if (gCfg.mqttEn) out += "MQTT";
-            if (gCfg.awekasUser[0] || gCfg.wuStationId[0] || gCfg.wcloudId[0] || gCfg.wnetproId[0] || gCfg.windyId[0] || gCfg.osemBoxId[0])
+            if (locked.awekasUser[0] || locked.wuStationId[0] || locked.wcloudId[0] || locked.wnetproId[0] || locked.windyId[0] || locked.osemBoxId[0])
                 { if (out.length()) out += ", "; out += T(T_set_weather_networks); }
             if (gCfg.loxEn) { if (out.length()) out += ", "; out += "Loxone"; }
             addRow(html, T(T_wz_t_outputs), out.length() ? out : String("&ndash;"));
@@ -3213,6 +3280,12 @@ void renderWizard(int step, const String& message, int httpCode)
     if (step < WIZ_STEPS) {
         html += "</section>";
         wizardNav(html, step);
+        html += "</form>";
+    }
+    for (int i = 0; i < quickActionCount; i++) {   // step 2: the forms the sensor rows' buttons point to
+        char formId[12];
+        quickActionFormId(quickActionIds[i], formId);
+        html += rfQuickActionFormStart(quickActionIds[i], "setup", formId);
         html += "</form>";
     }
     // closes the wizard for good (also "later": it can be started again in Settings -> System)
@@ -3394,6 +3467,10 @@ void addRejected(String& rejected, const char* label)
 // "settings" object stands in for the submitted form, so it goes through
 // exactly the same checks as a manual save. Null = the HTTP request.
 JsonObjectConst gFormOverride;
+// A restore in progress (handleSettingsRestore): its change report, taken
+// over as gRestoreReport by handleSettingsPost() only once its entry checks
+// passed - a refused restore (busy, restart pending) reports nothing.
+const String* gPendingRestoreReport = nullptr;
 bool formHas(const char* name) { return gFormOverride.isNull() ? server.hasArg(name) : !gFormOverride[name].isNull(); }
 bool formHas(const String& name) { return formHas(name.c_str()); }
 String formRaw(const char* name)
@@ -3433,11 +3510,12 @@ void storeText(char (&dst)[N], const char* name, bool& changed)
 }
 
 // Write-only secret: empty keeps, "<name>_clear" (optional secrets) wipes.
+enum class SecretClear : uint8_t { ALLOWED, NEVER };
 template <size_t N>
-void storeSecret(char (&dst)[N], const char* name, bool& changed)
+void storeSecret(char (&dst)[N], const char* name, bool& changed, SecretClear clear = SecretClear::ALLOWED)
 {
     String clearName = String(name) + "_clear";
-    if (formHas(clearName)) {
+    if (clear == SecretClear::ALLOWED && formHas(clearName)) {
         if (dst[0]) { dst[0] = '\0'; changed = true; }
         return;
     }
@@ -3451,8 +3529,9 @@ void storeInt(int& dst, const char* name, long minV, long maxV, const char* labe
 {
     if (!formHas(name)) return;
     String v = formArg(name);
-    long n = v.toInt();
-    if (v.isEmpty() || n < minV || n > maxV) { addRejected(rejected, label); return; }
+    char* end = nullptr;
+    const long n = strtol(v.c_str(), &end, 10);   // the whole field a number: "12abc" / "abc" refused
+    if (v.isEmpty() || *end != '\0' || n < minV || n > maxV) { addRejected(rejected, label); return; }
     if (dst != n) { dst = (int)n; changed = true; }
 }
 
@@ -3461,13 +3540,9 @@ template <size_t N>
 void storeCoord(char (&dst)[N], const char* name, float limit, const char* label, String& rejected)
 {
     if (!formHas(name)) return;
-    String v = formArg(name);
-    if (v.length()) {
-        char* end = nullptr;
-        float f = strtof(v.c_str(), &end);
-        if (*end != '\0' || f < -limit || f > limit || v.length() >= N) { addRejected(rejected, label); return; }
-    }
-    strlcpy(dst, v.c_str(), N);
+    char v[N];
+    if (!coordParse(formArg(name).c_str(), limit, v, sizeof(v))) { addRejected(rejected, label); return; }   // also "49,88"
+    strlcpy(dst, v, N);
 }
 
 
@@ -3608,10 +3683,23 @@ void handleSettingsPost()
     const bool wizard = formHas("wizard");
     const int  wstep  = formRaw("wstep").toInt();
     if (!(wizard ? requireWizardAuth() : requireAuth()) || !requireSameOrigin()) return;
+    if (wizard && wizardOpenAccess(gCfg)) {   // open (no login): only the fields of its step
+        for (int i = 0; i < server.args(); i++) {
+            if (wizardFieldAllowed(wstep, server.argName(i).c_str())) continue;
+            server.send(403, "text/plain; charset=utf-8", T(T_st_forbidden_no_admin_password_configure));
+            return;
+        }
+    }
     if (!formHas("form")) {
         renderSettings(T(T_set_incomplete_form_submission_nothing_w), true, 400);
         return;
     }
+    if (configHeldForRestart()) {   // config.h: settings for the coming restart are saved - nothing more until then
+        if (wizard) renderWizard(wstep, T(T_set_restart_pending), 409);
+        else        renderSettings(T(T_set_restart_pending), true, 409);
+        return;
+    }
+    if (gPendingRestoreReport) gRestoreReport = *gPendingRestoreReport;
 
     // Only fields present in the request are changed, so a partial POST
     // (curl, scripts) leaves everything else alone. Checkboxes: the page
@@ -3783,7 +3871,7 @@ void handleSettingsPost()
             OledCustom& c = gCfg.dispCustom[k];
             oledCustomClean(formArg(n).c_str(), c.title, sizeof(c.title));
             snprintf(n, sizeof(n), "dc%dm", k);
-            c.layout = formArg(n).toInt() == OCL_BIG ? OCL_BIG : OCL_SMALL;
+            if (present(n)) c.layout = formArg(n).toInt() == OCL_BIG ? OCL_BIG : OCL_SMALL;   // a partial POST keeps it
             for (int j = 0; j < OLED_CUSTOM_LINES; j++) {
                 snprintf(n, sizeof(n), "dc%dl%d", k, j);
                 if (present(n)) oledCustomClean(formArg(n).c_str(), c.line[j], sizeof(c.line[j]));
@@ -3840,8 +3928,11 @@ void handleSettingsPost()
     applyAlarmForm(rejected);
     applyCustomUploadForm(rejected);
     if (present("updchk")) gCfg.updateCheckEn = checked("updchk");
-    if (formArg("updurl").startsWith("http")) storeText(gCfg.updateUrl, "updurl", ignored);
-    else if (present("updurl") && gCfg.updateCheckEn) addRejected(rejected, T(T_set_version_list_url_http_https));
+    if (present("updurl")) {   // an http(s) URL, or empty (no check)
+        const String u = formArg("updurl");
+        if (u.isEmpty() || u.startsWith("http://") || u.startsWith("https://")) storeText(gCfg.updateUrl, "updurl", ignored);
+        else if (gCfg.updateCheckEn) addRejected(rejected, T(T_set_version_list_url_http_https));
+    }
     if (present("tz")) {
         if (formArg("tz").isEmpty()) addRejected(rejected, T(T_set_time_zone));
         else                         storeText(gCfg.timeZone, "tz", timeChanged);
@@ -3853,7 +3944,7 @@ void handleSettingsPost()
     wxUploadUnlock();
     if (timeChanged) timeSyncReconfigure();
     // Not clearable: an empty admin password would lock this page out.
-    storeSecret(gCfg.webAdminPass, "webadminpw", ignored);
+    storeSecret(gCfg.webAdminPass, "webadminpw", ignored, SecretClear::NEVER);
     // Wireless sensor states (rf_sensors.cpp picks up changes on its next loop):
     // the text lists (advanced) first, then the table's selects - each only
     // if changed against the state the page showed (rfso_*), so an edit of
@@ -3886,6 +3977,38 @@ void handleSettingsPost()
         String v = server.arg(i);
         if (!nid || v == rfNameOf(nid)) continue;
         if (!rfNameSet(gCfg.rfNames, sizeof(gCfg.rfNames), nid, v.c_str())) addRejected(rejected, T(T_set_th_name));
+    }
+    if (present("rfminrssi") && formArg("rfminrssi") != gCfg.rfMinRssi) {   // minimum signal as text (also: settings restore)
+        String all = formArg("rfminrssi");
+        char tmp[sizeof(gCfg.rfMinRssi)] = "";
+        bool okMr = true;
+        for (int p = 0; p < (int)all.length();) {   // "ID:dBm|ID:dBm"
+            int bar = all.indexOf('|', p);
+            if (bar < 0) bar = all.length();
+            String e = all.substring(p, bar);
+            p = bar + 1;
+            e.trim();
+            if (!e.length()) continue;
+            int c = e.indexOf(':');
+            char* end = nullptr;
+            const uint32_t nid = c > 0 ? (uint32_t)strtoul(e.substring(0, c).c_str(), &end, 16) : 0;
+            int dbm;
+            if (c <= 0 || !nid || *end || !rfMinRssiParse(e.substring(c + 1).c_str(), dbm)) { okMr = false; continue; }
+            if (!rfMinRssiSet(tmp, sizeof(tmp), nid, dbm)) okMr = false;
+        }
+        if (okMr) strlcpy(gCfg.rfMinRssi, tmp, sizeof(gCfg.rfMinRssi));
+        else addRejected(rejected, T(T_set_rf_minrssi_as_text));
+    }
+    for (int i = 0; i < server.args(); i++) {   // a minimum typed into the sensor table
+        String n = server.argName(i);
+        if (!n.startsWith("rfmr_")) continue;
+        const uint32_t nid = (uint32_t)strtoul(n.c_str() + 5, nullptr, 16);
+        String v = server.arg(i);
+        int dbm;
+        if (!nid) continue;
+        if (!rfMinRssiParse(v.c_str(), dbm)) { addRejected(rejected, T(T_set_th_minrssi)); continue; }
+        if (dbm == rfMinRssiOf(nid)) continue;
+        if (!rfMinRssiSet(gCfg.rfMinRssi, sizeof(gCfg.rfMinRssi), nid, dbm)) addRejected(rejected, T(T_set_th_minrssi));
     }
     applyNum(PARAM_UI_LANG,                  "uilang",      T(T_set_language));
     applyCheck(PARAM_RF_ONLY_MINE,           "rfonly",      T(T_set_only_my_sensors2));
@@ -3953,9 +4076,11 @@ void handleSettingsPost()
     // transports never see a half-applied change before the restart. ----
     applyCheck(PARAM_LOW_POWER_EN,           "lowpower",    T(T_set_low_power_mode2));
     applyCheck(PARAM_VANE_POWER_SAVE,        "vanesave",    T(T_set_wind_vane_power_saving));
-    // heap while saving (~5 KB), not static RAM
+    // heap while saving (~7 KB), not static RAM; wizard: `before` = gCfg at
+    // the same instant, it applies only what the POST changed (config_merge.h)
     std::unique_ptr<Config> nextBuf(new (std::nothrow) Config(gCfg));
-    if (!nextBuf) { renderSettings(T(T_tr_err_alloc), true, 503); return; }
+    std::unique_ptr<Config> beforeBuf(nextBuf && wizard ? new (std::nothrow) Config(*nextBuf) : nullptr);
+    if (!nextBuf || (wizard && !beforeBuf)) { renderSettings(T(T_tr_err_alloc), true, 503); return; }
     Config& next = *nextBuf;
     bool restart = false;
     if (present("loraen")) {
@@ -4070,8 +4195,12 @@ void handleSettingsPost()
     if (rejected.length()) rejectedMsg = TF(T_set_invalid_kept, rejected);
 
     if (wifiChange) {
-        if (restart) { saveConfig(next); restartAtMs = millis() + 1000; if (restartAtMs == 0) restartAtMs = 1; }
-        else         saveConfig(gCfg);
+        if (restart) {
+            saveConfig(next);
+            configHoldForRestart();   // the restart waits for the Wi-Fi test (~1 min): no older gCfg save meanwhile
+            restartAtMs = millis() + 1000; if (restartAtMs == 0) restartAtMs = 1;
+        }
+        else saveConfig(gCfg);
         HtmlOut html(server, 200);
         pageStart(html, T(T_c_settings), "/api/settings", 75);
         html += "<div class='banner okb'>";
@@ -4088,14 +4217,21 @@ void handleSettingsPost()
 
     if (restart && wizard) {
         // saved now, applied by one restart at the wizard's "Finish"; the
-        // following steps start from these values
-        saveConfig(next);
-        gCfg = next;
+        // following steps (and every later save) start from these values -
+        // only the fields this POST changed, so a downlink / MQTT change
+        // made meanwhile stays
+        wxUploadLock();   // the locks lockedConfigCopy() takes: no reader of those fields sees a half merge
+        loxoneLock();
+        configApplyChanges(gCfg, *beforeBuf, next);
+        loxoneUnlock();
+        wxUploadUnlock();
+        saveConfig(gCfg);
         wizardRestartPending = true;
         restart = false;
     }
     if (restart) {
         saveConfig(next);
+        configHoldForRestart();   // gCfg keeps the old restart fields until the restart: no save of it may undo this one
         HtmlOut html(server, 200);
         pageStart(html, T(T_c_settings), "/api/settings", 20);
         html += "<div class='banner okb'>"; html += T(T_set_saved_restarting); html += "</div>";
@@ -4191,9 +4327,11 @@ void handleSettingsRestore()
         appendEscaped(list, c["new"] | ""); list += "&rdquo;";
     }
     set["form"] = "1";
-    gRestoreReport = n ? TF(T_set_bk_changed, String(n)) + " " + list : String(T(T_set_bk_nochange));
+    const String report = n ? TF(T_set_bk_changed, String(n)) + " " + list : String(T(T_set_bk_nochange));
     gFormOverride = set;
+    gPendingRestoreReport = &report;
     handleSettingsPost();   // validates, saves, restarts if a restart field changed
+    gPendingRestoreReport = nullptr;
     gFormOverride = JsonObjectConst();
 }
 
@@ -4227,7 +4365,12 @@ void handleOtaChunk()
 void handleOtaDone()
 {
     selectLanguage();
+    // the whole request is in: only now may a checked image become the boot one
+    const bool allowed = gCfg.webAdminPass[0] && otaWebAuthorized();
+    if (allowed) otaUploadCommit();
+    else         otaUploadAbort();
     const OtaOutcome o = otaUploadOutcome();
+    const String why = otaUploadError();   // before the reset, which clears it
     otaUploadReset();
     if (!gCfg.webAdminPass[0]) {   // never without a password: the portal (own AP, button) is the fallback
         server.send(403, "text/html; charset=utf-8", T(T_ota_need_password));   // the text carries entities
@@ -4236,8 +4379,8 @@ void handleOtaDone()
     if (!requireAuth() || !requireSameOrigin()) return;
     const bool js = server.hasArg("js");
     String msg = o == OTA_OUT_OK      ? String(T(T_ota_ok))
-               : o == OTA_OUT_REFUSED ? TF(T_ota_refused, otaUploadError())
-               : o == OTA_OUT_FAILED  ? TF(T_ota_failed, otaUploadError())
+               : o == OTA_OUT_REFUSED ? TF(T_ota_refused, why)
+               : o == OTA_OUT_FAILED  ? TF(T_ota_failed, why)
                                       : String(T(T_ota_no_file));
     const int code = o == OTA_OUT_OK ? 200 : 400;
     if (js) {
@@ -4299,7 +4442,7 @@ void handleApiAlarms()
     *ch = alarmsChannels();
     alarmsUnlock();
     JsonDocument doc;
-    alarmsJson(doc, rules.get(), st.get(), *ch, gCfg, millis() / 1000);
+    alarmsJson(doc, rules.get(), st.get(), *ch, gCfg, alarmClockSec());
     sendJsonDoc(doc, "alarms");
 }
 

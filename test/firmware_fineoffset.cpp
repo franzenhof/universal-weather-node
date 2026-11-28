@@ -67,7 +67,7 @@ int main()
     assert(foFrameLength(0x24) == sizeof(wh24));
     assert(foCrc8(wh24, 15) == 0x8f && foSum8(wh24, 16) == 0x07);
     // rtl_433 reading of this frame (WH24 units): 11.8 C, 78 %, 266 deg, 1.12 / 2.24 m/s, 22.2 mm
-    assert(foDecode(wh24, rx(buf, wh24, sizeof(wh24)), f, true));
+    assert(foDecode(buf, rx(buf, wh24, sizeof(wh24)), f, true));
     assert(!strcmp(f.model, "WH24") && f.family == 0x24 && f.id == 0xbf && f.batteryOk);
     assert(f.hasTemp && near(f.tempC, 11.8f) && f.hasHumidity && f.humidity == 78);
     assert(f.hasWind && f.windDirDeg == 266 && near(f.windAvgMs, 1.12f) && near(f.windGustMs, 2.24f));
@@ -79,14 +79,14 @@ int main()
     assert(rfFineOffsetId(f) == 0x240000BFUL);
 
     const uint8_t wh65[] = {0x24, 0x50, 0x67, 0xe2, 0x87, 0x41, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x8c, 0x14};
-    assert(foDecode(wh65, rx(buf, wh65, sizeof(wh65)), f));
+    assert(foDecode(buf, rx(buf, wh65, sizeof(wh65)), f));
     assert(f.id == 0x50 && near(f.tempC, 24.7f) && f.humidity == 65 && f.windDirDeg == 359);
     assert(near(f.windAvgMs, 0.0f) && near(f.rainMm, 0.254f) && f.uvIndex == 0.0f);
 
     // WS69: 8 more bytes with pressure (here 0x1FFFF = no pressure module)
     uint8_t ws69[] = {0x24, 0x1c, 0x88, 0x01, 0xca, 0x63, 0x00, 0x00, 0x00, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0xac, 0xd5,
                       0x01, 0xff, 0xff, 0xff, 0x00, 0x2f, 0x83, 0x5a};
-    assert(foDecode(ws69, rx(buf, ws69, sizeof(ws69)), f));
+    assert(foDecode(buf, rx(buf, ws69, sizeof(ws69)), f));
     assert(!strcmp(f.model, "WS69") && f.id == 0x1c && near(f.tempC, 5.8f) && f.humidity == 99);
     assert(f.windDirDeg == 136 && near(f.rainMm, 51 * 0.254f, 0.01f) && !f.hasPressure);
     ws69[17] = 0x01; ws69[18] = 0x8B; ws69[19] = 0xCD;   // 101325 Pa
@@ -94,6 +94,18 @@ int main()
     assert(foDecode(ws69, sizeof(ws69), f) && f.hasPressure && near(f.pressureHpa, 1013.25f, 0.01f));
     ws69[24] ^= 1;   // bad extension: still a valid WH65 frame, no pressure
     assert(foDecode(ws69, sizeof(ws69), f) && !strcmp(f.model, "WH65") && !f.hasPressure);
+    // extension whose checks pass by chance (noise after a WH65 frame in the
+    // fixed-length read) but whose pressure is no station pressure: not a WS69
+    for (uint32_t pa : { 0u, 29999u, 110001u, 0x1FFFEu }) {
+        ws69[17] = (uint8_t)(pa >> 16); ws69[18] = (uint8_t)(pa >> 8); ws69[19] = (uint8_t)pa;
+        seal(ws69, sizeof(ws69));
+        assert(foDecode(ws69, sizeof(ws69), f) && !strcmp(f.model, "WH65") && !f.hasPressure);
+    }
+    for (uint32_t pa : { 30000u, 110000u }) {   // 300 / 1100 hPa: the limits
+        ws69[17] = (uint8_t)(pa >> 16); ws69[18] = (uint8_t)(pa >> 8); ws69[19] = (uint8_t)pa;
+        seal(ws69, sizeof(ws69));
+        assert(foDecode(ws69, sizeof(ws69), f) && !strcmp(f.model, "WS69") && f.hasPressure && near(f.pressureHpa, pa * 0.01f, 0.01f));
+    }
 
     // invalid markers, negative temperature, low battery, 9-bit wind direction
     uint8_t inv[17];
@@ -115,7 +127,7 @@ int main()
 
     // ---- WH31 (DP50 / WN31) ----
     const uint8_t wh31[] = {0x30, 0xc3, 0x81, 0xd5, 0x5c, 0x2a, 0xcf};
-    assert(foDecode(wh31, rx(buf, wh31, sizeof(wh31)), f));
+    assert(foDecode(buf, rx(buf, wh31, sizeof(wh31)), f));
     assert(!strcmp(f.model, "WH31") && f.id == 0xc3 && f.channel == 1 && f.batteryOk);
     assert(near(f.tempC, 6.9f) && f.humidity == 92 && !f.hasWind && !f.hasRain);
     assert(rfFineOffsetId(f) == 0x300001C3UL);
@@ -130,18 +142,18 @@ int main()
 
     // ---- WH40 rain gauge ----
     const uint8_t wh40[] = {0x40, 0x00, 0xcd, 0x6f, 0x10, 0x00, 0x0a, 0xbf, 0x55};
-    assert(foDecode(wh40, rx(buf, wh40, sizeof(wh40)), f));
+    assert(foDecode(buf, rx(buf, wh40, sizeof(wh40)), f));
     assert(f.id == 0x0cd6f && f.batteryMv == 1600 && f.batteryOk && f.hasRain && near(f.rainMm, 1.0f) && !f.hasTemp);
     assert(rfFineOffsetId(f) == 0x4000CD6FUL && rfFineOffsetValues(f).ok == RF_VAL_RAIN);
 
     // ---- WN20 rain gauge ----
     const uint8_t wn20[] = {0x20, 0x00, 0x2c, 0x87, 0x98, 0x00, 0x13, 0x04, 0x9e, 0x20};
-    assert(foDecode(wn20, rx(buf, wn20, sizeof(wn20)), f));
+    assert(foDecode(buf, rx(buf, wn20, sizeof(wn20)), f));
     assert(f.id == 0x2c87 && f.batteryMv == 3040 && f.batteryOk && near(f.rainMm, 1.9f));
 
     // ---- WH57 lightning ----
     const uint8_t wh57s[] = {0x57, 0x81, 0x05, 0xc8, 0x05, 0x81, 0x01, 0xdf, 0x0b};
-    assert(foDecode(wh57s, rx(buf, wh57s, sizeof(wh57s)), f));
+    assert(foDecode(buf, rx(buf, wh57s, sizeof(wh57s)), f));
     assert(f.id == 0x105c8 && f.hasLightning && f.lightningState == 8 && f.lightningCount == 1);
     assert(f.stormDistanceKm == 1 && f.batteryOk && rfFineOffsetValues(f).ok == 0);
     const uint8_t wh57r[] = {0x57, 0x01, 0x05, 0xc8, 0x05, 0xbf, 0x00, 0xdd, 0xc6};
@@ -149,13 +161,13 @@ int main()
 
     // ---- WH51 soil moisture ----
     const uint8_t wh51[] = {0x51, 0x00, 0x6b, 0x58, 0x6e, 0x7f, 0x24, 0xf8, 0xd2, 0xff, 0xff, 0xff, 0x3c, 0x28};
-    assert(foDecode(wh51, rx(buf, wh51, sizeof(wh51)), f));
+    assert(foDecode(buf, rx(buf, wh51, sizeof(wh51)), f));
     assert(f.id == 0x006b58 && f.hasMoisture && f.moisture == 36 && f.batteryMv == 1400 && f.batteryOk);
     assert(rfFineOffsetValues(f).ok == 0 && rfFineOffsetId(f) == 0x51006B58UL);
 
     // ---- WN34 / WN38 temperature probes ----
     const uint8_t wn34[] = {0x34, 0x00, 0x29, 0x65, 0x02, 0x85, 0x44, 0x66, 0xf3};
-    assert(foDecode(wn34, rx(buf, wn34, sizeof(wn34)), f));
+    assert(foDecode(buf, rx(buf, wn34, sizeof(wn34)), f));
     assert(f.id == 0x002965 && near(f.tempC, 24.5f) && f.batteryMv == 1360 && f.batteryOk && !f.hasHumidity);
     const uint8_t wn38[] = {0x38, 0x00, 0x28, 0x85, 0x40, 0xf5, 0x41, 0x4c, 0xa7};
     assert(foDecode(wn38, sizeof(wn38), f) && !strcmp(f.model, "WN38") && near(f.tempC, 24.5f));
@@ -165,7 +177,7 @@ int main()
 
     // ---- WS80 ----
     const uint8_t ws80[] = {0x80, 0x0a, 0x00, 0x3b, 0x00, 0x00, 0x88, 0x8a, 0x59, 0x38, 0x18, 0x6d, 0x1c, 0x00, 0xff, 0xff, 0xd8, 0xdf};
-    assert(foDecode(ws80, rx(buf, ws80, sizeof(ws80)), f));
+    assert(foDecode(buf, rx(buf, ws80, sizeof(ws80)), f));
     assert(f.id == 0x0a003b && f.batteryMv == 2720 && f.batteryOk && near(f.tempC, 20.1f) && f.humidity == 56);
     assert(f.hasWind && near(f.windAvgMs, 2.4f) && near(f.windGustMs, 2.8f) && f.windDirDeg == 109);
     assert(f.hasUv && f.uvIndex == 0.0f && f.hasLight && f.lightLux == 0.0f && !f.hasRain);
@@ -204,13 +216,13 @@ int main()
     const uint8_t ws85[] = {0x85, 0x00, 0x28, 0xEB, 0x87, 0x82, 0x6F, 0x00, 0x83, 0x00, 0x3F, 0xFF, 0x00, 0x00, 0x00, 0x00,
                             0x00, 0x0B, 0x00, 0x00, 0xFF, 0xEF, 0xFD, 0x00, 0x00, 0x6B, 0xDD, 0x0F};
     assert(foFrameLength(0x85) == sizeof(ws85));
-    assert(foDecode(ws85, rx(buf, ws85, sizeof(ws85)), f));
+    assert(foDecode(buf, rx(buf, ws85, sizeof(ws85)), f));
     assert(f.id == 0x0028eb && f.batteryMv == 2700 && f.batteryOk && f.windDirDeg == 131 && f.hasRain && !f.hasTemp);
     assert(f.hasSupercap && near(f.supercapV, 1.1f));   // b[17] = 0x0B
 
     // ---- WS68 ----
     const uint8_t ws68[] = {0x68, 0x00, 0x00, 0xc5, 0x01, 0x07, 0x4b, 0x0f, 0xff, 0xff, 0x00, 0x2e, 0x00, 0x02, 0xa6, 0x63};
-    assert(foDecode(ws68, rx(buf, ws68, sizeof(ws68)), f));
+    assert(foDecode(buf, rx(buf, ws68, sizeof(ws68)), f));
     assert(f.id == 0xc5 && near(f.lightLux, 2630.0f) && f.windDirDeg == 46 && near(f.uvIndex, 0.2f) && f.batteryOk);
     const uint8_t ws68w[] = {0x68, 0x00, 0x00, 0xc5, 0x00, 0x00, 0x4b, 0x0f, 0xff, 0xff, 0x7e, 0xe0, 0x94, 0x00, 0x75, 0xec};
     assert(foDecode(ws68w, sizeof(ws68w), f) && near(f.windAvgMs, 12.6f) && f.windDirDeg == 224 && near(f.windGustMs, 14.8f));
@@ -500,7 +512,7 @@ int main()
             assert(f.hasDistance && f.distanceMm >= 1321 && f.distanceMm <= 1322 && !f.fastTx &&
                    f.hasHeatCount && f.heatCount == 0x1A);
         }
-        // Real trace with the console's own readings (2026-11-25):
+        // Real trace with the console's own readings (Dirk27, 2026-11-25):
         // distance (mm) and the heat-on count (console "HoC", low byte).
         struct { const char* hx; uint16_t mm; bool fast; uint8_t hoc; } real[] = {
             { "548028018C6401F04000001015CA502566220A",  496, false, 0x25 },   // HoC 293
@@ -513,7 +525,7 @@ int main()
         }
         uint8_t bad[19];
         hex(lds[0], bad); bad[10] ^= 0x01;   // one bit off: CRC and sum fail
-        assert(!foDecode(bad, rx(buf, bad, sizeof(bad)), f));
+        assert(!foDecode(buf, rx(buf, bad, sizeof(bad)), f));
         RfSensorReading nr; nr.proto = RF_PROTO_FINEOFFSET; nr.id = 0x54802801;
         assert(rfNominalIntervalMs(nr) == 80000);
     }

@@ -84,5 +84,12 @@ int main()
     assert(b >= 90 && f >= 90);
     simulate(12000, 61000, 61000, 7500, b, f);   // Bresser + WH31
     assert(b >= 95 && f >= 95);
+
+    // receive watchdog: restart after 10 min without a frame or a (re)start, also across the millis() wrap
+    assert(!rfReceiverSilentTooLong(1000, 1000));
+    assert(!rfReceiverSilentTooLong(1000 + RF_RECEIVE_WATCHDOG_MS - 1, 1000));
+    assert(rfReceiverSilentTooLong(1000 + RF_RECEIVE_WATCHDOG_MS, 1000));
+    assert(!rfReceiverSilentTooLong(5000, 0xFFFFF000u));   // 9 s across the wrap
+    assert(rfReceiverSilentTooLong(RF_RECEIVE_WATCHDOG_MS, 0xFFFFF000u));
     return 0;
 }

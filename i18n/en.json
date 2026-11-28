@@ -377,6 +377,7 @@
  "set_records_every_packet_the_receiver": "records every packet the receiver gets, for support",
  "set_saved": "Saved.",
  "set_incomplete_form_submission_nothing_w": "Incomplete form submission &mdash; nothing was saved.",
+ "set_restart_pending": "Settings that need a restart were just saved, and the node restarts in a moment &mdash; this change was not saved. Please send it again after the restart.",
  "set_measurement_interval_5_3600_s": "measurement interval (5-3600 s)",
  "set_wind_sample_interval_1_or": "wind sample interval (1 or 3 s)",
  "set_mqtt_interval_0_or_2": "MQTT interval (0 or 2-3600 s)",
@@ -519,7 +520,7 @@
  "c_settings": "Settings",
  "c_help": "Help / Documentation",
  "c_lang_device": "Language: device setting",
- "c_not_found": "Not found: {0}\\n\\nDashboard: /   Status: /status   Settings: /api/settings   Help: /help",
+ "c_not_found": "Not found: {0}\n\nDashboard: /   Status: /status   Settings: /api/settings   Help: /help",
  "set_language": "Language",
  "set_lang_auto": "Auto (browser language)",
  "set_language_hint": "web pages and setup portal; each browser can still pick its own language in the menu at the top (and on the dashboard)",
@@ -1155,6 +1156,10 @@
  "set_th_name": "Name",
  "set_names_as_text": "Names (as text)",
  "set_names_as_text_hint": "ID:name, separated by |, e.g. 900181A2:Hochbeet|3000C201:Cellar; up to 24 characters each",
+ "set_rf_minrssi_as_text": "Minimum signal per sensor (as text)",
+ "set_rf_minrssi_as_text_hint": "ID:dBm, separated by |, e.g. 900181A2:-95|3000C201:-100 (-140 to -20). A packet of that ID weaker than this is ignored - hides a neighbour's sensor with the same ID that arrives weaker than yours. The signal of one sensor varies by 5-10 dB (weather, foliage, people): set the minimum at least 10 dB below your own sensor's usual value. The Heltec V4 reads about 20 dB higher than a V3.",
+ "set_th_minrssi": "Min. dBm",
+ "set_th_minrssi_hint": "Minimum signal in dBm (-140 to -20); weaker packets of this ID are ignored. Empty = every packet.",
  "st_usb_power": "USB (no battery)",
  "st_heap_largest": "largest block {0} KiB",
  "c_busy_retry": "The node is busy with an encrypted upload and low on memory - please try again in a few seconds.",
@@ -1177,5 +1182,7 @@
  "ota_reconnect": "The node restarts with the new firmware (about 20 s) and keeps its address. This page then opens the status page &ndash; check the firmware version there. If it does not come back, reload the page.",
  "st_psram": "PSRAM",
  "st_psram_val": "{0} KiB &middot; {1} KiB free",
- "st_psram_failed": "{0} MB on the chip, not started (see log)"
+ "st_psram_failed": "{0} MB on the chip, not started (see log)",
+ "set_rf_twin": "ID shared",
+ "set_rf_twin_hint": "Another IT+ sensor with the same ID is received (one with, one without humidity). The node keeps them apart: the one with humidity has 1 in the third-last digit of its ID. Mark yours as ★ Mine, the other as hidden. Two sensors of the same kind with one ID cannot be told apart - change the battery of yours: it picks a new ID."
 }

@@ -1,5 +1,6 @@
 // Alarm rules: device part (see alarms.h, docs/alarms.md).
 #include "alarms.h"
+#include "alarm_queue.h"
 #include "notify.h"
 #include "tls_gate.h"
 #include "ph_live.h"
@@ -12,6 +13,7 @@
 #include "serial_log.h"
 #include <Preferences.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <math.h>
@@ -38,10 +40,13 @@ struct QMsg {
     char     title[24];
     char     text[200];
     char     value[16], threshold[16], unit[8];
+    // AS_RF rule: its sensor at the time of the event ({sensor}; the
+    // sender reads no rule, which the web task may edit meanwhile)
+    bool     hasSensor;
+    uint32_t rfId;
 };
 constexpr int QLEN = 6;
-QMsg          q[QLEN];
-int           qHead = 0, qCount = 0;
+AlarmQueue<QMsg, QLEN> queue;   // under mtx
 unsigned long nextTryMs = 0, backoffMs = 0;
 
 // ---- MQTT events (<prefix>/alarm) ----
@@ -104,11 +109,13 @@ bool ruleValue(const AlarmRule& r, PhLive& l, float& v)
     }
 }
 
-// placeholders of a message: the rule's own plus the live values
-struct MsgCtx { const QMsg* m; PhLive* live; };
+// placeholders of a message: the rule's own plus the live values. The
+// rendering task's own buffer for {sensor} (enqueue: loop / web task, the
+// webhook: upload task).
+struct MsgCtx { const QMsg* m; PhLive* live; char sensorLabel[12]; };
 bool msgLookup(const char* n, PhValue& o, void* ctx)
 {
-    const MsgCtx& c = *static_cast<MsgCtx*>(ctx);
+    MsgCtx& c = *static_cast<MsgCtx*>(ctx);
     auto txt = [&o](const char* s) { o.kind = PK_TEXT; o.text = s; return true; };
     if (!strcmp(n, "name"))      return txt(c.m->title);
     if (!strcmp(n, "value"))     return txt(c.m->value);
@@ -120,10 +127,9 @@ bool msgLookup(const char* n, PhValue& o, void* ctx)
     if (!strcmp(n, "rule"))      { if (c.m->rule == 0xFF) return false; o.kind = PK_PLAIN; o.v = c.m->rule + 1; return true; }
     if (!strcmp(n, "time"))      return phLiveLookup("time_local", o, c.live);
     if (!strcmp(n, "sensor")) {
-        if (c.m->rule == 0xFF || rules[c.m->rule].src != AS_RF) return false;
-        static char id[12];
-        snprintf(id, sizeof(id), "%08lX", (unsigned long)rules[c.m->rule].rfId);
-        return txt(id);
+        if (!c.m->hasSensor) return false;   // not a wireless-sensor rule, or the test
+        snprintf(c.sensorLabel, sizeof(c.sensorLabel), "%08lX", (unsigned long)c.m->rfId);
+        return txt(c.sensorLabel);
     }
     return phLiveLookup(n, o, c.live);
 }
@@ -131,14 +137,18 @@ bool msgLookup(const char* n, PhValue& o, void* ctx)
 // caller holds mtx
 void enqueue(uint8_t rule, AlarmEvent ev, const AlarmRule* r, float value, PhLive& live)
 {
-    if (qCount == QLEN) { qHead = (qHead + 1) % QLEN; qCount--; dbgSerial.println("Alarms: queue full, oldest message dropped."); }
-    QMsg& m = q[(qHead + qCount) % QLEN];
-    m = QMsg();
-    m.rule = rule; m.event = ev; m.attempts = 0;
+    // the channels this queue sends (MQTT goes its own way: mq[]); none = nothing
+    // queued - and no pending message dropped for it
+    const uint8_t mask = r ? (uint8_t)(r->channels & ~(1 << AC_MQTT)) : (uint8_t)(1 << (int)value);   // test: value = channel
+    if (!mask) return;
+    bool dropped = false;
+    QMsg& m = queue.push(dropped);
+    if (dropped) dbgSerial.println("Alarms: queue full, oldest message dropped.");
+    m.rule = rule; m.event = ev; m.attempts = 0; m.mask = mask;
     if (r) {
         const PhKind k = alarmKind(*r);
         m.priority = r->priority;
-        m.mask = r->channels & (uint8_t)~(1 << AC_MQTT);
+        if (r->src == AS_RF) { m.hasSensor = true; m.rfId = r->rfId; }
         strlcpy(m.title, r->name[0] ? r->name : alarmSrcKey(r->src), sizeof(m.title));
         const int dec = k == PK_PLAIN ? (r->src == AS_UV ? 1 : 0) : 1;
         snprintf(m.value, sizeof(m.value), "%.*f", dec, (double)alarmToDisplay(k, value, gCfg));
@@ -147,16 +157,14 @@ void enqueue(uint8_t rule, AlarmEvent ev, const AlarmRule* r, float value, PhLiv
         strlcpy(m.unit, alarmUnitLabel(k, r->src, r->rfField, gCfg), sizeof(m.unit));
         const char* tpl = ev == AE_CLEAR ? (r->clearMsg[0] ? r->clearMsg : TL(lang(), T_al_msg_clear))
                                          : (r->msg[0] ? r->msg : TL(lang(), T_al_msg_raise));
-        MsgCtx c{ &m, &live };
+        MsgCtx c{ &m, &live, "" };
         phRender(tpl, m.text, sizeof(m.text), PE_NONE, msgLookup, &c);
     } else {   // test
         m.priority = 3;
-        m.mask = (uint8_t)(1 << (int)value);   // value = channel
         strlcpy(m.title, gCfg.deviceName[0] ? gCfg.deviceName : "Weather node", sizeof(m.title));
-        MsgCtx c{ &m, &live };
+        MsgCtx c{ &m, &live, "" };
         phRender(TL(lang(), T_al_msg_test), m.text, sizeof(m.text), PE_NONE, msgLookup, &c);
     }
-    if (m.mask) qCount++;
 }
 
 void load()
@@ -193,6 +201,8 @@ void alarmsSave()
     uint8_t* blob = (uint8_t*)malloc(ALARM_BLOB_SIZE);   // ~2 KB while saving
     if (!blob) { dbgSerial.println("Alarms: no memory to save."); return; }
     alarmsEncode(rules, blob);
+    SettingsWrite w;   // config.h: refused once a factory reset runs
+    if (!w.ok()) { free(blob); return; }
     Preferences prefs;
     if (!prefs.begin("alarms", false, "cfgdata")) { free(blob); return; }
     bool ok = prefs.putBytes("rules", blob, ALARM_BLOB_SIZE) == ALARM_BLOB_SIZE;
@@ -249,7 +259,7 @@ void alarmsPoll()
     lastPollMs = millis();
     static PhLive live;   // ~200 bytes, not on the loop task's stack
     phLiveInit(live, nullptr);
-    const uint32_t now = millis() / 1000;
+    const uint32_t now = alarmClockSec();
     xSemaphoreTake(mtx, portMAX_DELAY);
     for (int i = 0; i < ALARM_RULES; i++) {
         const AlarmRule& r = rules[i];
@@ -310,10 +320,10 @@ void alarmsActiveJson(JsonArray a)
 void alarmsNotifyService(AlarmHttpFn http)
 {
     if (nextTryMs && (long)(millis() - nextTryMs) < 0) return;
-    static QMsg m;
+    static QMsg m;          // upload task only: a copy of the head, sent without the lock
+    uint32_t sendingId = 0;
     xSemaphoreTake(mtx, portMAX_DELAY);
-    const bool have = qCount > 0;
-    if (have) m = q[qHead];
+    const bool have = queue.front(m, sendingId);
     xSemaphoreGive(mtx);
     if (!have) return;
     // the lowest channel still open, one request per call
@@ -334,7 +344,7 @@ void alarmsNotifyService(AlarmHttpFn http)
         case AC_TELEGRAM: built = notifyTelegram(c, nm, req); break;
         case AC_WEBHOOK: {
             phLiveInit(live, nullptr);
-            MsgCtx ctx{ &m, &live };
+            MsgCtx ctx{ &m, &live, "" };
             built = notifyWebhook(c, msgLookup, &ctx, req);
             break;
         }
@@ -342,7 +352,10 @@ void alarmsNotifyService(AlarmHttpFn http)
     }
     const uint8_t outId = OUT_NOTIFY_FIRST + (ch == AC_WEBHOOK ? 3 : ch);
     bool done = true;
-    if (built) {
+    if (built && req.truncated) {   // a cut URL / JSON body is never sent (permanent: not retried)
+        dbgSerial.printf("Alarm notification %s: URL or body too long with the values filled in - not sent\n", alarmChannelKey(ch));
+        outReport(outId, false, 0, "too long, not sent");
+    } else if (built) {
         // HTTPS only with enough memory and no heavy web page being built (tls_gate.h)
         if (!strncmp(req.url, "https://", 8)) {
             const TlsDecision g = tlsMayStart(alarmChannelKey(ch));
@@ -369,31 +382,43 @@ void alarmsNotifyService(AlarmHttpFn http)
     }
     if (done) { backoffMs = 0; nextTryMs = 0; m.attempts = 0; m.mask &= (uint8_t)~(1 << ch); }
     xSemaphoreTake(mtx, portMAX_DELAY);
-    if (qCount > 0) {
-        q[qHead].mask = m.mask;
-        q[qHead].attempts = m.attempts;
-        if (!m.mask) { qHead = (qHead + 1) % QLEN; qCount--; }
+    // only onto the message that was sent: dropped meanwhile (queue full) = nothing to write back
+    if (QMsg* head = queue.frontIfStill(sendingId)) {
+        head->mask = m.mask;
+        head->attempts = m.attempts;
+        if (!m.mask) queue.popFront();
     }
     xSemaphoreGive(mtx);
 }
 
+uint32_t alarmClockSec() { return alarmClockSecFrom(esp_timer_get_time()); }
+
 void alarmsMqttService(AlarmPublishFn pub, const char* prefix, bool all)
 {
-    char topic[96], payload[200];
+    // Collected under the lock, published after it: a publish is network I/O
+    // that can block for seconds on a stalled broker, and alarmsPoll(),
+    // /api/data and /api/alarms wait for this lock.
+    struct Batch {
+        uint16_t dirty = 0, active = 0, deleted = 0;
+        int      events = 0;
+        char     eventPayload[4][200];
+    };
+    static_assert(sizeof(mq) / sizeof(mq[0]) == 4, "one payload per queued MQTT event");
+    std::unique_ptr<Batch> b(new (std::nothrow) Batch());   // ~820 bytes while publishing
+    if (!b) return;   // tried again on the next call (nothing taken)
     xSemaphoreTake(mtx, portMAX_DELAY);
     if (all) mqttDirty = 0xFFFF;
+    b->dirty = mqttDirty;
     for (int i = 0; i < ALARM_RULES; i++) {
-        if (!(mqttDirty & (1 << i))) continue;
-        snprintf(topic, sizeof(topic), "%s/alarm/%d", prefix, i + 1);
-        if (rules[i].src == AS_OFF) pub(topic, "", true);   // a deleted rule: retained state removed
-        else pub(topic, states[i].active ? "ON" : "OFF", true);
+        if (states[i].active)       b->active  |= 1 << i;
+        if (rules[i].src == AS_OFF) b->deleted |= 1 << i;
     }
     mqttDirty = 0;
-    snprintf(topic, sizeof(topic), "%s/alarm", prefix);
     for (int k = 0; k < mqCount; k++) {
         const MEvent& e = mq[k];
+        char* payload = b->eventPayload[b->events++];
         if (e.rule == 0xFF) {
-            snprintf(payload, sizeof(payload), "{\"rule\":0,\"name\":\"test\",\"state\":\"test\"}");
+            snprintf(payload, sizeof(b->eventPayload[0]), "{\"rule\":0,\"name\":\"test\",\"state\":\"test\"}");
         } else {
             JsonDocument d;
             d["rule"] = e.rule + 1;
@@ -402,10 +427,19 @@ void alarmsMqttService(AlarmPublishFn pub, const char* prefix, bool all)
             d["value"] = serialized(e.value);
             d["unit"] = alarmUnitLabel(alarmKind(rules[e.rule]), rules[e.rule].src, rules[e.rule].rfField, gCfg);
             d["priority"] = rules[e.rule].priority;
-            serializeJson(d, payload, sizeof(payload));
+            serializeJson(d, payload, sizeof(b->eventPayload[0]));
         }
-        pub(topic, payload, false);
     }
     mqCount = 0;
     xSemaphoreGive(mtx);
+
+    char topic[96];
+    for (int i = 0; i < ALARM_RULES; i++) {
+        if (!(b->dirty & (1 << i))) continue;
+        snprintf(topic, sizeof(topic), "%s/alarm/%d", prefix, i + 1);
+        if (b->deleted & (1 << i)) pub(topic, "", true);   // a deleted rule: retained state removed
+        else pub(topic, (b->active & (1 << i)) ? "ON" : "OFF", true);
+    }
+    snprintf(topic, sizeof(topic), "%s/alarm", prefix);
+    for (int k = 0; k < b->events; k++) pub(topic, b->eventPayload[k], false);
 }

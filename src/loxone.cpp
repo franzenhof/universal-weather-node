@@ -3,7 +3,9 @@
 //
 // Never blocks the main loop for long:
 //   - an IP address as host is used directly; a host name is resolved with
-//     lwIP's asynchronous dns_gethostbyname() from loxonePoll() (no waiting),
+//     lwIP's asynchronous dns_gethostbyname(), posted from loxonePoll() to
+//     the lwIP thread with tcpip_callback() (no waiting; Arduino 2.0.17 has no
+//     core lock for calling the raw API from the loop task),
 //     the result is cached and refreshed every 10 min (the old address stays
 //     in use meanwhile); a lookup without answer is given up after 5 s.
 //   - WiFiUDP on a non-blocking socket: one sendto() per value (~0.1 ms);
@@ -17,8 +19,10 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <lwip/dns.h>
+#include <lwip/tcpip.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <new>
 
 namespace {
 
@@ -48,6 +52,23 @@ void dnsFound(const char*, const ip_addr_t* ip, void* arg)
     if ((uint32_t)(uintptr_t)arg != dnsGen) return;   // an abandoned lookup
     dnsResult = (ip && IP_IS_V4(ip)) ? ip4_addr_get_u32(ip_2_ip4(ip)) : 0;
     dnsDone   = true;
+}
+
+// One lookup request, owned by the lwIP thread once posted (freed there).
+struct DnsRequest {
+    uint32_t gen;
+    char     host[sizeof(Config::loxHost)];
+};
+
+void dnsLookupInLwip(void* p)   // runs in the lwIP thread (tcpip_callback)
+{
+    DnsRequest* r = static_cast<DnsRequest*>(p);
+    ip_addr_t addr;
+    void* gen = (void*)(uintptr_t)r->gen;
+    err_t err = dns_gethostbyname(r->host, &addr, dnsFound, gen);
+    if (err == ERR_OK) dnsFound(r->host, &addr, gen);               // from the cache
+    else if (err != ERR_INPROGRESS) dnsFound(r->host, nullptr, gen);  // failed at once
+    delete r;
 }
 
 void setError(const char* e)
@@ -141,22 +162,17 @@ void loxonePoll()
 
     dnsGen = dnsGen + 1;
     dnsDone = false;
-    ip_addr_t addr;
-    err_t err = dns_gethostbyname(host, &addr, dnsFound, (void*)(uintptr_t)dnsGen);
-    if (err == ERR_OK) {
-        if (IP_IS_V4(&addr) && ip4_addr_get_u32(ip_2_ip4(&addr))) {
-            st.ip = IPAddress(ip4_addr_get_u32(ip_2_ip4(&addr)));
-            st.ipValid = true;
-            resolvedMs = now;
-        } else {
-            setError("host name not found");
-        }
-    } else if (err == ERR_INPROGRESS) {
-        dnsPending = true;
-        dnsStartMs = now;
-    } else {
+    DnsRequest* r = new (std::nothrow) DnsRequest;
+    if (!r) { setError("out of memory"); return; }
+    r->gen = dnsGen;
+    strlcpy(r->host, host, sizeof(r->host));
+    if (tcpip_callback(dnsLookupInLwip, r) != ERR_OK) {
+        delete r;
         setError("DNS lookup failed");
+        return;
     }
+    dnsPending = true;
+    dnsStartMs = now;
 }
 
 void loxoneSendTelemetry(const PathValues* pv)

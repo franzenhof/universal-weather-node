@@ -1,5 +1,6 @@
 #include "custom_upload.h"
 #include "serial_log.h"
+#include "config.h"   // SettingsWrite
 #include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -33,6 +34,8 @@ CustomUpload* customUploads() { return ups; }
 
 void customUploadSave()
 {
+    SettingsWrite w;   // config.h: refused once a factory reset runs
+    if (!w.ok()) return;
     Preferences prefs;
     if (!prefs.begin("cupload", false, "cfgdata")) return;
     if (prefs.putBytes("v1", ups, sizeof(ups)) != sizeof(ups)) dbgSerial.println("Custom upload: NVS write failed.");

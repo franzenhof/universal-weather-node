@@ -7,9 +7,13 @@
 //
 // Call order per request: otaUploadStart() (UPLOAD_FILE_START, after the
 // caller checked the login), otaUploadChunk() for every UPLOAD_FILE_WRITE,
-// then otaUploadFinish() (UPLOAD_FILE_END) or otaUploadAbort()
-// (UPLOAD_FILE_ABORTED). The request handler then answers from
-// otaUploadOutcome() / otaUploadError().
+// then otaUploadFinish() (UPLOAD_FILE_END: the image is checked, nothing
+// switched yet) or otaUploadAbort() (UPLOAD_FILE_ABORTED - also for a
+// request that fails after the file part). Only the request handler, which
+// runs once the whole request was received, calls otaUploadCommit(): that
+// sets the boot partition. It then answers from otaUploadOutcome() /
+// otaUploadError(). A request that never reaches its handler leaves the
+// running firmware as the boot one.
 //
 // While an upload runs (otaUploadActive()), HTTPS requests, notifications,
 // custom uploads, weather networks and LoRaWAN uplinks wait. A connection that
@@ -44,6 +48,7 @@ void        otaUploadStart(const OtaUpdateOps& ops, bool authorized, const char*
 void        otaUploadChunk(const uint8_t* d, size_t n);
 void        otaUploadFinish();
 void        otaUploadAbort();
+void        otaUploadCommit();      // the checked image becomes the boot one (OTA_OUT_OK / OTA_OUT_FAILED)
 OtaOutcome  otaUploadOutcome();
 const char* otaUploadError();       // reason for REFUSED / FAILED ("" otherwise)
 bool        otaUploadIsFactory();   // the -factory image's application part was written

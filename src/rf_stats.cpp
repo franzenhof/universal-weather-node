@@ -1,5 +1,6 @@
 #include "rf_stats.h"
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
 #include <math.h>
 #include <string.h>
 
@@ -69,7 +70,13 @@ int rfStatStrikes1h(RfStat& s, uint32_t t)
     return sum;
 }
 
-namespace { RfStat stats[RF_STATS_MAX]; }
+namespace {
+RfStat       stats[RF_STATS_MAX];
+portMUX_TYPE statsMux = portMUX_INITIALIZER_UNLOCKED;
+}
+
+void rfStatsLock()   { portENTER_CRITICAL(&statsMux); }
+void rfStatsUnlock() { portEXIT_CRITICAL(&statsMux); }
 
 RfStat* rfStatFor(uint32_t id, bool create)
 {
@@ -80,7 +87,25 @@ RfStat* rfStatFor(uint32_t id, bool create)
     return nullptr;   // full: no statistics for this sensor
 }
 
-void rfStatsClear() { for (RfStat& s : stats) s = RfStat(); }
+void rfStatsClear()
+{
+    rfStatsLock();
+    for (RfStat& s : stats) s = RfStat();
+    rfStatsUnlock();
+}
+
+bool rfStatSnapshot(uint32_t id, RfStat& out, uint32_t& t)
+{
+    if (!id) return false;
+    uint32_t ymd;
+    rfStatsClock(t, ymd);
+    bool found = false;
+    rfStatsLock();
+    for (const RfStat& s : stats) if (s.id == id) { out = s; found = true; break; }
+    rfStatsUnlock();
+    if (found) rfStatRoll(out, t, ymd);
+    return found;
+}
 
 void rfStatsPrune(bool (*used)(uint32_t id))
 {

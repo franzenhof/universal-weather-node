@@ -79,6 +79,8 @@ bool localTimeNow(struct tm& out)
     localtime_r(&t, &out);
     return true;
 }
+void wxUploadLock() {}     // astroLocation() (astro_store.cpp): one task here
+void wxUploadUnlock() {}
 static const char* hostUpdate = "";
 void wxUpdateAvailable(char* out, size_t len) { if (len) snprintf(out, len, "%s", hostUpdate); }
 
@@ -358,7 +360,7 @@ void fixturePcbFull()
         bus1Temps[0] = round1(w.tC - 0.4f); bus1Temps[1] = round1(9.5f + 0.5f * noise()); bus1Temps[2] = round1(w.tC + 1.2f);
         batteryVolt = 3.98f + 0.05f * noise();
         gIo.uvSensorVolts = w.uv / 4.0f; gIo.uvIndexCalibrated = true; gIo.uvIndex = w.uv;
-        gIo.wind2SpeedMs = w.windMs * 0.8f; gIo.wind2GustMs = w.gustMs * 0.8f; gIo.wind2DirDeg = (uint16_t)((w.dir + 10) % 360);
+        gIo.wind2Valid = true; gIo.wind2SpeedMs = w.windMs * 0.8f; gIo.wind2GustMs = w.gustMs * 0.8f; gIo.wind2DirDeg = (uint16_t)((w.dir + 10) % 360);
     });
     bus1Temps[1] = DEVICE_DISCONNECTED_C;   // probe 2 unplugged
     batteryVolt = 4.07f;

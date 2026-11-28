@@ -26,6 +26,7 @@ struct AwekasData {
     bool  hasPress = false;    float pressureHpa = 0;   // sea level (QNH)
     bool  hasRain = false;     float dailyRainMm = 0, rainRateMmH = 0;
     bool  hasWind = false;     float windKmh = 0, gustKmh = 0; int dirDeg = 0;
+    bool  hasDir = false;      // with hasWind: the direction is known (else its field stays empty)
     bool  hasTendency = false; int tendency = 0;        // -2..2, awekasTendency()
     bool  hasSolar = false;    float solarWm2 = 0;      // measured only (Davis solar radiation sensor), never from lux
     bool  hasUv = false;       float uvIndex = 0;

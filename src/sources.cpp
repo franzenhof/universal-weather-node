@@ -55,16 +55,34 @@ bool radioHas(int idx, SrcGroup g)
     }
 }
 
-// Wireless wind: per path accumulator and a 10-min ring of packets.
+// Wireless wind: per path accumulator, and the last 10 min in fixed time
+// buckets - coverage and memory do not depend on the packet rate (Davis ISS
+// 2.56 s, WS80 4.75 s, a network source as often as it is pushed).
 struct RfWindAcc {
     float  distM = 0.0f, ms = 0.0f, gustMax = 0.0f, s = 0.0f, c = 0.0f;
     int    n = 0;
+    void add(float avg, float gust, float rad, uint32_t dtMs)
+    {
+        distM += avg * dtMs; ms += dtMs;
+        if (n == 0 || gust > gustMax) gustMax = gust;
+        s += sinf(rad); c += cosf(rad); n++;
+    }
+    void add(const RfWindAcc& o)
+    {
+        if (!o.n) return;
+        if (n == 0 || o.gustMax > gustMax) gustMax = o.gustMax;
+        distM += o.distM; ms += o.ms; s += o.s; c += o.c; n += o.n;
+    }
 };
-struct RfWindEntry { uint32_t tMs; uint32_t dtMs; float avg, gust; uint16_t dir; };
-constexpr int RF_RING = 80;   // >= 10 min at one packet per 12 s
+constexpr uint32_t RF_BUCKET_MS = 15000;
+static_assert(WIND_SPAN_10MIN_MS % RF_BUCKET_MS == 0, "whole buckets per 10 min");
+// + 1: the oldest bucket still overlapping the 10 min (the window covers 10 to 10.25 min)
+constexpr int RF_BUCKETS = WIND_SPAN_10MIN_MS / RF_BUCKET_MS + 1;
 RfWindAcc   acc[SRC_PATHS];
-RfWindEntry ring[RF_RING];
-int         ringHead = 0, ringCount = 0;
+RfWindAcc   bucket[RF_BUCKETS];   // [bucketHead] is the current one, started at bucketHeadMs
+int         bucketHead = 0;
+uint32_t    bucketHeadMs = 0;
+bool        bucketStarted = false;
 int         lastWindIdx = -1;
 uint32_t    lastWindMs = 0;
 
@@ -178,7 +196,7 @@ void srcFormValue(SrcGroup g, char* out, size_t len)
 {
     const uint32_t id = srcBoundId(g);
     if (id) snprintf(out, len, "r%08lX", (unsigned long)id);
-    else    snprintf(out, len, "%u", g < SG_COUNT ? gCfg.srcSel[g] : 0);
+    else    snprintf(out, len, "%u", g < SG_COUNT ? (unsigned)gCfg.srcSel[g] : 0u);
 }
 
 bool srcSetFormId(SrcGroup g, const char* v)
@@ -201,7 +219,7 @@ bool srcSetFormId(SrcGroup g, const char* v)
 }
 
 // Auto among wireless 1-4: Ecowitt's own order when several deliver the same
-// group (Ecowitt wiki, section "sensor hierarchy"); lower = first,
+// group (Ecowitt wiki by Gyvate, section "sensor hierarchy"); lower = first,
 // ties and other sensors (Bresser, IT+, Davis, other families) by number.
 int srcHierarchyRank(const RfSensorReading& r, SrcGroup g)
 {
@@ -399,15 +417,15 @@ void srcRfPacket(int idx, bool hasWind, float rainDeltaMm, bool hasLight, unsign
     if (dt > 60000) dt = 60000;
     lastWindIdx = idx; lastWindMs = now;
     float rad = s.windDirDeg * DEG2RAD;
-    for (int p = 0; p < SRC_PATHS; p++) {
-        RfWindAcc& a = acc[p];
-        a.distM += s.windAvgMs * dt; a.ms += dt;
-        if (a.n == 0 || s.windGustMs > a.gustMax) a.gustMax = s.windGustMs;
-        a.s += sinf(rad); a.c += cosf(rad); a.n++;
+    for (int p = 0; p < SRC_PATHS; p++) acc[p].add(s.windAvgMs, s.windGustMs, rad, dt);
+    if (!bucketStarted) { bucketStarted = true; bucketHeadMs = now; }
+    const uint32_t steps = (now - bucketHeadMs) / RF_BUCKET_MS;   // buckets begun since the current one
+    for (uint32_t k = 0; k < steps && k < (uint32_t)RF_BUCKETS; k++) {
+        bucketHead = (bucketHead + 1) % RF_BUCKETS;
+        bucket[bucketHead] = RfWindAcc();
     }
-    ring[ringHead] = { now, dt, s.windAvgMs, s.windGustMs, (uint16_t)lroundf(s.windDirDeg) };
-    ringHead = (ringHead + 1) % RF_RING;
-    if (ringCount < RF_RING) ringCount++;
+    bucketHeadMs += steps * RF_BUCKET_MS;
+    bucket[bucketHead].add(s.windAvgMs, s.windGustMs, rad, dt);
 }
 
 WindStats srcRfWind(int path, bool tenMin)
@@ -417,16 +435,13 @@ WindStats srcRfWind(int path, bool tenMin)
         const RfWindAcc& a = acc[path];
         return statsOf(a.distM, a.ms, a.gustMax, a.s, a.c, a.n);
     }
-    uint32_t now = millis();
-    float dist = 0, ms = 0, gust = 0, s = 0, c = 0; int n = 0;
-    for (int k = 0; k < ringCount; k++) {
-        const RfWindEntry& e = ring[(ringHead + RF_RING - 1 - k) % RF_RING];
-        if (now - e.tMs > WIND_SPAN_10MIN_MS) break;
-        dist += e.avg * e.dtMs; ms += e.dtMs;
-        if (n == 0 || e.gust > gust) gust = e.gust;
-        s += sinf(e.dir * DEG2RAD); c += cosf(e.dir * DEG2RAD); n++;
-    }
-    return statsOf(dist, ms, gust, s, c, n);
+    // bucket k back ends at bucketHeadMs - (k - 1) * RF_BUCKET_MS: taken while
+    // that end lies within the last 10 min
+    const uint32_t age = millis() - bucketHeadMs, span = WIND_SPAN_10MIN_MS + RF_BUCKET_MS;
+    RfWindAcc t;
+    for (int k = 0; bucketStarted && k < RF_BUCKETS && age < span && k * RF_BUCKET_MS < span - age; k++)
+        t.add(bucket[(bucketHead + RF_BUCKETS - k) % RF_BUCKETS]);
+    return statsOf(t.distM, t.ms, t.gustMax, t.s, t.c, t.n);
 }
 
 void srcRfWindReset(int path)

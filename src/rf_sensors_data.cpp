@@ -47,6 +47,52 @@ unsigned long rfValueMs(const RfSensorReading& r, uint8_t bit)
     }
 }
 
+namespace {
+// Phantom-rain filter limits (rfStoreValues(), rf_sensors.h). A step up to
+// max(5 mm, 2 mm per minute since the last accepted total) is taken at once:
+// 2 mm/min = 120 mm/h, a cloudburst; between two packets 16-49 s apart that is
+// 5 mm. A confirmed larger step counts as rain up to 10 mm per minute (at
+// least one minute) - DavisRainFilter's default rate of 50 tips of 0.2 mm.
+constexpr float RAIN_STEP_AT_ONCE_MM = 5.0f;
+constexpr float RAIN_AT_ONCE_MM_PER_MIN = 2.0f;
+constexpr float RAIN_CONFIRMED_MAX_MM_PER_MIN = 10.0f;
+
+// Rain between two totals of one sensor: a smaller total = the counter restarted from 0.
+float rainStepMm(float fromTotalMm, float toTotalMm)
+{
+    return toTotalMm >= fromTotalMm ? toTotalMm - fromTotalMm : toTotalMm;
+}
+
+bool rainStepTakenAtOnce(float fromTotalMm, float toTotalMm, float elapsedMin)
+{
+    const float scaledMm = RAIN_AT_ONCE_MM_PER_MIN * elapsedMin;
+    return toTotalMm >= fromTotalMm && toTotalMm - fromTotalMm <= (scaledMm > RAIN_STEP_AT_ONCE_MM ? scaledMm : RAIN_STEP_AT_ONCE_MM);
+}
+
+// The filter step for a sensor that already has a rain total. Returns true
+// when totalMm is accepted (rainMm = the rain to count), false when it is held.
+bool filterRainTotal(RfSensorReading& r, float totalMm, unsigned long elapsedMs, float& rainMm)
+{
+    const float elapsedMin = elapsedMs / 60000.0f;
+    if (rainStepTakenAtOnce(r.rainTotalMm, totalMm, elapsedMin)) {   // (a held value was corrupt: dropped)
+        r.rainTotalHeld = false;
+        rainMm = totalMm - r.rainTotalMm;
+        return true;
+    }
+    if (r.rainTotalHeld && rainStepTakenAtOnce(r.heldRainTotalMm, totalMm, 0.0f)) {   // confirms the held step
+        r.rainTotalHeld = false;
+        const float heldStepMm = rainStepMm(r.rainTotalMm, r.heldRainTotalMm);
+        const float plausibleMm = RAIN_CONFIRMED_MAX_MM_PER_MIN * (elapsedMin > 1.0f ? elapsedMin : 1.0f);
+        rainMm = (heldStepMm <= plausibleMm ? heldStepMm : 0.0f) + (totalMm - r.heldRainTotalMm);   // too much: re-based
+        return true;
+    }
+    r.rainTotalHeld = true;   // (another implausible value replaces a held one)
+    r.heldRainTotalMm = totalMm;
+    rainMm = 0.0f;
+    return false;
+}
+} // namespace
+
 float rfStoreValues(RfSensorReading& r, const RfValues& v, unsigned long now, unsigned long& rainGapMs)
 {
     const uint8_t wasStale = r.staleMask;
@@ -77,19 +123,26 @@ float rfStoreValues(RfSensorReading& r, const RfValues& v, unsigned long now, un
         // Increase since the previous packet; a smaller total = sensor reset
         // (battery change). No previous value (node start): 0 - the rain while
         // the node was down is unknown.
+        bool accepted = true;
         if (r.hasRain) {
-            rainDelta = v.rainTotalMm >= r.rainTotalMm ? v.rainTotalMm - r.rainTotalMm : v.rainTotalMm;
-            unsigned long age = now - r.rainMs;
+            const unsigned long age = now - r.rainMs, fresh = SRC_RF_FRESH_MS;
             // expired across a millis() wrap: the age is unknown, at least the window
-            if (age > SRC_RF_FRESH_MS || (wasStale & RF_VAL_RAIN))
-                rainGapMs = age > SRC_RF_FRESH_MS ? age : SRC_RF_FRESH_MS + 1;
+            const bool ageUnknown = (wasStale & RF_VAL_RAIN) && age <= fresh;
+            const unsigned long elapsedMs = ageUnknown ? fresh + 1 : age;
+            if (r.proto == RF_PROTO_DAVIS)
+                rainDelta = rainStepMm(r.rainTotalMm, v.rainTotalMm);
+            else
+                accepted = filterRainTotal(r, v.rainTotalMm, elapsedMs, rainDelta);
+            if (accepted && elapsedMs > fresh) rainGapMs = elapsedMs;
         }
-        r.hasRain = true;  r.rainTotalMm = v.rainTotalMm;  r.rainMs = now;
+        if (accepted) { r.hasRain = true;  r.rainTotalMm = v.rainTotalMm;  r.rainMs = now; }
+        else          r.staleMask |= wasStale & RF_VAL_RAIN;   // a held total is not a fresh rain value
     }
     // per-sensor rain today / last hour and lightning statistics (rf_stats.h)
     if ((v.ok & RF_VAL_RAIN) || r.hasLightning) {
         uint32_t t, ymd;
         rfStatsClock(t, ymd);
+        rfStatsLock();
         RfStat* st = rfStatFor(r.id, true);
         if (!st) {   // full: drop the statistics of sensors that left the table (ID change after a battery change)
             rfStatsPrune([](uint32_t id) { for (const RfSensorReading& x : gRfSensors) if (x.used && x.id == id) return true; return false; });
@@ -102,6 +155,7 @@ float rfStoreValues(RfSensorReading& r, const RfValues& v, unsigned long now, un
             if (v.ok & RF_VAL_RAIN) rfStatRain(*st, rainDelta, t, ymd);
             if (r.hasLightning) rfStatLightning(*st, r.lightningCount, t, ymd);
         }
+        rfStatsUnlock();
     }
     if (v.ok & RF_VAL_UV)    { r.hasUv = true;    r.uvIndex = v.uvIndex * cal.uv / 1000.0f;    r.uvMs = now; }
     if (v.ok & RF_VAL_LIGHT) { r.hasLight = true; r.lightLux = v.lightLux * cal.lux / 1000.0f; r.lightMs = now; }
@@ -120,8 +174,12 @@ int rfSlotFor(uint32_t id, unsigned long now, unsigned long takeOverMs, int only
         if (onlyProto && r.proto != onlyProto) continue;
         // expired (staleMask): older than any timestamp, also after a millis() wrap
         unsigned long age = (r.staleMask & RF_VAL_ANY) ? ~0UL : now - r.lastMs;
-        const unsigned long fresh = rfFreshMs(r);   // a 10-minute sensor keeps its place between packets
-        if (age > (takeOverMs > fresh ? takeOverMs : fresh) && (oldIdx < 0 || age > oldAge)) { oldIdx = i; oldAge = age; }
+        // a sensor with a window longer than the standard one (10-minute air
+        // quality sensors) keeps its place between packets; the others go after
+        // takeOverMs (IT+ new battery: 60 s, rf_sensors.cpp storeItPlus())
+        const unsigned long fresh = rfFreshMs(r);
+        const unsigned long takeOverAfterMs = fresh > SRC_RF_FRESH_MS && fresh > takeOverMs ? fresh : takeOverMs;
+        if (age > takeOverAfterMs && (oldIdx < 0 || age > oldAge)) { oldIdx = i; oldAge = age; }
     }
     if (freeIdx >= 0) return freeIdx;
     if (oldIdx < 0 && mine) {
@@ -173,6 +231,14 @@ unsigned long rfFreshMs(const RfSensorReading& r)
     return k > SRC_RF_FRESH_MS ? k : SRC_RF_FRESH_MS;
 }
 
+int rfTwinIndex(uint32_t id)
+{
+    const uint32_t twin = rfItPlusTwin(id);
+    if (!twin) return -1;
+    for (int i = 0; i < RF_MAX_SENSORS; i++) if (gRfSensors[i].used && gRfSensors[i].id == twin) return i;
+    return -1;
+}
+
 void rfSensorsClear()
 {
     rfStatsClear();
@@ -187,6 +253,8 @@ void rfExpireValues(unsigned long now)
         for (uint8_t b : bits)
             if (!(r.staleMask & b) && now - rfValueMs(r, b) > rfFreshMs(r)) r.staleMask |= b;
     }
+    for (RfHiddenSeen& h : gRfHidden)
+        if (h.id && now - h.lastMs > RF_HIDDEN_RANGE_MS) h.outOfRange = true;
 }
 
 const char* rfProtoName(int proto)
@@ -372,13 +440,18 @@ void rfNoteHidden(uint32_t id, const char* model, float rssi, unsigned long now)
     if (model) h.model = model;
     h.rssi = rssi;
     h.lastMs = now;
+    h.outOfRange = false;
     h.packets++;
+}
+
+bool rfHiddenSeenInRange(const RfHiddenSeen& h, unsigned long now)
+{
+    return h.id && !h.outOfRange && now - h.lastMs <= RF_HIDDEN_RANGE_MS && rfStateOf(h.id) == RF_STATE_HIDDEN;
 }
 
 int rfHiddenInRange(unsigned long now)
 {
     int n = 0;
-    for (const RfHiddenSeen& h : gRfHidden)
-        if (h.id && now - h.lastMs <= RF_HIDDEN_RANGE_MS && rfStateOf(h.id) == RF_STATE_HIDDEN) n++;
+    for (const RfHiddenSeen& h : gRfHidden) if (rfHiddenSeenInRange(h, now)) n++;
     return n;
 }

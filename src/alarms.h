@@ -60,7 +60,13 @@ struct AlarmState {
 
 enum AlarmEvent : uint8_t { AE_NONE = 0, AE_RAISE, AE_REPEAT, AE_CLEAR };
 
-// One evaluation at time now (s, monotonic). valid = value available.
+// The alarm clock: seconds since boot from the 64-bit microsecond timer
+// (esp_timer_get_time()). Never millis() / 1000: that wraps at 4294967 s
+// (49.7 days), not at 2^32, so the unsigned deltas below would break there.
+inline uint32_t alarmClockSecFrom(int64_t uptimeUs) { return (uint32_t)(uptimeUs / 1000000LL); }
+uint32_t alarmClockSec();   // device: alarmClockSecFrom(esp_timer_get_time())
+
+// One evaluation at time now (s, monotonic: alarmClockSec()). valid = value available.
 AlarmEvent alarmStep(const AlarmRule& r, AlarmState& s, bool valid, float v, uint32_t now);
 
 // Unit kind of a rule's value (placeholders.h): temperature, speed, ...
